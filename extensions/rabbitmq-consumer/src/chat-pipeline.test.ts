@@ -351,6 +351,54 @@ describe("processChatMessage", () => {
     expect(stepEvents.some((p) => p.stepId === "t2")).toBe(false);
   });
 
+  it("attaches a sanitized, capped reasoning peek to the think step (③)", async () => {
+    // When the run streams reasoning, the think step's `end` carries a short
+    // summary of it. The summary must be sanitized (no workspace/internal path)
+    // and capped — it exposes model reasoning to the external customer.
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "thinking",
+          ts: 1,
+          data: { text: "先查 workspace/memory/notes.md 再决定如何回答用户", delta: "…" },
+        });
+        // The first assistant delta ends the think phase, flushing its summary.
+        listener?.({
+          runId: "r1",
+          seq: 2,
+          stream: "assistant",
+          ts: 2,
+          data: { delta: "答复" },
+        });
+      },
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const payloads = fetchMock.mock.calls.map((call) => {
+      const init = call[1] as { body?: string };
+      const params = new URLSearchParams(init.body ?? "");
+      return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
+    });
+
+    const thinkEnd = payloads.find(
+      (p) => p.type === "step" && p.stepId === "think" && p.phase === "end",
+    );
+    expect(thinkEnd).toBeDefined();
+    const detail = thinkEnd?.detail as string | undefined;
+    expect(typeof detail).toBe("string");
+    // Internal workspace path was stripped from the reasoning peek.
+    expect(detail).not.toContain("workspace/");
+    expect(detail).not.toContain("memory/");
+    expect(detail).toContain("再决定如何回答用户");
+  });
+
   it("prefers the latest assistant session message as the canonical response", async () => {
     const runtime = createRuntimeMock({
       workspaceDir,

@@ -4,9 +4,16 @@
  * Translates agent `tool` stream events into generic, user-facing Chinese
  * status lines ("正在查询分析数据（第 2 步）…") and, in parallel, structured
  * timeline steps (label + category + status + duration) for the frontend's
- * collapsible "工作过程" panel. Only the tool NAME is consulted — tool args
- * (SQL text, file paths, shell commands, credentials) are deliberately never
- * read, so nothing sensitive can leak to the frontend.
+ * collapsible "工作过程" panel.
+ *
+ * The tool NAME drives the label and category. A strict, opt-in whitelist
+ * (resolveStepDetail) may ADDITIONALLY read a few numeric / enum-only arg
+ * fields (a count, a report period) to produce an optional one-phrase `detail`
+ * such as "检测 3 项" or "周报". It never reads free text (SQL, file paths,
+ * shell commands, search queries), only consults a fixed key list per tool,
+ * and the result is guarded to CJK + digits + spaces only. Any tool outside
+ * the whitelist — and any non-numeric/non-enum field — is ignored, so sensitive
+ * args still cannot leak to the frontend.
  *
  * Twin copies live in the rabbitmq-consumer and report-generator extensions
  * (self-contained packages, no cross-extension imports). Keep them
@@ -39,6 +46,11 @@ export type ActivityStep = {
   status: "running" | "completed" | "failed";
   /** Wall-clock duration in ms, present on `end`. */
   durationMs?: number;
+  /**
+   * Optional sanitized one-phrase summary (counts / fixed enum labels only,
+   * e.g. "检测 3 项" or "周报"). Never free text — see resolveStepDetail.
+   */
+  detail?: string;
 };
 
 /** Tool name (normalized by the agent runtime) → user-facing activity label. */
@@ -187,6 +199,123 @@ export function resolveToolCategory(toolName: string): StepCategory {
   return TOOL_CATEGORIES[toolName.trim().toLowerCase()] ?? DEFAULT_CATEGORY;
 }
 
+/** Known report-period enum values → fixed Chinese label (never echoes input). */
+const PERIOD_LABELS: Readonly<Record<string, string>> = {
+  daily: "日报",
+  day: "日报",
+  today: "日报",
+  weekly: "周报",
+  week: "周报",
+  monthly: "月报",
+  month: "月报",
+  quarterly: "季报",
+  quarter: "季报",
+  yearly: "年报",
+  year: "年报",
+};
+
+/** Arg keys that, if an array/number, give a safe item count. */
+const COUNT_KEYS = ["links", "urls", "ids", "items", "targets", "list"] as const;
+/** Arg keys for a result-size limit (safe small integer). */
+const LIMIT_KEYS = ["limit", "size", "count", "page_size", "pagesize", "top"] as const;
+/** Arg keys that may hold a report-period enum. */
+const PERIOD_KEYS = ["period", "type", "range", "cycle"] as const;
+
+function asArgRecord(args: unknown): Record<string, unknown> {
+  return args && typeof args === "object" && !Array.isArray(args)
+    ? (args as Record<string, unknown>)
+    : {};
+}
+
+/** First non-negative integer among keys (array length or numeric value). */
+function readCount(args: Record<string, unknown>, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const value = args[key];
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return Math.floor(value);
+    }
+    if (typeof value === "string" && /^\d{1,6}$/.test(value.trim())) {
+      return Number(value.trim());
+    }
+  }
+  return undefined;
+}
+
+/** Fixed enum label for the first matching key (case-insensitive lookup). */
+function readEnumLabel(
+  args: Record<string, unknown>,
+  keys: readonly string[],
+  map: Readonly<Record<string, string>>,
+): string | undefined {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string") {
+      const label = map[value.trim().toLowerCase()];
+      if (label) {
+        return label;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Per-tool detail rules. Each reads ONLY numeric/enum fields and returns a
+ * phrase built from constants + integers — never the raw arg value. A tool not
+ * listed here gets no detail at all.
+ */
+const STEP_DETAIL_RULES: Readonly<
+  Record<string, (args: Record<string, unknown>) => string | undefined>
+> = {
+  legal_check_create: (a) => {
+    const n = readCount(a, COUNT_KEYS);
+    return n ? `检测 ${n} 项` : undefined;
+  },
+  link_batch_create: (a) => {
+    const n = readCount(a, COUNT_KEYS);
+    return n ? `检测 ${n} 条链接` : undefined;
+  },
+  crawl_refresh_create: (a) => {
+    const n = readCount(a, COUNT_KEYS);
+    return n ? `刷新 ${n} 条` : undefined;
+  },
+  feed_query: (a) => {
+    const n = readCount(a, LIMIT_KEYS);
+    return n ? `获取 ${n} 条` : undefined;
+  },
+  opinion_analyze: (a) => {
+    const n = readCount(a, LIMIT_KEYS);
+    return n ? `分析 ${n} 条` : undefined;
+  },
+  report_create: (a) => readEnumLabel(a, PERIOD_KEYS, PERIOD_LABELS),
+  sheet_report_create: (a) => readEnumLabel(a, PERIOD_KEYS, PERIOD_LABELS),
+  opinion_report_export: (a) => readEnumLabel(a, PERIOD_KEYS, PERIOD_LABELS),
+};
+
+/** Defense in depth: only CJK, digits and spaces may reach the frontend. */
+const SAFE_DETAIL = /^[一-鿿0-9 ]+$/;
+
+/**
+ * Build an optional sanitized `detail` phrase for a tool step. Returns undefined
+ * unless the tool is whitelisted AND yields a count/enum result that passes the
+ * CJK-digits-only guard. Free-text args can never surface here.
+ */
+export function resolveStepDetail(toolName: string, args: unknown): string | undefined {
+  const rule = STEP_DETAIL_RULES[toolName.trim().toLowerCase()];
+  if (!rule) {
+    return undefined;
+  }
+  const detail = rule(asArgRecord(args))?.trim();
+  if (!detail) {
+    return undefined;
+  }
+  const capped = detail.slice(0, 24);
+  return SAFE_DETAIL.test(capped) ? capped : undefined;
+}
+
 interface NarratorOptions {
   /** Receives each sanitized status line to push to the frontend. */
   push: (message: string) => void;
@@ -206,6 +335,7 @@ interface RunningStep {
   label: string;
   category: StepCategory;
   startedAt: number;
+  detail?: string;
 }
 
 /**
@@ -252,6 +382,8 @@ export class ToolActivityNarrator {
     const name = typeof data.name === "string" ? data.name : "";
     const label = resolveToolLabel(name);
     const category = resolveToolCategory(name);
+    // Whitelisted count/enum summary only — never free-text args (see module doc).
+    const detail = resolveStepDetail(name, data.args);
     const ts = this.now();
 
     // Structured step: one per tool call, never collapsed (the timeline keys
@@ -260,8 +392,16 @@ export class ToolActivityNarrator {
       this.stepSeq += 1;
       const stepId = this.startStepId(data);
       const startedAt = readNumber(data.startedAt) ?? ts;
-      this.running.set(stepId, { index: this.stepSeq, label, category, startedAt });
-      this.onStep({ phase: "start", stepId, index: this.stepSeq, label, category, status: "running" });
+      this.running.set(stepId, { index: this.stepSeq, label, category, startedAt, detail });
+      this.onStep({
+        phase: "start",
+        stepId,
+        index: this.stepSeq,
+        label,
+        category,
+        status: "running",
+        ...(detail ? { detail } : {}),
+      });
     }
 
     // Legacy collapsed string push (unchanged behavior).
@@ -301,6 +441,7 @@ export class ToolActivityNarrator {
       category: tracked.category,
       status,
       durationMs,
+      ...(tracked.detail ? { detail: tracked.detail } : {}),
     });
   }
 

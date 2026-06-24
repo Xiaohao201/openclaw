@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ToolActivityNarrator,
+  resolveStepDetail,
   resolveToolCategory,
   resolveToolLabel,
   type ActivityStep,
@@ -51,6 +52,33 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("link_batch_create")).toBe("check");
     expect(resolveToolCategory("opinion_report_export")).toBe("report");
     expect(resolveToolCategory("x_search")).toBe("search");
+  });
+});
+
+describe("resolveStepDetail", () => {
+  it("derives a count detail from whitelisted array args", () => {
+    expect(resolveStepDetail("legal_check_create", { links: ["a", "b", "c"] })).toBe("检测 3 项");
+    expect(resolveStepDetail("link_batch_create", { urls: ["x"] })).toBe("检测 1 条链接");
+    expect(resolveStepDetail("feed_query", { limit: 20 })).toBe("获取 20 条");
+  });
+
+  it("maps a report period enum to a fixed label", () => {
+    expect(resolveStepDetail("report_create", { period: "weekly" })).toBe("周报");
+    expect(resolveStepDetail("sheet_report_create", { type: "MONTHLY" })).toBe("月报");
+  });
+
+  it("returns undefined for non-whitelisted tools", () => {
+    expect(resolveStepDetail("exec", { command: "SELECT 1" })).toBeUndefined();
+    expect(resolveStepDetail("write", { content: "secret" })).toBeUndefined();
+  });
+
+  it("never derives a detail from free-text args (no leak)", () => {
+    // feed_query only reads numeric limit-like keys; free text is ignored.
+    expect(
+      resolveStepDetail("feed_query", { sql: "SELECT secret FROM users", keyword: "内部代号X" }),
+    ).toBeUndefined();
+    // An enum field carrying arbitrary text is not in the fixed map → dropped.
+    expect(resolveStepDetail("report_create", { period: "internal-codename-leak" })).toBeUndefined();
   });
 });
 
@@ -200,6 +228,42 @@ describe("ToolActivityNarrator", () => {
     expect(pushed).toEqual(["正在查询分析数据（第 1 步）…"]);
     // ...but each tool call still gets its own structured start step.
     expect(steps.map((s) => s.stepId)).toEqual(["a", "b"]);
+  });
+
+  it("attaches a safe detail to the start and end steps for whitelisted tools", () => {
+    const { narrator, steps, advance } = createNarrator();
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "legal_check_create",
+        toolCallId: "lc-1",
+        args: { links: ["a", "b"] },
+      },
+    });
+    advance(900);
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: { phase: "end", name: "legal_check_create", toolCallId: "lc-1", status: "completed" },
+    });
+    expect(steps[0]).toMatchObject({ phase: "start", detail: "检测 2 项" });
+    expect(steps[1]).toMatchObject({ phase: "end", detail: "检测 2 项", durationMs: 900 });
+  });
+
+  it("emits no detail and leaks nothing for free-text tool args", () => {
+    const { narrator, steps } = createNarrator();
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "e-1",
+        args: { command: "mysql -pSECRET -e 'SELECT * FROM feed_monitor_item'" },
+      },
+    });
+    expect(steps[0]).not.toHaveProperty("detail");
+    expect(JSON.stringify(steps)).not.toContain("SECRET");
+    expect(JSON.stringify(steps)).not.toContain("SELECT");
   });
 
   it("ignores an end with no matching start (no phantom step)", () => {
