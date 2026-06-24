@@ -112,7 +112,7 @@ export class ScheduleStore {
       // existing table, so this can throw with the table already present — keep
       // it isolated from reload() so a denied create never blocks loading.
       try {
-        await execute(this.db, CREATE_TABLE);
+        await execute(this.db, CREATE_TABLE, undefined, { idempotent: true });
       } catch (error) {
         logger.warn(
           `[LEADING_V2_SCHED] CREATE TABLE skipped (table should be pre-provisioned): ${String(error)}`,
@@ -237,7 +237,9 @@ export class ScheduleStore {
     if (removeId) {
       // Soft delete: the writer account intentionally lacks the DELETE
       // privilege, so mark the row instead. reload() filters `deleted = 0`.
-      await execute(this.db, "UPDATE schedule_tasks SET deleted = 1 WHERE id = ?", [removeId]);
+      await execute(this.db, "UPDATE schedule_tasks SET deleted = 1 WHERE id = ?", [removeId], {
+        idempotent: true,
+      });
       return;
     }
     if (!upsert) {
@@ -271,6 +273,7 @@ export class ScheduleStore {
         t.failCount,
         t.createdAt,
       ],
+      { idempotent: true },
     );
   }
 
