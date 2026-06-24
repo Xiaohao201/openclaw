@@ -20,6 +20,8 @@ const {
   createOpinionExportToolFactory,
   createSheetReportToolFactory,
   createOpinionDownloadStatusToolFactory,
+  createOpinionDownloadListToolFactory,
+  createOpinionDownloadContentToolFactory,
 } = await import("./opinion-task-tools.js");
 const {
   createFeedListToolFactory,
@@ -49,7 +51,9 @@ afterEach(() => vi.clearAllMocks());
 describe("gating", () => {
   it("hides tools from non-rabbitmq agents", () => {
     const s = new RecentTaskStore<RecentDownload>();
-    expect(createOpinionAnalyzeToolFactory(fakeApi, resolver, s)({ agentId: "telegram-1" })).toBeNull();
+    expect(
+      createOpinionAnalyzeToolFactory(fakeApi, resolver, s)({ agentId: "telegram-1" }),
+    ).toBeNull();
     expect(createFeedListToolFactory(fakeApi, resolver)({ agentId: "coding" })).toBeNull();
   });
 });
@@ -57,12 +61,29 @@ describe("gating", () => {
 describe("opinion_analyze + status", () => {
   it("submits request-download then polls fetch-downloads by slug", async () => {
     const s = new RecentTaskStore<RecentDownload>();
-    const analyze = createOpinionAnalyzeToolFactory(fakeApi, resolver, s)({ agentId: "rabbitmq-1749" })!;
-    const status = createOpinionDownloadStatusToolFactory(fakeApi, resolver, s)({ agentId: "rabbitmq-1749" })!;
+    const analyze = createOpinionAnalyzeToolFactory(
+      fakeApi,
+      resolver,
+      s,
+    )({ agentId: "rabbitmq-1749" })!;
+    const status = createOpinionDownloadStatusToolFactory(
+      fakeApi,
+      resolver,
+      s,
+    )({ agentId: "rabbitmq-1749" })!;
 
     mockPostForm.mockResolvedValue({ code: "success", slug: "DLSLUG", message: "ok" });
-    const created = parse(await analyze.execute("a1", { data: "某舆情事件 https://x.com/1", category: "RiskEvaluation" }));
-    const [, path, fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const created = parse(
+      await analyze.execute("a1", {
+        data: "某舆情事件 https://x.com/1",
+        category: "RiskEvaluation",
+      }),
+    );
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/pub-opinion/request-download");
     expect(fields).toMatchObject({ category: "RiskEvaluation", siteId: "legal" });
     expect(created).toMatchObject({ success: true, submitted: true, category: "RiskEvaluation" });
@@ -73,7 +94,13 @@ describe("opinion_analyze + status", () => {
       code: "success",
       items: [
         { slug: "OTHER", status: "Pending" },
-        { slug: "DLSLUG", status: "Done", title: "研判", fileLink: "https://oss/x.docx", content: "分析正文" },
+        {
+          slug: "DLSLUG",
+          status: "Done",
+          title: "研判",
+          fileLink: "https://oss/x.docx",
+          content: "分析正文",
+        },
       ],
     });
     const res = parse(await status.execute("s1", {}));
@@ -89,7 +116,11 @@ describe("opinion_analyze + status", () => {
 
   it("requires data", async () => {
     const s = new RecentTaskStore<RecentDownload>();
-    const analyze = createOpinionAnalyzeToolFactory(fakeApi, resolver, s)({ agentId: "rabbitmq-1749" })!;
+    const analyze = createOpinionAnalyzeToolFactory(
+      fakeApi,
+      resolver,
+      s,
+    )({ agentId: "rabbitmq-1749" })!;
     const res = parse(await analyze.execute("a2", {}));
     expect(res.success).toBe(false);
     expect(mockPostForm).not.toHaveBeenCalled();
@@ -99,7 +130,11 @@ describe("opinion_analyze + status", () => {
 describe("opinion_report_export", () => {
   it("requires reportId and sends datetimerange as an array", async () => {
     const s = new RecentTaskStore<RecentDownload>();
-    const tool = createOpinionExportToolFactory(fakeApi, resolver, s)({ agentId: "rabbitmq-1749" })!;
+    const tool = createOpinionExportToolFactory(
+      fakeApi,
+      resolver,
+      s,
+    )({ agentId: "rabbitmq-1749" })!;
     expect(parse(await tool.execute("e0", {})).success).toBe(false);
 
     mockPostForm.mockResolvedValue({ code: "success", slug: "EXP1" });
@@ -122,10 +157,118 @@ describe("sheet_report_create", () => {
     expect(parse(await tool.execute("sh0", {})).success).toBe(false);
 
     mockPostForm.mockResolvedValue({ code: "success", slug: "SH1" });
-    const res = parse(await tool.execute("sh1", { fileLink: "https://oss/20260616000000_data.xlsx" }));
+    const res = parse(
+      await tool.execute("sh1", { fileLink: "https://oss/20260616000000_data.xlsx" }),
+    );
     const [, path] = mockPostForm.mock.calls[0] as [unknown, string];
     expect(path).toBe("/pub-opinion/submit-sheet-report-job");
     expect(res.success).toBe(true);
+  });
+});
+
+describe("opinion_download_list", () => {
+  it("surfaces a content excerpt per row without dumping the full body", async () => {
+    const tool = createOpinionDownloadListToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    const longBody = "广汽本田六月舆情月报正文".repeat(40);
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      total: 1,
+      items: [
+        {
+          category: "Report",
+          status: "Done",
+          title: "广汽本田月报",
+          content: longBody,
+          date: "2026-06-20",
+        },
+      ],
+    });
+    const res = parse(await tool.execute("l1", {}));
+    const row = (res.list as Array<Record<string, unknown>>)[0];
+    expect(row).toMatchObject({ title: "广汽本田月报", status: "Done" });
+    expect(typeof row.excerpt).toBe("string");
+    expect((row.excerpt as string).length).toBeLessThan(longBody.length);
+    expect(row.excerpt as string).toMatch(/…$/);
+    expect(row).not.toHaveProperty("content");
+  });
+});
+
+describe("opinion_download_content", () => {
+  it("returns the full body of the title-matched Done row", async () => {
+    const tool = createOpinionDownloadContentToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      items: [
+        { status: "Done", title: "其他周报", content: "无关正文" },
+        {
+          status: "Done",
+          title: "广汽本田月报",
+          content: "完整月报正文……",
+          fileLink: "https://oss/m.docx",
+          date: "d",
+        },
+      ],
+    });
+    const res = parse(await tool.execute("c1", { title: "广汽本田" }));
+    const [, path] = mockGetJson.mock.calls[0] as [unknown, string];
+    expect(path).toBe("/pub-opinion/fetch-downloads");
+    expect(res).toMatchObject({
+      success: true,
+      found: true,
+      hasContent: true,
+      title: "广汽本田月报",
+      content: "完整月报正文……",
+      fileLink: "https://oss/m.docx",
+    });
+  });
+
+  it("reads the most recent Done row when no title is given", async () => {
+    const tool = createOpinionDownloadContentToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      items: [
+        { status: "Pending", title: "排队中" },
+        { status: "Done", title: "最新完成", content: "正文A" },
+      ],
+    });
+    const res = parse(await tool.execute("c2", {}));
+    expect(res).toMatchObject({ success: true, found: true, title: "最新完成", content: "正文A" });
+  });
+
+  it("reports not-found when the title matches nothing", async () => {
+    const tool = createOpinionDownloadContentToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      items: [{ status: "Done", title: "别的报告", content: "x" }],
+    });
+    const res = parse(await tool.execute("c3", { title: "不存在" }));
+    expect(res).toMatchObject({ success: true, found: false });
+    expect(res).not.toHaveProperty("content");
+  });
+
+  it("flags a finished row that has neither body nor file", async () => {
+    const tool = createOpinionDownloadContentToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      items: [{ status: "Done", title: "空报告" }],
+    });
+    const res = parse(await tool.execute("c4", { title: "空报告" }));
+    expect(res).toMatchObject({ success: true, found: true, hasContent: false });
   });
 });
 
@@ -136,12 +279,31 @@ describe("feed_list", () => {
 
     mockGetJson.mockResolvedValue({
       total: 1,
-      list: [{ id: 5, title: "标题", platform: "微信", emotion: "Negative", level: "Red", summary: "摘要", link: "u", date: "d" }],
+      list: [
+        {
+          id: 5,
+          title: "标题",
+          platform: "微信",
+          emotion: "Negative",
+          level: "Red",
+          summary: "摘要",
+          link: "u",
+          date: "d",
+        },
+      ],
     });
     const res = parse(
-      await tool.execute("f1", { topicId: 553, platforms: ["weixin", "weibo"], riskLevels: ["Red"] }),
+      await tool.execute("f1", {
+        topicId: 553,
+        platforms: ["weixin", "weibo"],
+        riskLevels: ["Red"],
+      }),
     );
-    const [, path, params] = mockGetJson.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const [, path, params] = mockGetJson.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/pub-opinion/fetch-feeds");
     expect(params).toMatchObject({ topicId: 553 });
     expect(params.platforms).toEqual(["weixin", "weibo"]);
@@ -160,24 +322,50 @@ describe("topic_list", () => {
       list: [{ id: 7, refId: 0, title: "主方案", master: 1, enableAnalysis: 1 }],
     });
     const res = parse(await tool.execute("t1", { reportId: 1024 }));
-    expect((res.list as Array<Record<string, unknown>>)[0]).toMatchObject({ topicId: 7, master: true, enableAnalysis: true });
+    expect((res.list as Array<Record<string, unknown>>)[0]).toMatchObject({
+      topicId: 7,
+      master: true,
+      enableAnalysis: true,
+    });
   });
 });
 
 describe("feed_reanalyze", () => {
   it("validates inputs and maps ruleTypes to variant keys", async () => {
     const tool = createFeedReanalyzeToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
-    expect(parse(await tool.execute("r0", { topicId: 553, reportId: 3965, ids: [], ruleTypes: ["PreCheck"] })).success).toBe(
-      false,
-    );
+    expect(
+      parse(
+        await tool.execute("r0", {
+          topicId: 553,
+          reportId: 3965,
+          ids: [],
+          ruleTypes: ["PreCheck"],
+        }),
+      ).success,
+    ).toBe(false);
 
     mockPostForm.mockResolvedValue({ code: "success", message: "数据已提交重新分析，请等待：2条" });
     const res = parse(
-      await tool.execute("r1", { topicId: 553, reportId: 3965, ids: [1, 2], ruleTypes: ["PreCheck", "DoubleCheck"], mode: "test" }),
+      await tool.execute("r1", {
+        topicId: 553,
+        reportId: 3965,
+        ids: [1, 2],
+        ruleTypes: ["PreCheck", "DoubleCheck"],
+        mode: "test",
+      }),
     );
-    const [, path, fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/pub-opinion/reanalyze-items");
-    expect(fields).toMatchObject({ topicId: 553, reportId: 3965, preCheck: "test", doubleCheck: "test" });
+    expect(fields).toMatchObject({
+      topicId: 553,
+      reportId: 3965,
+      preCheck: "test",
+      doubleCheck: "test",
+    });
     expect(fields.categorize).toBeUndefined();
     expect(fields.ids).toEqual([1, 2]);
     expect(res).toMatchObject({ success: true, submitted: 2 });
@@ -194,7 +382,11 @@ describe("monthly_stats", () => {
       data: [{ time: "01", month: "202510", total: 10, Negative: 2, articles: [1, 2] }],
     });
     const res = parse(await tool.execute("m1", { clusterId: 395804, months: ["202510"] }));
-    const [, path, fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/pub-opinion/request-monthly-date");
     expect(fields.date).toEqual(["202510"]);
     const day = (res.days as Array<Record<string, unknown>>)[0];

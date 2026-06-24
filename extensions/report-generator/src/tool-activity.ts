@@ -100,6 +100,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   opinion_analyze: "正在分析舆情",
   opinion_download_status: "正在确认下载进度",
   opinion_download_list: "正在获取下载列表",
+  opinion_download_content: "正在读取报告正文",
   // 维权文书 / 任务
   letter_generate: "正在生成维权文书",
   letter_fetch: "正在查询维权文书",
@@ -163,6 +164,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   opinion_analyze: "query",
   opinion_download_status: "report",
   opinion_download_list: "report",
+  opinion_download_content: "report",
   letter_generate: "report",
   letter_fetch: "report",
   job_list: "default",

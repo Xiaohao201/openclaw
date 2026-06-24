@@ -16,33 +16,24 @@ import {
   createCrawlRefreshStatusToolFactory,
   type RecentCrawlRefresh,
 } from "./src/crawl/crawl-tools.js";
-import { resolveNotifyConfig } from "./src/notify/config.js";
-import type { NotifyKind } from "./src/notify/types.js";
-import { pollCrawlRefresh } from "./src/notify/crawl-adapter.js";
-import { pollLinkCheck } from "./src/notify/link-check-adapter.js";
-import { debugLog } from "./src/notify/debug.js";
-import { MercurePusher, resolveMercureConfig } from "./src/notify/mercure.js";
-import { resolveSmtpConfig } from "./src/notify/email-client.js";
-import { Notifier, type NotificationTransport } from "./src/notify/notification.js";
-import { DbHistoryTransport } from "./src/notify/transports/db-history.js";
-import { EmailNotificationTransport } from "./src/notify/transports/email.js";
-import { MercureNotificationTransport } from "./src/notify/transports/mercure-notification.js";
-import { CompletionNotifier } from "./src/notify/notifier.js";
-import { getSharedPendingRegistry } from "./src/notify/pending-store.js";
-import { buildRunners } from "./src/schedule/actions/registry.js";
-import { getSharedScheduleStore } from "./src/schedule/schedule-store.js";
-import { Scheduler } from "./src/schedule/scheduler.js";
-import {
-  createScheduleCreateToolFactory,
-  createScheduleDeleteToolFactory,
-  createScheduleListToolFactory,
-  createScheduleToggleToolFactory,
-} from "./src/schedule/schedule-tools.js";
 import {
   createLinkBatchCreateToolFactory,
   createLinkBatchStatusToolFactory,
   type RecentLinkBatch,
 } from "./src/link/link-tools.js";
+import { resolveNotifyConfig } from "./src/notify/config.js";
+import { pollCrawlRefresh } from "./src/notify/crawl-adapter.js";
+import { debugLog } from "./src/notify/debug.js";
+import { resolveSmtpConfig } from "./src/notify/email-client.js";
+import { pollLinkCheck } from "./src/notify/link-check-adapter.js";
+import { MercurePusher, resolveMercureConfig } from "./src/notify/mercure.js";
+import { Notifier, type NotificationTransport } from "./src/notify/notification.js";
+import { CompletionNotifier } from "./src/notify/notifier.js";
+import { getSharedPendingRegistry } from "./src/notify/pending-store.js";
+import { DbHistoryTransport } from "./src/notify/transports/db-history.js";
+import { EmailNotificationTransport } from "./src/notify/transports/email.js";
+import { MercureNotificationTransport } from "./src/notify/transports/mercure-notification.js";
+import type { NotifyKind } from "./src/notify/types.js";
 import {
   createFeedListToolFactory,
   createFeedReanalyzeToolFactory,
@@ -51,6 +42,7 @@ import {
 } from "./src/opinion/opinion-read-tools.js";
 import {
   createOpinionAnalyzeToolFactory,
+  createOpinionDownloadContentToolFactory,
   createOpinionDownloadListToolFactory,
   createOpinionDownloadStatusToolFactory,
   createOpinionExportToolFactory,
@@ -64,6 +56,15 @@ import {
   createReportStopToolFactory,
   type RecentReport,
 } from "./src/report/report-tools.js";
+import { buildRunners } from "./src/schedule/actions/registry.js";
+import { getSharedScheduleStore } from "./src/schedule/schedule-store.js";
+import {
+  createScheduleCreateToolFactory,
+  createScheduleDeleteToolFactory,
+  createScheduleListToolFactory,
+  createScheduleToggleToolFactory,
+} from "./src/schedule/schedule-tools.js";
+import { Scheduler } from "./src/schedule/scheduler.js";
 
 export default definePluginEntry({
   id: "leading-v2",
@@ -124,6 +125,9 @@ export default definePluginEntry({
     api.registerTool(createOpinionDownloadListToolFactory(api, resolver), {
       name: "opinion_download_list",
     });
+    api.registerTool(createOpinionDownloadContentToolFactory(api, resolver), {
+      name: "opinion_download_content",
+    });
     api.registerTool(createFeedListToolFactory(api, resolver), { name: "feed_list" });
     api.registerTool(createTopicListToolFactory(api, resolver), { name: "topic_list" });
     api.registerTool(createFeedReanalyzeToolFactory(api, resolver), { name: "feed_reanalyze" });
@@ -150,10 +154,16 @@ export default definePluginEntry({
 
     // --- scheduled tasks (口述定时；结果走同一套 notifier) ---
     const scheduleStore = getSharedScheduleStore();
-    api.registerTool(createScheduleCreateToolFactory(api, scheduleStore), { name: "schedule_create" });
+    api.registerTool(createScheduleCreateToolFactory(api, scheduleStore), {
+      name: "schedule_create",
+    });
     api.registerTool(createScheduleListToolFactory(api, scheduleStore), { name: "schedule_list" });
-    api.registerTool(createScheduleDeleteToolFactory(api, scheduleStore), { name: "schedule_delete" });
-    api.registerTool(createScheduleToggleToolFactory(api, scheduleStore), { name: "schedule_toggle" });
+    api.registerTool(createScheduleDeleteToolFactory(api, scheduleStore), {
+      name: "schedule_delete",
+    });
+    api.registerTool(createScheduleToggleToolFactory(api, scheduleStore), {
+      name: "schedule_toggle",
+    });
 
     let notifier: CompletionNotifier | undefined;
     let scheduler: Scheduler | undefined;
@@ -177,7 +187,9 @@ export default definePluginEntry({
           const transports: NotificationTransport[] = [];
           if (mercureCfg) {
             // T1 live in-app event (renders if the user's chat SSE is open).
-            transports.push(new MercureNotificationTransport(new MercurePusher(mercureCfg, ctx.logger)));
+            transports.push(
+              new MercureNotificationTransport(new MercurePusher(mercureCfg, ctx.logger)),
+            );
           }
           if (config.db) {
             // T2 durable: persist as an assistant-only history row so it shows
@@ -191,7 +203,9 @@ export default definePluginEntry({
           }
           const fanout = new Notifier(transports, ctx.logger);
           if (!fanout.hasTransports()) {
-            ctx.logger.warn("[LEADING_V2] No notification transport configured (set plugins.leading-v2.mercure)");
+            ctx.logger.warn(
+              "[LEADING_V2] No notification transport configured (set plugins.leading-v2.mercure)",
+            );
           }
 
           if (notify.enabled) {
@@ -246,7 +260,11 @@ export default definePluginEntry({
           // same completion-notifier + Notifier as chat-initiated tasks.
           // MySQL-backed when a db is configured (shared with the web frontend
           // so it can list/edit/delete the same schedules); JSON file otherwise.
-          await scheduleStore.init(join(ctx.stateDir, "leading-v2-schedules.json"), ctx.logger, config.db);
+          await scheduleStore.init(
+            join(ctx.stateDir, "leading-v2-schedules.json"),
+            ctx.logger,
+            config.db,
+          );
           const runners = buildRunners({
             config,
             resolver,

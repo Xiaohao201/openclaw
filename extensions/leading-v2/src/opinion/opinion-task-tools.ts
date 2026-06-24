@@ -43,16 +43,24 @@ const AnalyzeSchema = Type.Object(
         "RiskEvaluation=风险研判(default), Disposal=舆情处置快报, DailyRiskTips=每日风险提示.",
       ),
     ),
-    title: Type.Optional(Type.String({ description: "Optional title; auto-derived from data if omitted." })),
-    requirement: Type.Optional(Type.String({ description: "Custom analysis instruction, e.g. '主要做风险研判'." })),
-    cluster: Type.Optional(Type.Boolean({ description: "Enable cluster analysis (聚类). Default false." })),
+    title: Type.Optional(
+      Type.String({ description: "Optional title; auto-derived from data if omitted." }),
+    ),
+    requirement: Type.Optional(
+      Type.String({ description: "Custom analysis instruction, e.g. '主要做风险研判'." }),
+    ),
+    cluster: Type.Optional(
+      Type.Boolean({ description: "Enable cluster analysis (聚类). Default false." }),
+    ),
   },
   { additionalProperties: false },
 );
 
 const ExportSchema = Type.Object(
   {
-    reportId: Type.Number({ description: "智脑项目 ID (must be a DailyMonitoring project). Required." }),
+    reportId: Type.Number({
+      description: "智脑项目 ID (must be a DailyMonitoring project). Required.",
+    }),
     category: Type.Optional(
       stringEnum(
         EXPORT_CATEGORIES,
@@ -84,7 +92,9 @@ const SheetSchema = Type.Object(
         "Public URL to an .xlsx/.csv of 舆情 data. The filename must carry a 14-char prefix " +
         "(e.g. a YYYYMMDDHHmmss timestamp) — the title is taken from char 15 onward.",
     }),
-    requirement: Type.Optional(Type.String({ description: "Analysis requirement, e.g. '写一篇分析报告'." })),
+    requirement: Type.Optional(
+      Type.String({ description: "Analysis requirement, e.g. '写一篇分析报告'." }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -93,7 +103,8 @@ const StatusSchema = Type.Object(
   {
     slug: Type.Optional(
       Type.String({
-        description: "Internal — leave unset. Polls the most recent submitted 舆情 task for this account.",
+        description:
+          "Internal — leave unset. Polls the most recent submitted 舆情 task for this account.",
       }),
     ),
   },
@@ -103,13 +114,70 @@ const StatusSchema = Type.Object(
 const ListSchema = Type.Object(
   {
     category: Type.Optional(
-      Type.String({ description: "Filter by category (comma-separated for several) or 'All'. Default All." }),
+      Type.String({
+        description: "Filter by category (comma-separated for several) or 'All'. Default All.",
+      }),
     ),
     page: Type.Optional(Type.Number({ description: "Page number. Default 1." })),
     size: Type.Optional(Type.Number({ description: "Page size 10-100. Default 20." })),
   },
   { additionalProperties: false },
 );
+
+const ContentSchema = Type.Object(
+  {
+    title: Type.Optional(
+      Type.String({
+        description:
+          "报告/任务标题（可只给其中一段，用于在下载列表中定位要读取的那一条）。" +
+          "省略时读取最近一条已完成任务的正文。",
+      }),
+    ),
+    category: Type.Optional(
+      Type.String({
+        description:
+          "Optional category filter (same values as opinion_download_list). Default All.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+/** Trim report body to a short preview for list rows (full text via opinion_download_content). */
+function excerptOf(raw: unknown, max = 160): string | null {
+  const text = asString(raw);
+  if (!text) {
+    return null;
+  }
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) {
+    return null;
+  }
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+/**
+ * Pick the download row to read full content from. Done rows win over in-progress
+ * ones; an explicit title narrows by exact match first, then substring. fetch-downloads
+ * returns rows most-recent-first, so index 0 of any pool is the latest.
+ */
+function pickContentRow(
+  items: Record<string, unknown>[],
+  titleQuery: string | undefined,
+): { row: Record<string, unknown> | null; matches: number } {
+  const done = items.filter((it) => asString(it.status) === "Done");
+  const pool = done.length > 0 ? done : items;
+  if (!titleQuery) {
+    return { row: pool[0] ?? null, matches: pool.length > 0 ? pool.length : 0 };
+  }
+  const q = titleQuery.trim().toLowerCase();
+  const exact = pool.filter((it) => (asString(it.title) ?? "").toLowerCase() === q);
+  if (exact.length > 0) {
+    return { row: exact[0], matches: exact.length };
+  }
+  const partial = pool.filter((it) => (asString(it.title) ?? "").toLowerCase().includes(q));
+  return { row: partial[0] ?? null, matches: partial.length };
+}
 
 /** Find a submitted task row in fetch-downloads, matching by slug. */
 async function findDownloadBySlug(
@@ -155,7 +223,10 @@ export function createOpinionAnalyzeToolFactory(
         }
         const data = asString(rawParams.data);
         if (!data) {
-          return jsonResult({ success: false, error: "data is required (the text or links to analyze)." });
+          return jsonResult({
+            success: false,
+            error: "data is required (the text or links to analyze).",
+          });
         }
         const category = ANALYZE_CATEGORIES.includes(
           rawParams.category as (typeof ANALYZE_CATEGORIES)[number],
@@ -241,13 +312,18 @@ export function createOpinionExportToolFactory(
         // datetimerange takes an array; other dateTypes take a scalar scope.
         const dateScope: FieldValue =
           dateType === "datetimerange" && dateScopeRaw
-            ? dateScopeRaw.split(",").map((s) => s.trim()).filter(Boolean)
+            ? dateScopeRaw
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
             : dateScopeRaw;
 
         const fields: Record<string, FieldValue> = {
           category,
           reportId,
-          topicId: Number.isInteger(Number(rawParams.topicId)) ? Number(rawParams.topicId) : undefined,
+          topicId: Number.isInteger(Number(rawParams.topicId))
+            ? Number(rawParams.topicId)
+            : undefined,
           dateType: category === "Report" ? dateType : undefined,
           dateScope: category === "Report" ? dateScope : undefined,
           siteId: config.siteId,
@@ -309,7 +385,10 @@ export function createSheetReportToolFactory(
         }
         const fileLink = asString(rawParams.fileLink);
         if (!fileLink) {
-          return jsonResult({ success: false, error: "fileLink is required (a public .xlsx/.csv URL)." });
+          return jsonResult({
+            success: false,
+            error: "fileLink is required (a public .xlsx/.csv URL).",
+          });
         }
         const fields: Record<string, FieldValue> = {
           fileLink,
@@ -320,7 +399,12 @@ export function createSheetReportToolFactory(
 
         let res: Record<string, unknown>;
         try {
-          res = await postForm(config, "/pub-opinion/submit-sheet-report-job", fields, keyed.apiKey);
+          res = await postForm(
+            config,
+            "/pub-opinion/submit-sheet-report-job",
+            fields,
+            keyed.apiKey,
+          );
         } catch (error) {
           return failure(api, "sheet_report_create", userId, error);
         }
@@ -376,7 +460,8 @@ export function createOpinionDownloadStatusToolFactory(
         if (!slug) {
           return jsonResult({
             success: false,
-            error: "No recent 舆情 task to poll; submit one first (opinion_analyze / opinion_report_export / sheet_report_create).",
+            error:
+              "No recent 舆情 task to poll; submit one first (opinion_analyze / opinion_report_export / sheet_report_create).",
           });
         }
 
@@ -419,7 +504,10 @@ export function createOpinionDownloadStatusToolFactory(
   };
 }
 
-export function createOpinionDownloadListToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
+export function createOpinionDownloadListToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
 
   return (ctx: { agentId?: string }) => {
@@ -445,7 +533,12 @@ export function createOpinionDownloadListToolFactory(api: OpenClawPluginApi, res
 
         let res: Record<string, unknown>;
         try {
-          res = await getJson(config, "/pub-opinion/fetch-downloads", { category, page, size }, keyed.apiKey);
+          res = await getJson(
+            config,
+            "/pub-opinion/fetch-downloads",
+            { category, page, size },
+            keyed.apiKey,
+          );
         } catch (error) {
           return failure(api, "opinion_download_list", userId, error);
         }
@@ -462,10 +555,120 @@ export function createOpinionDownloadListToolFactory(api: OpenClawPluginApi, res
             statusLabel: STATUS_LABELS[status] ?? status,
             title: asString(item.title) ?? null,
             fileLink: asString(item.fileLink) ?? null,
+            excerpt: excerptOf(item.content),
             date: asString(item.date) ?? null,
           };
         });
-        return jsonResult({ success: true, total: Number(res.total ?? list.length), list });
+        return jsonResult({
+          success: true,
+          total: Number(res.total ?? list.length),
+          list,
+          agentInstruction:
+            "excerpt 仅为正文摘要。需要某条报告的完整正文时，调用 opinion_download_content 并传入对应 title。",
+        });
+      },
+    };
+  };
+}
+
+export function createOpinionDownloadContentToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
+  const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+    return {
+      name: "opinion_download_content",
+      label: "Read 舆情 Report Content",
+      description:
+        "Read the full body of a finished 舆情/智脑 report or analysis task (the text stored on its download row). " +
+        "Pass the report's title (or a fragment of it, e.g. from opinion_download_list); omit it to read the most " +
+        "recent finished task. Returns the full content plus fileLink/memo when present. " +
+        "Use this when the user asks to see/summarize/quote the actual report — opinion_download_list only carries an excerpt.",
+      parameters: ContentSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const keyed = await resolveKeyOrError(api, resolver, userId, "opinion_download_content");
+        if ("error" in keyed) {
+          return keyed.error;
+        }
+        const category = asString(rawParams.category) ?? "All";
+        const titleQuery = asString(rawParams.title);
+
+        let res: Record<string, unknown>;
+        try {
+          res = await getJson(
+            config,
+            "/pub-opinion/fetch-downloads",
+            { category, page: 1, size: 50 },
+            keyed.apiKey,
+          );
+        } catch (error) {
+          return failure(api, "opinion_download_content", userId, error);
+        }
+        const envErr = envelopeError(res);
+        if (envErr) {
+          return jsonResult({ success: false, error: envErr });
+        }
+        const items = Array.isArray(res.items) ? (res.items as Record<string, unknown>[]) : [];
+        if (items.length === 0) {
+          return jsonResult({
+            success: true,
+            found: false,
+            agentInstruction: "该账号暂无任何下载/报告任务。请如实告知用户。",
+          });
+        }
+
+        const { row, matches } = pickContentRow(items, titleQuery);
+        if (!row) {
+          return jsonResult({
+            success: true,
+            found: false,
+            agentInstruction:
+              "未找到标题匹配的报告。请先用 opinion_download_list 确认确切标题，再用 opinion_download_content 重试。",
+          });
+        }
+
+        const status = asString(row.status) ?? "";
+        const content = asString(row.content);
+        const fileLink = asString(row.fileLink);
+        if (!content && !fileLink) {
+          return jsonResult({
+            success: true,
+            found: true,
+            hasContent: false,
+            status,
+            statusLabel: STATUS_LABELS[status] ?? status,
+            title: asString(row.title) ?? null,
+            agentInstruction:
+              status === "Done"
+                ? "该报告已完成但正文为空（可能仅以文件或邮件形式交付）。请如实告知用户，可让其到网页端查看。"
+                : "该报告尚未生成完成，暂无正文。请告知用户稍后再试。",
+          });
+        }
+
+        return jsonResult({
+          success: true,
+          found: true,
+          hasContent: Boolean(content),
+          status,
+          statusLabel: STATUS_LABELS[status] ?? status,
+          title: asString(row.title) ?? null,
+          category: asString(row.category) ?? null,
+          content: content ?? null,
+          fileLink: fileLink ?? null,
+          memo: asString(row.memo) ?? null,
+          date: asString(row.date) ?? null,
+          ...(titleQuery && matches > 1 ? { ambiguous: true, matched: matches } : {}),
+          agentInstruction:
+            titleQuery && matches > 1
+              ? "标题匹配到多条，已返回最新的一条。若不是用户想要的，请用更精确的标题重试。请向用户展示正文。"
+              : "请向用户展示报告正文。",
+        });
       },
     };
   };
