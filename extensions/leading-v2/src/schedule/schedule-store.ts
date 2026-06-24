@@ -140,7 +140,9 @@ export class ScheduleStore {
           }
         }
       }
-      logger.info(`[LEADING_V2_SCHED] Loaded ${this.tasks.size} scheduled task(s) from ${filePath}`);
+      logger.info(
+        `[LEADING_V2_SCHED] Loaded ${this.tasks.size} scheduled task(s) from ${filePath}`,
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
         logger.warn(`[LEADING_V2_SCHED] Could not read schedule store: ${String(error)}`);
@@ -279,7 +281,10 @@ export class ScheduleStore {
     const filePath = this.filePath;
     const snapshot = JSON.stringify([...this.tasks.values()]);
     await mkdir(dirname(filePath), { recursive: true });
-    const tmp = join(dirname(filePath), `.${Date.now()}-${Math.round(performance.now())}.sched.tmp`);
+    const tmp = join(
+      dirname(filePath),
+      `.${Date.now()}-${Math.round(performance.now())}.sched.tmp`,
+    );
     await writeFile(tmp, snapshot, "utf8");
     await rename(tmp, filePath);
   }

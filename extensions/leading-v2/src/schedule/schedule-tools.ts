@@ -24,17 +24,24 @@ const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "�
 
 const CreateSchema = Type.Object(
   {
-    title: Type.String({ description: "Human label for this schedule, e.g. '每天9点刷新广本3条链接'." }),
+    title: Type.String({
+      description: "Human label for this schedule, e.g. '每天9点刷新广本3条链接'.",
+    }),
     kind: stringEnum(
       ["daily", "weekly", "interval"] as const,
       "daily=每天, weekly=每周某天, interval=每隔N分钟.",
     ),
-    time: Type.Optional(Type.String({ description: "For daily/weekly: 'HH:mm' (24h), e.g. '09:00'." })),
-    weekday: Type.Optional(
-      Type.Number({ description: "For weekly: 0=周日,1=周一,…,6=周六." }),
+    time: Type.Optional(
+      Type.String({ description: "For daily/weekly: 'HH:mm' (24h), e.g. '09:00'." }),
     ),
-    everyMinutes: Type.Optional(Type.Number({ description: "For interval: run every N minutes (>=1)." })),
-    action: stringEnum(actionNames() as [string, ...string[]], `What to run. One of:\n${ACTION_HELP}`),
+    weekday: Type.Optional(Type.Number({ description: "For weekly: 0=周日,1=周一,…,6=周六." })),
+    everyMinutes: Type.Optional(
+      Type.Number({ description: "For interval: run every N minutes (>=1)." }),
+    ),
+    action: stringEnum(
+      actionNames() as [string, ...string[]],
+      `What to run. One of:\n${ACTION_HELP}`,
+    ),
     params: Type.Optional(
       Type.Object(
         {},
@@ -125,7 +132,10 @@ export function createScheduleCreateToolFactory(api: OpenClawPluginApi, store: S
           return jsonResult({ success: false, error: "title is required." });
         }
         if (store.forUser(userId).length >= MAX_PER_USER) {
-          return jsonResult({ success: false, error: `定时任务数量已达上限 (${MAX_PER_USER})，请先删除一些。` });
+          return jsonResult({
+            success: false,
+            error: `定时任务数量已达上限 (${MAX_PER_USER})，请先删除一些。`,
+          });
         }
         const built = buildSchedule(p);
         if ("error" in built) {
@@ -134,7 +144,10 @@ export function createScheduleCreateToolFactory(api: OpenClawPluginApi, store: S
         const action = asString(p.action);
         const actionType = action ? actionByName(action) : undefined;
         if (!actionType) {
-          return jsonResult({ success: false, error: `action 必须是 ${actionNames().join(" / ")} 之一。` });
+          return jsonResult({
+            success: false,
+            error: `action 必须是 ${actionNames().join(" / ")} 之一。`,
+          });
         }
         const rawParams =
           p.params && typeof p.params === "object" && !Array.isArray(p.params)
@@ -147,7 +160,9 @@ export function createScheduleCreateToolFactory(api: OpenClawPluginApi, store: S
 
         const sessionKey =
           ctx.sessionKey ??
-          (ctx.sessionId ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}` : undefined);
+          (ctx.sessionId
+            ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}`
+            : undefined);
         if (!sessionKey) {
           return jsonResult({ success: false, error: "无法确定会话，请在聊天中创建定时任务。" });
         }
@@ -216,7 +231,11 @@ export function createScheduleListToolFactory(api: OpenClawPluginApi, store: Sch
 }
 
 /** Resolve a 1-based list index (createdAt order) to a task for this user. */
-function taskByIndex(store: ScheduleStore, userId: string, index: number): ScheduledTask | undefined {
+function taskByIndex(
+  store: ScheduleStore,
+  userId: string,
+  index: number,
+): ScheduledTask | undefined {
   const rows = store.forUser(userId).toSorted((a, b) => a.createdAt - b.createdAt);
   return rows[index - 1];
 }
@@ -235,7 +254,10 @@ export function createScheduleDeleteToolFactory(api: OpenClawPluginApi, store: S
       async execute(_toolCallId: string, p: Record<string, unknown>) {
         const task = taskByIndex(store, userId, Math.floor(Number(p.index)));
         if (!task) {
-          return jsonResult({ success: false, error: "没有该序号的定时任务，请先用 schedule_list 查看。" });
+          return jsonResult({
+            success: false,
+            error: "没有该序号的定时任务，请先用 schedule_list 查看。",
+          });
         }
         store.remove(task.id);
         return jsonResult({ success: true, deleted: true, title: task.title });
@@ -258,7 +280,10 @@ export function createScheduleToggleToolFactory(api: OpenClawPluginApi, store: S
       async execute(_toolCallId: string, p: Record<string, unknown>) {
         const task = taskByIndex(store, userId, Math.floor(Number(p.index)));
         if (!task) {
-          return jsonResult({ success: false, error: "没有该序号的定时任务，请先用 schedule_list 查看。" });
+          return jsonResult({
+            success: false,
+            error: "没有该序号的定时任务，请先用 schedule_list 查看。",
+          });
         }
         const enabled = p.enabled !== false;
         // Re-arm nextRunAt when re-enabling so it doesn't immediately fire on a stale time.

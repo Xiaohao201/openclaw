@@ -96,7 +96,9 @@ export const agentPromptAction: ScheduleActionType = {
           { mercureTopic: task.mercureTopic, sessionKey: task.sessionKey },
         );
         if (!ok) {
-          logger.warn(`[LEADING_V2_SCHED] agent_prompt produced a reply but no transport accepted it (task ${task.id})`);
+          logger.warn(
+            `[LEADING_V2_SCHED] agent_prompt produced a reply but no transport accepted it (task ${task.id})`,
+          );
         }
         return { ok: true, note: text.slice(0, 80) };
       } catch (error) {

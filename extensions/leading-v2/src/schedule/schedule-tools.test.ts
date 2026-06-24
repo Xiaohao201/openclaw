@@ -8,7 +8,9 @@ import {
   createScheduleToggleToolFactory,
 } from "./schedule-tools.js";
 
-const api = { logger: { info() {}, warn() {}, error() {}, debug() {} } } as unknown as OpenClawPluginApi;
+const api = {
+  logger: { info() {}, warn() {}, error() {}, debug() {} },
+} as unknown as OpenClawPluginApi;
 
 function parse(result: unknown): Record<string, unknown> {
   const r = result as { details?: unknown; content?: Array<{ text?: string }> };
@@ -57,17 +59,19 @@ describe("schedule_create", () => {
       action: { tool: "crawl_refresh_create" },
       sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_1",
     });
-    expect(tasks[0].action.params.links).toEqual([
-      "https://a.com/1",
-      "https://a.com/2",
-    ]);
+    expect(tasks[0].action.params.links).toEqual(["https://a.com/1", "https://a.com/2"]);
   });
 
   it("rejects daily without a valid time", async () => {
     const store = new ScheduleStore();
     const tool = createScheduleCreateToolFactory(api, store)(ctx)!;
     const res = parse(
-      await tool.execute("c2", { title: "x", kind: "daily", action: "crawl_refresh", params: { links: ["https://a/1"] } }),
+      await tool.execute("c2", {
+        title: "x",
+        kind: "daily",
+        action: "crawl_refresh",
+        params: { links: ["https://a/1"] },
+      }),
     );
     expect(res.success).toBe(false);
     expect(store.forUser("1749")).toHaveLength(0);
@@ -77,7 +81,12 @@ describe("schedule_create", () => {
     const store = new ScheduleStore();
     const tool = createScheduleCreateToolFactory(api, store)(ctx)!;
     const res = parse(
-      await tool.execute("c3", { title: "x", kind: "interval", everyMinutes: 5, action: "crawl_refresh" }),
+      await tool.execute("c3", {
+        title: "x",
+        kind: "interval",
+        everyMinutes: 5,
+        action: "crawl_refresh",
+      }),
     );
     expect(res.success).toBe(false);
   });
@@ -136,7 +145,13 @@ describe("schedule_create", () => {
     const store = new ScheduleStore();
     const tool = createScheduleCreateToolFactory(api, store)(ctx)!;
     const res = parse(
-      await tool.execute("c7", { title: "x", kind: "daily", time: "08:00", action: "agent_prompt", params: {} }),
+      await tool.execute("c7", {
+        title: "x",
+        kind: "daily",
+        time: "08:00",
+        action: "agent_prompt",
+        params: {},
+      }),
     );
     expect(res.success).toBe(false);
     expect(store.forUser("1749")).toHaveLength(0);
@@ -146,7 +161,13 @@ describe("schedule_create", () => {
     const store = new ScheduleStore();
     const tool = createScheduleCreateToolFactory(api, store)(ctx)!;
     const res = parse(
-      await tool.execute("c8", { title: "x", kind: "daily", time: "08:00", action: "nope", params: {} }),
+      await tool.execute("c8", {
+        title: "x",
+        kind: "daily",
+        time: "08:00",
+        action: "nope",
+        params: {},
+      }),
     );
     expect(res.success).toBe(false);
   });
@@ -172,7 +193,11 @@ describe("schedule_list / delete / toggle", () => {
     const list = createScheduleListToolFactory(api, store)(ctx)!;
     const listed = parse(await list.execute());
     expect(listed.total).toBe(1);
-    expect((listed.list as Array<Record<string, unknown>>)[0]).toMatchObject({ index: 1, title: "任务一", enabled: true });
+    expect((listed.list as Array<Record<string, unknown>>)[0]).toMatchObject({
+      index: 1,
+      title: "任务一",
+      enabled: true,
+    });
 
     const toggle = createScheduleToggleToolFactory(api, store)(ctx)!;
     expect(parse(await toggle.execute("t", { index: 1, enabled: false })).enabled).toBe(false);
