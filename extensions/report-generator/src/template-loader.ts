@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
 import type { PluginLogger } from "../api.js";
+import { createHistoryPool, execWithRetry } from "./db-pool.js";
 import type { HistoryDbConfig, ReportPeriod } from "./types.js";
 
 interface TemplateRow {
@@ -109,17 +110,7 @@ export class TemplateLoader {
 
   private async getPool(): Promise<mysql.Pool> {
     if (!this.pool) {
-      this.pool = mysql.createPool({
-        host: this.config.host,
-        port: this.config.port,
-        user: this.config.user,
-        password: this.config.password,
-        database: this.config.database,
-        connectionLimit: 2,
-        waitForConnections: true,
-        charset: "utf8mb4",
-        timezone: "+08:00",
-      });
+      this.pool = createHistoryPool(this.config, 2);
     }
     return this.pool;
   }
@@ -141,7 +132,8 @@ export class TemplateLoader {
   ): Promise<string> {
     try {
       const pool = await this.getPool();
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      const [rows] = await execWithRetry<mysql.RowDataPacket[]>(
+        pool,
         `SELECT id, user_id, topic_id, name, content
          FROM report_template
          WHERE period = ?
@@ -155,6 +147,7 @@ export class TemplateLoader {
            updated_at DESC
          LIMIT 1`,
         [period, userId, topicId ?? null],
+        { logger, label: "loadTemplate" },
       );
 
       const row = rows[0] as TemplateRow | undefined;
@@ -196,7 +189,8 @@ export class TemplateLoader {
   ): Promise<string> {
     try {
       const pool = await this.getPool();
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      const [rows] = await execWithRetry<mysql.RowDataPacket[]>(
+        pool,
         `SELECT id, user_id, topic_id, name, content
          FROM report_template
          WHERE id = ?
@@ -204,6 +198,7 @@ export class TemplateLoader {
            AND (user_id = ? OR user_id IS NULL)
          LIMIT 1`,
         [templateId, userId],
+        { logger, label: "loadTemplateById" },
       );
 
       const row = rows[0] as TemplateRow | undefined;

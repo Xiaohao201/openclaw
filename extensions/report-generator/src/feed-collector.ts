@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
 import type { PluginLogger } from "../api.js";
+import { createHistoryPool, execWithRetry } from "./db-pool.js";
 import {
   AGGREGATION_DIMENSIONS,
   DATA_JOIN_DIMENSIONS,
@@ -30,17 +31,7 @@ export class FeedCollector {
 
   private async getPool(): Promise<mysql.Pool> {
     if (!this.pool) {
-      this.pool = mysql.createPool({
-        host: this.config.host,
-        port: this.config.port,
-        user: this.config.user,
-        password: this.config.password,
-        database: this.config.database,
-        connectionLimit: 3,
-        waitForConnections: true,
-        charset: "utf8mb4",
-        timezone: "+08:00",
-      });
+      this.pool = createHistoryPool(this.config, 3);
     }
     return this.pool;
   }
@@ -68,9 +59,11 @@ export class FeedCollector {
     const params = [matchValue, startDate, endDate];
     const startTime = Date.now();
 
-    const [totalRows] = await pool.execute<mysql.RowDataPacket[]>(
+    const [totalRows] = await execWithRetry<mysql.RowDataPacket[]>(
+      pool,
       `SELECT COUNT(*) AS cnt FROM feed_monitor_item f ${where}`,
       params,
+      { logger, label: "collectStats.total" },
     );
     const total = Number(totalRows?.[0]?.cnt) || 0;
 
@@ -86,9 +79,11 @@ export class FeedCollector {
         ? "JOIN feed_monitor_item_data d ON f.id = d.id"
         : "";
       const order = dimension === "day" ? "k ASC" : "cnt DESC";
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      const [rows] = await execWithRetry<mysql.RowDataPacket[]>(
+        pool,
         `SELECT ${expr} AS k, COUNT(*) AS cnt FROM feed_monitor_item f ${join} ${where} GROUP BY k ORDER BY ${order} LIMIT 100`,
         params,
+        { logger, label: `collectStats.agg.${dimension}` },
       );
       aggregations.push({
         dimension,
@@ -102,7 +97,8 @@ export class FeedCollector {
     const metricExpr = TOPN_METRICS[plan.topN.by] ?? TOPN_METRICS.fansNumber;
     // limit values are clamped integers from normalizeQueryPlan — safe to inline
     // (mysql2 prepared statements reject LIMIT placeholders on some servers).
-    const [topRows] = await pool.execute<mysql.RowDataPacket[]>(
+    const [topRows] = await execWithRetry<mysql.RowDataPacket[]>(
+      pool,
       `SELECT f.id, f.topicId, f.slaveTopicId, f.platform, f.emotion, f.level,
               f.link, f.date, f.fansNumber, f.comments, f.contentType,
               f.mediaLevel, f.city, ${metricExpr} AS metricValue,
@@ -113,10 +109,11 @@ export class FeedCollector {
        ORDER BY metricValue DESC
        LIMIT ${plan.topN.limit}`,
       params,
+      { logger, label: "collectStats.topN" },
     );
 
     const details = plan.needDetails
-      ? await this.collectDetailRows(pool, where, params, plan.detailLimit)
+      ? await this.collectDetailRows(pool, where, params, plan.detailLimit, logger)
       : [];
 
     logger.info(
@@ -138,8 +135,10 @@ export class FeedCollector {
     where: string,
     params: (number | string)[],
     limit: number,
+    logger: PluginLogger,
   ): Promise<FeedRecord[]> {
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+    const [rows] = await execWithRetry<mysql.RowDataPacket[]>(
+      pool,
       `SELECT f.id, f.topicId, f.slaveTopicId, f.platform, f.emotion, f.level,
               f.link, f.date, f.fansNumber, f.comments, f.contentType,
               f.mediaLevel, f.city,
@@ -150,6 +149,7 @@ export class FeedCollector {
        ORDER BY f.date DESC
        LIMIT ${limit}`,
       params,
+      { logger, label: "collectStats.details" },
     );
     return rows as unknown as FeedRecord[];
   }

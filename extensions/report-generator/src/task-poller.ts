@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
 import type { PluginLogger } from "../api.js";
+import { createHistoryPool, execWithRetry } from "./db-pool.js";
 import type { HistoryDbConfig, ReportTask } from "./types.js";
 
 export class TaskPoller {
@@ -8,6 +9,7 @@ export class TaskPoller {
   private pool: mysql.Pool | null = null;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
+  private logger: PluginLogger | null = null;
 
   constructor(historyDbConfig: HistoryDbConfig, pollIntervalMs = 30000) {
     this.config = historyDbConfig;
@@ -16,19 +18,13 @@ export class TaskPoller {
 
   private async getPool(): Promise<mysql.Pool> {
     if (!this.pool) {
-      this.pool = mysql.createPool({
-        host: this.config.host,
-        port: this.config.port,
-        user: this.config.user,
-        password: this.config.password,
-        database: this.config.database,
-        connectionLimit: 3,
-        waitForConnections: true,
-        charset: "utf8mb4",
-        timezone: "+08:00",
-      });
+      this.pool = createHistoryPool(this.config, 3);
     }
     return this.pool;
+  }
+
+  private retryOpts(label: string): { logger?: PluginLogger; label: string } {
+    return { logger: this.logger ?? undefined, label };
   }
 
   /**
@@ -62,7 +58,12 @@ export class TaskPoller {
       ORDER BY d.id ASC
       LIMIT ${safeLimit}
     `;
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(sql);
+    const [rows] = await execWithRetry<mysql.RowDataPacket[]>(
+      pool,
+      sql,
+      undefined,
+      this.retryOpts("fetchPendingTasks"),
+    );
     return rows.map((row) => ({
       ...(row as ReportTask),
       userEmail: row.userEmail ?? undefined,
@@ -81,7 +82,12 @@ export class TaskPoller {
         AND d.period IN ('Daily', 'Weekly', 'Monthly')
       LIMIT 1
     `;
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(sql, [id]);
+    const [rows] = await execWithRetry<mysql.RowDataPacket[]>(
+      pool,
+      sql,
+      [id],
+      this.retryOpts("fetchTaskById"),
+    );
     if (rows.length === 0) {
       return null;
     }
@@ -106,11 +112,14 @@ export class TaskPoller {
     const safeMinutes = Math.max(1, Math.min(1440, Math.floor(staleMinutes)));
     // Same period guard as fetchPendingTasks: never re-pend legacy-service
     // rows (period IS NULL) that another consumer may be processing.
-    const [result] = await pool.execute<mysql.ResultSetHeader>(
+    const [result] = await execWithRetry<mysql.ResultSetHeader>(
+      pool,
       `UPDATE download SET status = 'Pending', updateDate = NOW()
        WHERE category = 'Report' AND status = 'Running'
          AND period IN ('Daily', 'Weekly', 'Monthly')
          AND updateDate < NOW() - INTERVAL ${safeMinutes} MINUTE`,
+      undefined,
+      this.retryOpts("requeueStaleRunning"),
     );
     return result.affectedRows;
   }
@@ -121,6 +130,10 @@ export class TaskPoller {
    */
   async claimTask(id: number): Promise<boolean> {
     const pool = await this.getPool();
+    // Not retried: a retry after a dropped-but-committed claim would see the
+    // row already Running and report "not claimed", silently orphaning the task.
+    // A transient failure here just throws — the next poll re-claims it (still
+    // Pending), and requeueStaleRunning rescues any committed-then-lost claim.
     const [result] = await pool.execute<mysql.ResultSetHeader>(
       "UPDATE download SET status = 'Running', updateDate = NOW() WHERE id = ? AND status = 'Pending'",
       [id],
@@ -130,10 +143,12 @@ export class TaskPoller {
 
   async updateTaskStatus(id: number, status: ReportTask["status"]): Promise<void> {
     const pool = await this.getPool();
-    await pool.execute("UPDATE download SET status = ?, updateDate = NOW() WHERE id = ?", [
-      status,
-      id,
-    ]);
+    await execWithRetry(
+      pool,
+      "UPDATE download SET status = ?, updateDate = NOW() WHERE id = ?",
+      [status, id],
+      this.retryOpts("updateTaskStatus"),
+    );
   }
 
   async updateTaskResult(
@@ -143,9 +158,13 @@ export class TaskPoller {
     status: ReportTask["status"] = "Done",
   ): Promise<void> {
     const pool = await this.getPool();
-    await pool.execute(
+    // Idempotent (sets the same row to the same values) → safe to retry, which
+    // matters most here: losing this write to a blip discards a generated report.
+    await execWithRetry(
+      pool,
       "UPDATE download SET status = ?, title = ?, content = ?, updateDate = NOW() WHERE id = ?",
       [status, title, content, id],
+      this.retryOpts("updateTaskResult"),
     );
   }
 
@@ -157,6 +176,7 @@ export class TaskPoller {
       return;
     }
     this.isRunning = true;
+    this.logger = logger;
 
     const poll = async () => {
       try {
