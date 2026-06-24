@@ -17,6 +17,19 @@ describe("resolveToolLabel", () => {
     expect(resolveToolLabel("some_plugin_tool")).toBe("正在执行处理步骤");
     expect(resolveToolLabel("")).toBe("正在执行处理步骤");
   });
+
+  it("maps the expanded plugin tools instead of the generic fallback", () => {
+    expect(resolveToolLabel("feed_list")).toBe("正在浏览舆情列表");
+    expect(resolveToolLabel("schedule_create")).toBe("正在创建定时任务");
+    expect(resolveToolLabel("letter_generate")).toBe("正在生成维权文书");
+    expect(resolveToolLabel("link_batch_create")).toBe("正在发起失效链接检测");
+  });
+
+  it("gives write and edit distinct labels (no shared 整理内容)", () => {
+    expect(resolveToolLabel("write")).toBe("正在撰写内容");
+    expect(resolveToolLabel("edit")).toBe("正在修改内容");
+    expect(resolveToolLabel("apply_patch")).toBe("正在修改内容");
+  });
 });
 
 describe("resolveToolCategory", () => {
@@ -31,6 +44,13 @@ describe("resolveToolCategory", () => {
   it("falls back to the default category for unknown tools", () => {
     expect(resolveToolCategory("some_plugin_tool")).toBe("default");
     expect(resolveToolCategory("")).toBe("default");
+  });
+
+  it("maps expanded tools onto sanitized categories", () => {
+    expect(resolveToolCategory("schedule_create")).toBe("schedule");
+    expect(resolveToolCategory("link_batch_create")).toBe("check");
+    expect(resolveToolCategory("opinion_report_export")).toBe("report");
+    expect(resolveToolCategory("x_search")).toBe("search");
   });
 });
 

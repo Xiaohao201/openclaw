@@ -24,6 +24,7 @@ export type StepCategory =
   | "report"
   | "think"
   | "answer"
+  | "schedule"
   | "default";
 
 /** A structured timeline step emitted for the frontend "工作过程" panel. */
@@ -49,9 +50,9 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // File reading
   read: "正在查阅资料",
   // Content editing / file output
-  write: "正在整理内容",
-  edit: "正在整理内容",
-  apply_patch: "正在整理内容",
+  write: "正在撰写内容",
+  edit: "正在修改内容",
+  apply_patch: "正在修改内容",
   file_share: "正在生成可下载文件",
   // Web search / fetch
   web_search: "正在检索网络信息",
@@ -74,6 +75,41 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // 报告生成
   report: "正在生成报告",
   report_create: "正在生成报告",
+  report_status: "正在确认报告进度",
+  report_stop: "正在停止报告生成",
+  sheet_report_create: "正在生成表格报告",
+  opinion_report_export: "正在导出舆情报告",
+  opinion_content_create: "正在生成回应内容",
+  // 舆情监测 / 分析
+  feed_list: "正在浏览舆情列表",
+  feed_reanalyze: "正在重新分析舆情",
+  topic_list: "正在查看监测主题",
+  monthly_stats: "正在统计舆情数据",
+  opinion_analyze: "正在分析舆情",
+  opinion_download_status: "正在确认下载进度",
+  opinion_download_list: "正在获取下载列表",
+  // 维权文书 / 任务
+  letter_generate: "正在生成维权文书",
+  letter_fetch: "正在查询维权文书",
+  job_list: "正在查看任务进度",
+  job_stop: "正在停止任务",
+  // 失效链接 / 互动量刷新
+  link_batch_create: "正在发起失效链接检测",
+  link_batch_status: "正在确认链接检测结果",
+  crawl_refresh_create: "正在刷新互动数据",
+  crawl_refresh_status: "正在确认刷新进度",
+  crawl_refresh_list: "正在获取刷新列表",
+  // 定时任务
+  schedule_create: "正在创建定时任务",
+  schedule_list: "正在查看定时任务",
+  schedule_delete: "正在删除定时任务",
+  schedule_toggle: "正在调整定时任务",
+  // 知识库
+  wiki_status: "正在查阅知识库",
+  wiki_lint: "正在校验知识库",
+  wiki_apply: "正在更新知识库",
+  // X 平台检索
+  x_search: "正在检索 X 平台",
 };
 
 /** Tool name → sanitized category (icon hint only; never echoes content). */
@@ -103,6 +139,35 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   legal_check_status: "check",
   report: "report",
   report_create: "report",
+  report_status: "report",
+  report_stop: "report",
+  sheet_report_create: "report",
+  opinion_report_export: "report",
+  opinion_content_create: "report",
+  feed_list: "query",
+  feed_reanalyze: "query",
+  topic_list: "query",
+  monthly_stats: "query",
+  opinion_analyze: "query",
+  opinion_download_status: "report",
+  opinion_download_list: "report",
+  letter_generate: "report",
+  letter_fetch: "report",
+  job_list: "default",
+  job_stop: "default",
+  link_batch_create: "check",
+  link_batch_status: "check",
+  crawl_refresh_create: "query",
+  crawl_refresh_status: "query",
+  crawl_refresh_list: "query",
+  schedule_create: "schedule",
+  schedule_list: "schedule",
+  schedule_delete: "schedule",
+  schedule_toggle: "schedule",
+  wiki_status: "memory",
+  wiki_lint: "memory",
+  wiki_apply: "memory",
+  x_search: "search",
 };
 
 const DEFAULT_LABEL = "正在执行处理步骤";
