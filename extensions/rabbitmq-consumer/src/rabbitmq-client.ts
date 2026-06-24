@@ -106,6 +106,16 @@ export class RabbitMqClient {
       password: this.config.password,
       heartbeat: 60,
     });
+    // A connection-level 'error' is mandatory: amqplib's EventEmitter rethrows
+    // an unheard 'error' as an uncaught exception, crashing the whole process
+    // when RabbitMQ drops the link ("Unexpected close"). Absorb it here — the
+    // channel 'close' below drives reconnection.
+    this.connection.on("error", (err: Error) => {
+      this.logger.error(`[RABBITMQ] Connection error: ${err.message}`);
+    });
+    this.connection.on("close", () => {
+      this.logger.info("[RABBITMQ] Connection closed");
+    });
 
     this.channel = await this.connection.createChannel();
     await this.channel.assertQueue(this.config.queue, { durable: true });
