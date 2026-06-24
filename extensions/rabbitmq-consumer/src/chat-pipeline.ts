@@ -503,7 +503,9 @@ export async function processChatMessage(
     // thinking/assistant events never duplicate or revive a phase.
     const phaseState = new Map<string, { ended: boolean; startedAt: number }>();
     const startPhase = (stepId: string, index: number, label: string, category: StepCategory) => {
-      if (phaseState.has(stepId)) return;
+      if (phaseState.has(stepId)) {
+        return;
+      }
       phaseState.set(stepId, { ended: false, startedAt: Date.now() });
       void mercure.pushStep(
         mercureTopic,
@@ -513,7 +515,9 @@ export async function processChatMessage(
     };
     const endPhase = (stepId: string, label: string, category: StepCategory, detail?: string) => {
       const entry = phaseState.get(stepId);
-      if (!entry || entry.ended) return;
+      if (!entry || entry.ended) {
+        return;
+      }
       entry.ended = true;
       void mercure.pushStep(
         mercureTopic,
@@ -550,9 +554,13 @@ export async function processChatMessage(
     const REASONING_SUMMARY_MAX = 80;
     let reasoningText = "";
     const buildReasoningSummary = (): string | undefined => {
-      if (!REASONING_SUMMARY_ENABLED || !reasoningText) return undefined;
+      if (!REASONING_SUMMARY_ENABLED || !reasoningText) {
+        return undefined;
+      }
       const safe = sanitizeInternalRefs(reasoningText).replace(/\s+/g, " ").trim();
-      if (!safe) return undefined;
+      if (!safe) {
+        return undefined;
+      }
       return safe.length > REASONING_SUMMARY_MAX
         ? `${safe.slice(0, REASONING_SUMMARY_MAX)}…`
         : safe;

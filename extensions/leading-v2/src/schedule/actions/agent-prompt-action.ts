@@ -8,7 +8,7 @@ const RUN_TIMEOUT_MS = 300_000; // 5 min, matches the chat pipeline's subagent w
 /** Last assistant turn's text — content is a string in simple sessions, an array of
  * content blocks in tool-using ones; extract text so delivery always gets a string. */
 function lastAssistantText(messages: unknown[]): string {
-  for (const msg of [...messages].reverse()) {
+  for (const msg of messages.toReversed()) {
     const m = msg as { role?: string; content?: unknown };
     if (m.role !== "assistant") {
       continue;

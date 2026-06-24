@@ -57,7 +57,7 @@ describe("schedule_create", () => {
       action: { tool: "crawl_refresh_create" },
       sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_1",
     });
-    expect((tasks[0].action.params as Record<string, unknown>).links).toEqual([
+    expect(tasks[0].action.params.links).toEqual([
       "https://a.com/1",
       "https://a.com/2",
     ]);
@@ -129,7 +129,7 @@ describe("schedule_create", () => {
     expect(res).toMatchObject({ success: true, created: true, title: "每天道早安" });
     const task = store.forUser("1749")[0];
     expect(task.action.tool).toBe("agent_prompt");
-    expect((task.action.params as Record<string, unknown>).instruction).toBe("跟用户道早安并提醒今天的待办");
+    expect(task.action.params.instruction).toBe("跟用户道早安并提醒今天的待办");
   });
 
   it("rejects agent_prompt without an instruction", async () => {

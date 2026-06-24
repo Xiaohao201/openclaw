@@ -50,8 +50,11 @@ function parseJson<T>(raw: unknown, fallback: T): T {
   if (typeof raw === "object") {
     return raw as T; // mysql2 may already decode JSON columns
   }
+  if (typeof raw !== "string") {
+    return fallback;
+  }
   try {
-    return JSON.parse(String(raw)) as T;
+    return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
@@ -68,10 +71,10 @@ function rowToTask(row: ScheduleRow): ScheduledTask {
     sessionKey: row.session_key,
     mercureTopic: row.mercure_topic,
     delivery: parseJson(row.delivery, {}),
-    enabled: Number(row.enabled) === 1,
+    enabled: row.enabled === 1,
     nextRunAt: Number(row.next_run_at),
     lastRunAt: row.last_run_at == null ? undefined : Number(row.last_run_at),
-    failCount: Number(row.fail_count),
+    failCount: row.fail_count,
     createdAt: Number(row.created_at),
   };
 }

@@ -200,7 +200,7 @@ export function createScheduleListToolFactory(api: OpenClawPluginApi, store: Sch
         "Use the row number with schedule_delete / schedule_toggle.",
       parameters: EmptySchema,
       async execute() {
-        const rows = store.forUser(userId).sort((a, b) => a.createdAt - b.createdAt);
+        const rows = store.forUser(userId).toSorted((a, b) => a.createdAt - b.createdAt);
         const list = rows.map((t, i) => ({
           index: i + 1,
           title: t.title,
@@ -217,7 +217,7 @@ export function createScheduleListToolFactory(api: OpenClawPluginApi, store: Sch
 
 /** Resolve a 1-based list index (createdAt order) to a task for this user. */
 function taskByIndex(store: ScheduleStore, userId: string, index: number): ScheduledTask | undefined {
-  const rows = store.forUser(userId).sort((a, b) => a.createdAt - b.createdAt);
+  const rows = store.forUser(userId).toSorted((a, b) => a.createdAt - b.createdAt);
   return rows[index - 1];
 }
 
