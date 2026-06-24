@@ -6,8 +6,11 @@ import type { HistoryDbConfig } from "./types.js";
  * an up-front data-volume hint (and catch the empty case) before a report task
  * is queued for asynchronous generation by the report-generator service.
  *
- * Reads the same tables and applies the same filter as the report generator's
- * FeedCollector, so the count reflects what the report will actually use.
+ * Applies the same filter as the report generator's FeedCollector total
+ * (`feed_monitor_item` only, no join), so the count reflects what the report
+ * will actually use. The previous JOIN to `feed_monitor_item_data` was pure
+ * overhead — every filter column lives on `feed_monitor_item` — and could even
+ * disagree with the report's own total when a row lacked its data sibling.
  */
 export class FeedCounter {
   private readonly config: HistoryDbConfig;
@@ -51,7 +54,6 @@ export class FeedCounter {
     const sql = `
       SELECT COUNT(*) AS cnt
       FROM feed_monitor_item f
-      JOIN feed_monitor_item_data d ON f.id = d.id
       WHERE ${topicField} = ?
         AND f.date >= ?
         AND f.date < ?

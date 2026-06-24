@@ -134,7 +134,15 @@ async function resolveReportTopic(args: {
 }
 
 /**
- * Pre-count feed data, then queue a report task and reply (or report "no data").
+ * Queue a report task and acknowledge it instantly. The report itself is
+ * generated asynchronously by the report-generator service.
+ *
+ * The ack is never blocked on a feed COUNT: a high-volume topic (广汽本田 etc.)
+ * makes that COUNT slow, and running it BEFORE the ack used to blow the
+ * frontend's response deadline ("处理超时：未收到响应（可能后端记录未持久化）").
+ * The empty-data case is now handled authoritatively by the report-generator
+ * (it short-circuits to a "暂无数据" report when its full-set total is 0); the
+ * COUNT here is a best-effort volume hint pushed off the critical path.
  * Always emits a Mercure `done` so the frontend unlocks.
  */
 async function createReportTaskAndRespond(args: {
@@ -174,35 +182,6 @@ async function createReportTaskAndRespond(args: {
     logger,
   } = args;
 
-  // Pre-check feed data volume. A failed/skipped count leaves feedCount at -1,
-  // preserving the plain "generating..." response.
-  let feedCount = -1;
-  if (feedCounter && topicId > 0) {
-    try {
-      feedCount = await feedCounter.countFeedData(
-        topicId,
-        dateScope.start,
-        dateScope.end,
-        useSlaveTopic,
-      );
-      logger.info(
-        `[CHAT_PIPELINE] Feed pre-count=${feedCount} for topicId=${topicId} ` +
-          `(${dateScope.start} ~ ${dateScope.end})`,
-      );
-    } catch (err) {
-      logger.warn(`[CHAT_PIPELINE] Feed pre-count failed, continuing without hint: ${String(err)}`);
-    }
-  }
-
-  if (feedCount === 0) {
-    const emptyResponse = `该时段（${dateScope.start} ~ ${dateScope.end}）暂无舆情数据，无法生成${period}。`;
-    await mercure.pushText(mercureTopic, emptyResponse, chatMsg.historyId);
-    await mercure.pushDone(mercureTopic, chatMsg.historyId);
-    await historyManager.updateResponse(chatMsg.historyId, emptyResponse);
-    logger.info(`[CHAT_PIPELINE] No feed data for user ${chatMsg.userId}, skipping report task`);
-    return emptyResponse;
-  }
-
   const uid = parseInt(chatMsg.userId, 10) || 0;
   const taskId = await downloadManager.createReportTask({
     uid,
@@ -221,9 +200,8 @@ async function createReportTaskAndRespond(args: {
   });
   logger.info(`[CHAT_PIPELINE] Created report task #${taskId} for user ${uid}`);
 
-  // The report itself is generated asynchronously by the report-generator service.
-  const countHint = feedCount > 0 ? `已检索到 ${feedCount} 条数据，` : "";
-  const reportResponse = `${countHint}${period}报告已创建，正在生成中...`;
+  // Acknowledge the moment the task row exists — no DB count blocks this path.
+  const reportResponse = `${period}报告已创建，正在生成中...`;
   await mercure.pushText(mercureTopic, reportResponse, chatMsg.historyId);
   // Let the frontend open a report card for this taskId right away; progress
   // (`report_text`) and the final `report` event will target the same card.
@@ -241,6 +219,32 @@ async function createReportTaskAndRespond(args: {
     if (published) {
       logger.info(`[CHAT_PIPELINE] Notified report-generator for task #${taskId}`);
     }
+  }
+
+  // Best-effort data-volume hint, fully decoupled from the ack above: a COUNT
+  // over a large topic can be slow, so it runs fire-and-forget and only emits a
+  // transient `progress` line once it resolves. Failures and the empty case are
+  // swallowed here — the report-generator owns the authoritative empty-data
+  // message, so a slow or zero count never delays or blocks the user.
+  if (feedCounter && topicId > 0) {
+    void feedCounter
+      .countFeedData(topicId, dateScope.start, dateScope.end, useSlaveTopic)
+      .then((feedCount) => {
+        logger.info(
+          `[CHAT_PIPELINE] Feed count=${feedCount} for topicId=${topicId} ` +
+            `(${dateScope.start} ~ ${dateScope.end})`,
+        );
+        if (feedCount > 0) {
+          void mercure.pushProgress(
+            mercureTopic,
+            `已检索到 ${feedCount} 条数据，正在生成${period}…`,
+            chatMsg.historyId,
+          );
+        }
+      })
+      .catch((err) => {
+        logger.warn(`[CHAT_PIPELINE] Feed count failed (non-fatal): ${String(err)}`);
+      });
   }
 
   return reportResponse;
@@ -549,7 +553,9 @@ export async function processChatMessage(
       if (!REASONING_SUMMARY_ENABLED || !reasoningText) return undefined;
       const safe = sanitizeInternalRefs(reasoningText).replace(/\s+/g, " ").trim();
       if (!safe) return undefined;
-      return safe.length > REASONING_SUMMARY_MAX ? `${safe.slice(0, REASONING_SUMMARY_MAX)}…` : safe;
+      return safe.length > REASONING_SUMMARY_MAX
+        ? `${safe.slice(0, REASONING_SUMMARY_MAX)}…`
+        : safe;
     };
     const endThinkStep = () =>
       endPhase(THINK_STEP_ID, THINK_STEP_LABEL, "think", buildReasoningSummary());

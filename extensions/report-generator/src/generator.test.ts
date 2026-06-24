@@ -17,6 +17,15 @@ const emptyStats: CollectedStats = {
   details: [],
 };
 
+// Default for the report-writing tests: a non-zero total so generation reaches
+// the LLM writing run instead of the empty-data short-circuit.
+const nonEmptyStats: CollectedStats = {
+  total: 42,
+  aggregations: [],
+  topN: { metric: "", records: [] },
+  details: [],
+};
+
 /**
  * Runtime whose report session returns `reportMessages`; the planning session
  * (sessionKey contains "report-plan") returns a non-plan so generation uses
@@ -40,7 +49,7 @@ const baseOptions = {
   period: "Weekly" as const,
   requirement: "本周舆情",
   dateScope: "2026-06-01 00:00:00 ~ 2026-06-08 00:00:00",
-  collectStats: async () => emptyStats,
+  collectStats: async () => nonEmptyStats,
   template: "# 周报模板\n{summary}",
   userId: "42",
   topicId: 585,
@@ -86,6 +95,39 @@ describe("ReportGenerator.generate report extraction", () => {
     const result = await new ReportGenerator(runtime).generate(baseOptions, logger);
 
     expect(result.content).toBe(longReport);
+  });
+});
+
+describe("ReportGenerator.generate empty-data short-circuit", () => {
+  it("returns a fixed no-data report without running the writing LLM", async () => {
+    // Regression: a high-volume topic's pre-count was moved off the chat ack
+    // path, so the empty case must be caught here against the real full-set
+    // total. With total === 0 the generator must NOT call the report-writing
+    // run — it returns a clear "暂无数据" report for the frontend's card.
+    let reportRunStarted = false;
+    const runtime = {
+      events: { onAgentEvent: () => () => {} },
+      subagent: {
+        run: async ({ sessionKey }: { sessionKey: string }) => {
+          if (!sessionKey.includes("report-plan")) {
+            reportRunStarted = true;
+          }
+          return { runId: "r1" };
+        },
+        waitForRun: async () => ({ status: "ok" as const }),
+        getSessionMessages: async () => ({ messages: [{ role: "assistant", content: "{}" }] }),
+      },
+    } as unknown as PluginRuntime;
+
+    const result = await new ReportGenerator(runtime).generate(
+      { ...baseOptions, period: "Monthly", collectStats: async () => emptyStats },
+      logger,
+    );
+
+    expect(reportRunStarted).toBe(false);
+    expect(result.title).toBe("月报舆情报告");
+    expect(result.content).toContain("暂无舆情数据");
+    expect(result.content).toContain(baseOptions.dateScope);
   });
 });
 

@@ -73,6 +73,16 @@ const PURE_PLANNING_SYSTEM_PROMPT =
 const MIN_SALVAGE_LENGTH = 200;
 
 /**
+ * Map the DB period code (download.period) to its Chinese label for
+ * user-facing text. Falls back to the raw value for unknown codes.
+ */
+const PERIOD_LABELS: Record<string, string> = {
+  Daily: "日报",
+  Weekly: "周报",
+  Monthly: "月报",
+};
+
+/**
  * Salvage a report from streamed deltas after a run timeout: the body often
  * finishes streaming long before the run ends (the agent may linger on
  * follow-up chores). Returns the text from the first markdown heading onward
@@ -190,6 +200,22 @@ export class ReportGenerator {
     const endStatsStep = beginStep("正在统计舆情数据", "query");
     const stats = await collectStats(plan);
     endStatsStep("completed");
+
+    // Empty-data short-circuit. When the topic has no rows for the period there
+    // is nothing to write: skip the LLM writing run entirely and return a fixed
+    // "no data" report so the frontend's report card shows a clear message
+    // instead of a hallucinated or failed one. This is the AUTHORITATIVE empty
+    // check — the chat-side pre-count was moved off the ack path and is now only
+    // a best-effort hint, so the empty case must be caught here against the real
+    // full-set total.
+    if (stats.total === 0) {
+      const periodLabel = PERIOD_LABELS[period] ?? period;
+      const title = `${periodLabel}舆情报告`;
+      const content = `# ${title}\n\n该时段（${dateScope}）暂无舆情数据，无法生成${periodLabel}。`;
+      logger.info(`[REPORT_GENERATOR] No feed data for ${dateScope}; returning empty-data report`);
+      return { title, content, summary: `该时段暂无舆情数据，无法生成${periodLabel}。` };
+    }
+
     const dataDigest = buildStatsDigest(stats);
     const totalCount = stats.total;
 

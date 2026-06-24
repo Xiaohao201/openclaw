@@ -269,9 +269,7 @@ describe("processChatMessage", () => {
     // followed by the sanitized tool-activity line. Assert the tool line is
     // present and correctly tagged rather than pinning the exact count.
     const progressEvents = payloads.filter((p) => p.type === "progress");
-    const toolProgress = progressEvents.find(
-      (p) => p.content === "正在查询分析数据（第 1 步）…",
-    );
+    const toolProgress = progressEvents.find((p) => p.content === "正在查询分析数据（第 1 步）…");
     expect(toolProgress).toBeDefined();
     expect(toolProgress?.historyId).toBe(1);
     for (const evt of payloads) {
@@ -884,6 +882,55 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain("memory_search");
     // The directive prefixes — it never replaces — the user payload.
     expect(capturedMessage).toContain(`[userId:${USER_ID}] hi there`);
+  });
+
+  it("acknowledges a keyword report instantly without blocking on the feed count", async () => {
+    // Regression: the ack used to run a COUNT before replying, and returned an
+    // early "暂无数据" when it was 0. A slow COUNT on a high-volume topic blew
+    // the frontend's response deadline. The task must now be created and acked
+    // regardless of the count; the empty case is handled by the report-generator.
+    const createReportTask = vi.fn(async (_args: Record<string, unknown>) => 321);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    // A count that resolves to 0 (and even slowly) must NOT short-circuit the ack.
+    const countFeedData = vi.fn(async () => 0);
+    const feedCounter = { countFeedData } as unknown as never;
+
+    let ranSubagent = false;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {
+        ranSubagent = true;
+      },
+    });
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({
+        topicId: 89,
+        useSlaveTopic: false,
+        masterId: 89,
+        topicName: "广汽本田",
+        topics: [{ topicId: 89, useSlaveTopic: false, masterId: 89, topicName: "广汽本田" }],
+      }),
+    } as unknown as TopicResolver;
+
+    const chatMsg: ChatMessage = { ...createChatMessage(), message: "给我生成一份广汽本田的月报" };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      topicResolver,
+      feedCounter,
+    );
+
+    expect(createReportTask).toHaveBeenCalledTimes(1);
+    expect(result).toBe("月报报告已创建，正在生成中...");
+    expect(result).not.toContain("暂无");
+    expect(updateResponse).toHaveBeenCalledWith(1, "月报报告已创建，正在生成中...");
+    // The keyword report path never runs the chat subagent.
+    expect(ranSubagent).toBe(false);
   });
 
   it("falls through to normal chat when the templateId does not resolve", async () => {
