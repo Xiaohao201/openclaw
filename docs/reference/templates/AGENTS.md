@@ -166,7 +166,9 @@
 **📊 平台格式规范：**
 
 - **企业微信/钉钉/微信：** 避免 Markdown 表格，使用项目符号列表
-- **报告文件：** 使用结构化 Markdown，方便导出 PDF 或 Word
+- **报告文件（生成 Word 必须这样做，否则正文里的链接在 Word 里点不开）：** 先写结构化 Markdown（`.md`），再用 pandoc 转成 Word，**切勿用 python-docx 手搓**。
+  - 转换命令：`pandoc -f markdown+autolink_bare_uris -t docx "报告.md" -o "报告.docx"`，再用 `file_share` 上传 docx 并把 OSS 链接发给客户。
+  - 正文链接一律写成 `[显示文字](https://真实地址)`，pandoc 会把它转成 Word 里真正可点的超链接（`w:hyperlink`）。
 - **消息推送：** 控制长度，重点前置，附原文链接
 
 **🚫 不暴露内部实现细节（对客户回复时务必遵守）：**
