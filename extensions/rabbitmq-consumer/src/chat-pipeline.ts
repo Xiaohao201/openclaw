@@ -365,6 +365,48 @@ export async function processChatMessage(
   // Declare streamPusherCtx early so it's available in catch block
   const streamPusherCtx: { streamPusher: StreamingMercurePusher | null } = { streamPusher: null };
 
+  // Work-process ("工作过程") timeline accumulated as the turn streams, then
+  // persisted to history_messages.metadata so the lobster history view can
+  // replay the panel. Declared at function scope so EVERY exit path (success,
+  // subagent error/timeout, connection reset, unhandled throw) can finalize and
+  // persist it — see persistTimeline. Carries only sanitized
+  // label/category/status/duration, never tool args (see ActivityStep).
+  type StoredStep = {
+    id: string;
+    index: number;
+    label: string;
+    category: StepCategory;
+    status: "running" | "completed" | "failed";
+    durationMs?: number;
+    detail?: string;
+  };
+  const storedSteps: StoredStep[] = [];
+  let timelinePersisted = false;
+  // Finalize and persist the timeline. Any step still "running" is coerced to a
+  // terminal status first: the live panel relies on the stream's `done` event to
+  // finalize stragglers, but history replay has no `done`, so a leftover running
+  // step (e.g. a tool whose `end` was missed, or all steps on an error turn)
+  // would spin forever. Idempotent (writes at most once) and best-effort (a
+  // metadata write failure must never fail an already-decided turn).
+  const persistTimeline = async (finalStatus: "completed" | "failed"): Promise<void> => {
+    if (timelinePersisted || storedSteps.length === 0) {
+      return;
+    }
+    timelinePersisted = true;
+    for (const s of storedSteps) {
+      if (s.status === "running") {
+        s.status = finalStatus;
+      }
+    }
+    try {
+      await historyManager.updateMetadata(chatMsg.historyId, { steps: storedSteps });
+    } catch (metaErr) {
+      logger.warn(
+        `[CHAT_PIPELINE] Persisting steps metadata failed (non-fatal): ${String(metaErr)}`,
+      );
+    }
+  };
+
   try {
     // Step 1: Fetch history record
     logger.info(
@@ -552,21 +594,10 @@ export async function processChatMessage(
     // which also finalizes any still-running step on `done`, so a missed end is
     // harmless. Each phase starts/ends at most once (idempotent), so repeated
     // thinking/assistant events never duplicate or revive a phase.
-    // Accumulate the sanitized timeline as it streams so it can be persisted to
-    // history_messages.metadata at the end of the turn. Mirrors the frontend's
-    // applyStep merge (start → running step; end → mark completed/failed with
-    // duration) so the saved shape matches what the live panel rendered. Carries
-    // only label/category/status/duration — never tool args (see ActivityStep).
-    type StoredStep = {
-      id: string;
-      index: number;
-      label: string;
-      category: StepCategory;
-      status: "running" | "completed" | "failed";
-      durationMs?: number;
-      detail?: string;
-    };
-    const storedSteps: StoredStep[] = [];
+    // Merge each streamed step into storedSteps (declared at function scope
+    // above). Mirrors the frontend's applyStep merge: a `start` adds a running
+    // step; an `end` marks it completed/failed with duration. The final coercion
+    // of any leftover running step happens in persistTimeline.
     const recordStep = (step: ActivityStep) => {
       const existing = storedSteps.find((s) => s.id === step.stepId);
       if (step.phase === "end") {
@@ -761,7 +792,10 @@ export async function processChatMessage(
         ? "[acknowledge-and-report] 用户选择了报告模板" +
           `《${pendingReport.tpl.name}》（${pendingReport.tpl.period}），` +
           "系统会在你回复后立即开始生成这份报告。请用一两句自然、口语化的话承接用户刚才说的内容，" +
-          "并表明你已了解这份模板、马上为其生成报告。本轮不要调用任何工具，也不要输出报告正文。 "
+          "并表明你已了解这份模板、马上为其生成报告。" +
+          "切勿给出任何具体完成时间或时长（例如“预计X分钟”“几分钟内”），" +
+          "报告耗时不确定，只需说明在后台生成、完成后会第一时间发给用户。" +
+          "本轮不要调用任何工具，也不要输出报告正文。 "
         : "";
 
       const runResult = await runtime.subagent.run({
@@ -783,12 +817,16 @@ export async function processChatMessage(
       if (waitResult.status === "error") {
         logger.error(`[CHAT_PIPELINE] Subagent error: ${waitResult.error}`);
         await streamPusherCtx.streamPusher.pushError(waitResult.error ?? "Unknown error");
+        // Persist the timeline with unfinished steps marked failed, so the
+        // history view shows a clean failed timeline rather than a spinner.
+        await persistTimeline("failed");
         return `Error: ${waitResult.error}`;
       }
 
       if (waitResult.status === "timeout") {
         logger.warn(`[CHAT_PIPELINE] Subagent timed out for runId=${runResult.runId}`);
         await streamPusherCtx.streamPusher.pushError("Processing timed out");
+        await persistTimeline("failed");
         return "Error: Processing timed out";
       }
 
@@ -834,18 +872,10 @@ export async function processChatMessage(
       endThinkStep();
       endPhase(ANSWER_STEP_ID, ANSWER_STEP_LABEL, "answer");
 
-      // Step 7b: Persist the now-finalized work-process timeline so the lobster
-      // history view can replay the "工作过程" panel. Best-effort — a metadata
-      // write failure must never fail an otherwise-successful turn.
-      if (storedSteps.length > 0) {
-        try {
-          await historyManager.updateMetadata(chatMsg.historyId, { steps: storedSteps });
-        } catch (metaErr) {
-          logger.warn(
-            `[CHAT_PIPELINE] Persisting steps metadata failed (non-fatal): ${String(metaErr)}`,
-          );
-        }
-      }
+      // Step 7b: Persist the finalized work-process timeline (any leftover
+      // running step coerced to "completed") so the lobster history view can
+      // replay the "工作过程" panel without a step stuck spinning.
+      await persistTimeline("completed");
 
       // Step 8b: Template path — now that the user has been greeted, enqueue the
       // report. This opens the frontend report card (`report_created`) before the
@@ -914,10 +944,14 @@ export async function processChatMessage(
       } catch {
         // best effort - don't fail the whole handler
       }
+      // Finalize the timeline too, so a reopened history shows a failed (not
+      // spinning) work-process panel.
+      await persistTimeline("failed");
       return `Error: Connection reset by client (possible timeout). Response may be incomplete.`;
     }
 
     logger.error(`[CHAT_PIPELINE] Unhandled error: ${String(error)}, code=${errCode}`);
+    await persistTimeline("failed");
     return `Error: ${String(error)}`;
   }
 }

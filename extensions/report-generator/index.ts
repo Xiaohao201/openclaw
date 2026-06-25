@@ -330,6 +330,14 @@ export default definePluginEntry({
                   : 0;
             if (reportHistoryId > 0) {
               try {
+                // Coerce any leftover running step to "completed" before
+                // persisting: history replay has no live `done` event to
+                // finalize stragglers, so an unfinished step would spin forever.
+                for (const s of reportSteps) {
+                  if (s.status === "running") {
+                    s.status = "completed";
+                  }
+                }
                 await reportHistoryWriter.writeReport(
                   reportHistoryId,
                   { title: report.title, content: report.content, steps: reportSteps },

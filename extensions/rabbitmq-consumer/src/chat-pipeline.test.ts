@@ -36,6 +36,7 @@ function createChatMessage(): ChatMessage {
 
 function createHistoryManagerMock() {
   const updateResponse = vi.fn(async () => {});
+  const updateMetadata = vi.fn(async () => {});
   const historyManager = {
     getRecord: async () => ({
       id: 1,
@@ -48,8 +49,9 @@ function createHistoryManagerMock() {
       createdAt: new Date(),
     }),
     updateResponse,
+    updateMetadata,
   } as unknown as HistoryManager;
-  return { historyManager, updateResponse };
+  return { historyManager, updateResponse, updateMetadata };
 }
 
 function createRuntimeMock(options: {
@@ -276,6 +278,51 @@ describe("processChatMessage", () => {
       expect(JSON.stringify(evt)).not.toContain("SECRET");
       expect(JSON.stringify(evt)).not.toContain("SELECT");
     }
+  });
+
+  it("finalizes a still-running tool step before persisting the history timeline", async () => {
+    // A tool `start` whose matching `end` never arrives leaves the step
+    // "running". The live panel finalizes such stragglers on the stream's
+    // `done`, but history replay has no `done` — so the PERSISTED timeline must
+    // coerce them to a terminal status, or the reopened "工作过程" panel shows a
+    // step spinning forever.
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          sessionKey: SESSION_KEY,
+          data: { phase: "start", name: "exec", toolCallId: "t1" },
+        });
+        // No matching `end` for t1 (tool crashed / event lost / synthetic id).
+        listener?.({
+          runId: "r1",
+          seq: 2,
+          stream: "assistant",
+          ts: 2,
+          sessionKey: SESSION_KEY,
+          data: { delta: "done" },
+        });
+      },
+    });
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    expect(updateMetadata).toHaveBeenCalledTimes(1);
+    const [historyId, metadata] = updateMetadata.mock.calls[0] as unknown as [
+      number,
+      { steps: Array<{ label: string; status: string }> },
+    ];
+    expect(historyId).toBe(1);
+    const steps = metadata.steps;
+    // The unfinished tool step is present in the saved timeline…
+    expect(steps.some((s) => s.label === "正在查询分析数据")).toBe(true);
+    // …and NOTHING is left "running" — every step has a terminal status.
+    expect(steps.every((s) => s.status !== "running")).toBe(true);
   });
 
   it("scopes events by runId when the runtime omits sessionKey (non-webchat run)", async () => {
