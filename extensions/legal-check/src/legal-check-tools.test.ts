@@ -121,6 +121,64 @@ describe("legal_check_create", () => {
   });
 });
 
+describe("legal_check_create proactive notification", () => {
+  const ENQUEUE_SYMBOL = Symbol.for("openclaw.leading-v2.notifyEnqueue");
+  const slot = globalThis as unknown as Record<symbol, ((i: unknown) => boolean) | undefined>;
+
+  afterEach(() => {
+    slot[ENQUEUE_SYMBOL] = undefined;
+  });
+
+  it("registers the job and promises proactive delivery when the hook accepts it", async () => {
+    const enqueue = vi.fn((_input: unknown) => true);
+    slot[ENQUEUE_SYMBOL] = enqueue as (i: unknown) => boolean;
+    mockPostForm.mockResolvedValue({ job: { id: 8100, label: "某文章", status: "Pending" } });
+
+    const tool = createFactory({ agentId: "rabbitmq-1749", sessionId: "session_9" })!;
+    const res = parse(await tool.execute("p1", { content: "https://a.com/x" }));
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0][0]).toMatchObject({
+      kind: "legal_check",
+      uid: "1749",
+      backendId: "8100",
+      sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_9",
+      title: "某文章",
+    });
+    expect(res.agentInstruction).toContain("自动");
+    expect(res.agentInstruction).toContain("第一时间");
+  });
+
+  it("falls back to poll-only wording when leading-v2's hook is absent", async () => {
+    mockPostForm.mockResolvedValue({ job: { id: 8101, status: "Pending" } });
+    const tool = createFactory({ agentId: "rabbitmq-1749", sessionId: "session_9" })!;
+    const res = parse(await tool.execute("p2", { content: "https://a.com/x" }));
+    expect(res.agentInstruction).toContain("不要承诺会主动通知");
+  });
+
+  it("does not register a duplicate job for proactive notification", async () => {
+    const enqueue = vi.fn((_input: unknown) => true);
+    slot[ENQUEUE_SYMBOL] = enqueue as (i: unknown) => boolean;
+    mockPostForm.mockResolvedValue({ duplicated: 1, job: { id: 8102, status: "Done" } });
+
+    const tool = createFactory({ agentId: "rabbitmq-1749", sessionId: "session_9" })!;
+    const res = parse(await tool.execute("p3", { content: "https://a.com/x" }));
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(res.agentInstruction).toContain("不要承诺会主动通知");
+  });
+
+  it("does not register when no session can be addressed", async () => {
+    const enqueue = vi.fn((_input: unknown) => true);
+    slot[ENQUEUE_SYMBOL] = enqueue as (i: unknown) => boolean;
+    mockPostForm.mockResolvedValue({ job: { id: 8103, status: "Pending" } });
+
+    const tool = createFactory({ agentId: "rabbitmq-1749" })!; // no sessionKey/sessionId
+    await tool.execute("p4", { content: "https://a.com/x" });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
 describe("legal_check_status", () => {
   const tool = () => statusFactory({ agentId: "rabbitmq-1749" })!;
 

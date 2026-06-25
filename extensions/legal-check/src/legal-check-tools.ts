@@ -90,6 +90,50 @@ function envelopeError(res: Record<string, unknown>): string | null {
   return null;
 }
 
+/** Tool ctx for the create tool: agentId plus the delivery addressing captured
+ * at submit time (needed to register for proactive completion notification). */
+interface CreateToolContext {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  deliveryContext?: Record<string, unknown>;
+}
+
+/** Descriptor handed to leading-v2's enqueue hook. Mirrors its NotifyEnqueueInput;
+ * kept local because the plugin boundary forbids importing across extensions. */
+interface ProactiveNotifyInput {
+  kind: "legal_check";
+  uid: string;
+  backendId: string;
+  sessionKey: string;
+  title?: string | null;
+  delivery?: Record<string, unknown>;
+}
+
+/**
+ * Register a 内容检测 job with leading-v2's CompletionNotifier so it proactively
+ * reports the result (including Stop/Fail) to the user's chat when done. Reaches
+ * the hook via the same process-wide Symbol.for contract chat-topic.ts uses — no
+ * cross-extension import. Returns false (→ poll-only fallback) when leading-v2 is
+ * absent or notify is disabled, i.e. when the hook was never installed.
+ */
+function enqueueProactiveNotify(input: ProactiveNotifyInput): boolean {
+  const sym = Symbol.for("openclaw.leading-v2.notifyEnqueue");
+  const g = globalThis as unknown as Record<
+    symbol,
+    ((i: ProactiveNotifyInput) => boolean) | undefined
+  >;
+  const fn = g[sym];
+  if (typeof fn !== "function") {
+    return false;
+  }
+  try {
+    return fn(input) === true;
+  } catch {
+    return false;
+  }
+}
+
 export function createLegalCheckCreateToolFactory(
   api: OpenClawPluginApi,
   resolver: ApiKeyResolver,
@@ -97,11 +141,16 @@ export function createLegalCheckCreateToolFactory(
 ) {
   const config = resolveConfig(api.pluginConfig ?? {});
 
-  return (ctx: { agentId?: string }) => {
+  return (ctx: CreateToolContext) => {
     const userId = extractUserId(ctx.agentId);
     if (!userId) {
       return null;
     }
+    // Same session-key derivation as leading-v2's notify-aware tools: prefer the
+    // explicit key, else synthesize the rabbitmq agent session address.
+    const sessionKey =
+      ctx.sessionKey ??
+      (ctx.sessionId ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}` : undefined);
 
     return {
       name: "legal_check_create",
@@ -177,15 +226,37 @@ export function createLegalCheckCreateToolFactory(
         const label = asString(job?.label) ?? null;
         // Keep the id server-side only; legal_check_status polls it back.
         store.remember(userId, { jobId, label, mode });
+
+        // Register for background completion notification so the result (or a
+        // Stop/Fail) is proactively delivered to the user's chat — they no longer
+        // have to keep asking. Skip duplicates (an already-existing job may be
+        // long done) and skip when no session/leading-v2 hook is available.
+        const duplicated = Boolean(res.duplicated);
+        const willNotify =
+          !duplicated &&
+          Boolean(sessionKey) &&
+          enqueueProactiveNotify({
+            kind: "legal_check",
+            uid: userId,
+            backendId: String(jobId),
+            sessionKey: sessionKey as string,
+            title: label,
+            delivery: ctx.deliveryContext,
+          });
+
         return jsonResult({
           success: true,
           submitted: true,
-          duplicated: Boolean(res.duplicated),
+          duplicated,
           label,
           mode,
           detailPath: `/business/content/${jobId}`,
-          agentInstruction:
-            "内容检测任务已提交成功，后台正在检测中，通常需要数分钟。请立刻告知用户任务已提交，稍后可询问检测结果。不要现在就调用 legal_check_status——等用户主动询问时再查。",
+          agentInstruction: willNotify
+            ? "内容检测任务已提交成功，后台正在检测，通常需要数分钟。完成后系统会自动把结果通知用户，" +
+              "无需用户追问，也不要调用 legal_check_status——你现在只需告诉用户" +
+              "「检测任务已提交，检测完成后我会第一时间把结果发给你」。"
+            : "内容检测任务已提交成功，后台正在检测中。请如实告知用户任务已提交，并让用户稍后主动问我进度、" +
+              "或到网页内容检测页查看——不要承诺会主动通知。不要现在就调用 legal_check_status。",
         });
       },
     };

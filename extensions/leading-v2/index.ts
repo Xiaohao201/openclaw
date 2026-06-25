@@ -22,10 +22,13 @@ import {
   createLinkBatchStatusToolFactory,
   type RecentLinkBatch,
 } from "./src/link/link-tools.js";
+import { getChatMercureTopic } from "./src/notify/chat-topic.js";
 import { resolveNotifyConfig } from "./src/notify/config.js";
 import { pollCrawlRefresh } from "./src/notify/crawl-adapter.js";
 import { debugLog } from "./src/notify/debug.js";
 import { resolveSmtpConfig } from "./src/notify/email-client.js";
+import { clearNotifyEnqueue, setNotifyEnqueue } from "./src/notify/enqueue-bridge.js";
+import { pollLegalCheck } from "./src/notify/legal-check-adapter.js";
 import { pollLinkCheck } from "./src/notify/link-check-adapter.js";
 import { MercurePusher, resolveMercureConfig } from "./src/notify/mercure.js";
 import { Notifier, type NotificationTransport } from "./src/notify/notification.js";
@@ -218,6 +221,7 @@ export default definePluginEntry({
             > = {
               crawl_refresh: { named: (t) => `互动量刷新：${t}`, done: "互动量刷新完成" },
               link_check: { named: (t) => `失效链接检测：${t}`, done: "失效链接检测完成" },
+              legal_check: { named: (t) => `内容检测：${t}`, done: "内容检测完成" },
             };
             const deliver = async (
               task: {
@@ -246,6 +250,11 @@ export default definePluginEntry({
                 { mercureTopic: topic, sessionKey: task.sessionKey },
               );
             };
+            const adapters = {
+              crawl_refresh: pollCrawlRefresh,
+              link_check: pollLinkCheck,
+              legal_check: pollLegalCheck,
+            };
             notifier = new CompletionNotifier({
               registry: pendingTasks,
               resolver,
@@ -253,9 +262,38 @@ export default definePluginEntry({
               notify,
               deliver,
               logger: ctx.logger,
-              adapters: { crawl_refresh: pollCrawlRefresh, link_check: pollLinkCheck },
+              adapters,
             });
             notifier.start();
+
+            // Expose a narrow enqueue hook so sibling extensions (legal-check
+            // submits 内容检测 jobs) can register a task for proactive completion
+            // notification without importing across the plugin boundary. Only
+            // installed while notify is enabled; removed on stop.
+            setNotifyEnqueue((input) => {
+              if (!(input.kind in adapters)) {
+                return false;
+              }
+              if (!input.sessionKey || !input.backendId || !input.uid) {
+                return false;
+              }
+              const now = Date.now();
+              pendingTasks.add({
+                id: `${input.kind}:${input.backendId}`,
+                kind: input.kind as NotifyKind,
+                uid: input.uid,
+                backendId: input.backendId,
+                sessionKey: input.sessionKey,
+                mercureTopic: input.mercureTopic || getChatMercureTopic(input.uid) || input.uid,
+                delivery: input.delivery ?? {},
+                title: input.title ?? null,
+                createdAt: now,
+                attempts: 0,
+                notified: false,
+                expiresAt: now + notify.ttlMs,
+              });
+              return true;
+            });
           }
 
           // Scheduler: run user-defined recurring tasks; results flow through the
@@ -285,6 +323,7 @@ export default definePluginEntry({
         }
       },
       async stop(ctx) {
+        clearNotifyEnqueue();
         notifier?.stop();
         scheduler?.stop();
         await pendingTasks.flush();
