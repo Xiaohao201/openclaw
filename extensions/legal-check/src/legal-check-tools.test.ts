@@ -113,6 +113,23 @@ describe("legal_check_create", () => {
     expect(res).toMatchObject({ success: false, error: "额度不足" });
   });
 
+  it("treats a deduped (already-checked) link as duplicate, not a fresh submission", async () => {
+    // Backend dedupes by link: re-checking the same URL returns the existing job
+    // (often already Done) with duplicated=1 and creates NO new task.
+    mockPostForm.mockResolvedValue({
+      duplicated: 1,
+      job: { id: 6431, label: "某抖音内容", status: "Done" },
+    });
+    const res = parse(
+      await tool().execute("c6", { content: "看 https://www.douyin.com/share/video/7654 这条" }),
+    );
+    expect(res).toMatchObject({ duplicated: true, submitted: false });
+    // The agent is told to fetch the existing result, not claim a fresh submit.
+    expect(res.agentInstruction).toContain("去重");
+    expect(res.agentInstruction).toContain("legal_check_status");
+    expect(res.agentInstruction).toContain("切勿");
+  });
+
   it("errors (no backend call) when no key can be resolved for the account", async () => {
     const noKeyTool = createFactory({ agentId: "rabbitmq-2005" })!;
     const res = parse(await noKeyTool.execute("c5", { content: "https://a.com/x" }));
@@ -167,7 +184,8 @@ describe("legal_check_create proactive notification", () => {
     const res = parse(await tool.execute("p3", { content: "https://a.com/x" }));
 
     expect(enqueue).not.toHaveBeenCalled();
-    expect(res.agentInstruction).toContain("不要承诺会主动通知");
+    // Duplicate → fetch the existing result, not a proactive-notify promise.
+    expect(res.agentInstruction).toContain("去重");
   });
 
   it("does not register when no session can be addressed", async () => {

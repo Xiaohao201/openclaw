@@ -247,19 +247,30 @@ export function createLegalCheckCreateToolFactory(
             delivery: ctx.deliveryContext,
           });
 
-        return jsonResult({
-          success: true,
-          submitted: true,
-          duplicated,
-          label,
-          mode,
-          detailPath: `/business/content/${jobId}`,
-          agentInstruction: willNotify
+        // Three cases steer the agent very differently. Duplicate is the trap:
+        // the backend dedupes by link (findExistedJobByLink), so re-checking the
+        // SAME link returns the existing job (often already Done) WITHOUT creating
+        // a new task — telling the user "正在检测" would be a lie, so fetch and
+        // show the existing result instead.
+        const agentInstruction = duplicated
+          ? "这条内容之前已经检测过了（系统按链接去重，本次未新建任务、未消耗额度）。" +
+            "切勿说「已提交」或「正在检测」。请立即调用 legal_check_status 取回这条内容的既有检测结果并展示给用户；" +
+            "若结果显示仍在进行中，再如实告知当前进度。"
+          : willNotify
             ? "内容检测任务已提交成功，后台正在检测，通常需要数分钟。完成后系统会自动把结果通知用户，" +
               "无需用户追问，也不要调用 legal_check_status——你现在只需告诉用户" +
               "「检测任务已提交，检测完成后我会第一时间把结果发给你」。"
             : "内容检测任务已提交成功，后台正在检测中。请如实告知用户任务已提交，并让用户稍后主动问我进度、" +
-              "或到网页内容检测页查看——不要承诺会主动通知。不要现在就调用 legal_check_status。",
+              "或到网页内容检测页查看——不要承诺会主动通知。不要现在就调用 legal_check_status。";
+
+        return jsonResult({
+          success: true,
+          submitted: !duplicated,
+          duplicated,
+          label,
+          mode,
+          detailPath: `/business/content/${jobId}`,
+          agentInstruction,
         });
       },
     };
