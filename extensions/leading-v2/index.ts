@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
+  createComplaintSubmitToolFactory,
   createJobListToolFactory,
   createJobStopToolFactory,
   createLetterFetchToolFactory,
@@ -138,6 +139,7 @@ export default definePluginEntry({
     api.registerTool(createJobStopToolFactory(api, resolver), { name: "job_stop" });
     api.registerTool(createLetterGenerateToolFactory(api, resolver), { name: "letter_generate" });
     api.registerTool(createLetterFetchToolFactory(api, resolver), { name: "letter_fetch" });
+    api.registerTool(createComplaintSubmitToolFactory(api, resolver), { name: "complaint_submit" });
 
     // --- link-data-crawler (互动量刷新，只读：重抓互动量但不写回主看板) ---
     const crawlRefreshes = new RecentTaskStore<RecentCrawlRefresh>();

@@ -41,7 +41,28 @@ const LetterGenerateSchema = Type.Object(
     }),
     all: Type.Optional(
       Type.Boolean({
-        description: "Generate every letter type (撤稿函/举报信/投诉信/官方公函/个人公函). Default lets the backend choose by task type.",
+        description:
+          "Generate every letter type (撤稿函/举报信/投诉信/官方公函/个人公函). Default lets the backend choose by task type.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const COMPLAINT_PLATFORMS = "抖音/小红书/今日头条/百家号/B站/微博/知乎/快手";
+
+const ComplaintSubmitSchema = Type.Object(
+  {
+    links: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "待举报的侵权链接。省略则复用最近一次内容检测任务提交的原始链接。" +
+          `仅支持这些平台：${COMPLAINT_PLATFORMS}；其他平台链接会被后端过滤。`,
+      }),
+    ),
+    role: Type.Optional(
+      Type.Union([Type.Literal("Personal"), Type.Literal("Enterprise")], {
+        description: "举报主体身份：Personal=个人，Enterprise=企业。默认 Personal。",
       }),
     ),
   },
@@ -50,8 +71,11 @@ const LetterGenerateSchema = Type.Object(
 
 const EmptySchema = Type.Object({}, { additionalProperties: false });
 
-/** Resolve the most recent pr-workspace job id for this account (the one just created in chat). */
-async function resolveLatestJobId(config: BackendConfig, apiKey: string): Promise<number | null> {
+/** Resolve the most recent pr-workspace job for this account (the one just created in chat). */
+async function resolveLatestJob(
+  config: BackendConfig,
+  apiKey: string,
+): Promise<Record<string, unknown> | null> {
   const res = await getJson(
     config,
     "/ai/fetch-jobs",
@@ -59,7 +83,14 @@ async function resolveLatestJobId(config: BackendConfig, apiKey: string): Promis
     apiKey,
   );
   const jobs = Array.isArray(res.jobs) ? (res.jobs as Record<string, unknown>[]) : [];
-  const id = Number(jobs[0]?.id);
+  const job = jobs[0];
+  return job && typeof job === "object" ? job : null;
+}
+
+/** Resolve the most recent pr-workspace job id for this account (the one just created in chat). */
+async function resolveLatestJobId(config: BackendConfig, apiKey: string): Promise<number | null> {
+  const job = await resolveLatestJob(config, apiKey);
+  const id = Number(job?.id);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
@@ -153,7 +184,10 @@ export function createJobStopToolFactory(api: OpenClawPluginApi, resolver: ApiKe
           return failure(api, "job_stop", userId, error);
         }
         if (res.code !== "success") {
-          return jsonResult({ success: false, error: asString(res.message) ?? "Backend rejected the stop request." });
+          return jsonResult({
+            success: false,
+            error: asString(res.message) ?? "Backend rejected the stop request.",
+          });
         }
         const job = (res.job as Record<string, unknown> | undefined) ?? {};
         return jsonResult({ success: true, label: asString(job.label) ?? null });
@@ -216,7 +250,10 @@ export function createLetterGenerateToolFactory(api: OpenClawPluginApi, resolver
         }
         if (res.code !== "success") {
           // e.g. "文章违规程度较低，无法生成撤稿函"
-          return jsonResult({ success: false, error: asString(res.message) ?? "Backend rejected the request." });
+          return jsonResult({
+            success: false,
+            error: asString(res.message) ?? "Backend rejected the request.",
+          });
         }
         return jsonResult({
           success: true,
@@ -258,11 +295,19 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
           return failure(api, "letter_fetch", userId, error);
         }
         if (!jobId) {
-          return jsonResult({ success: false, error: "No recent 内容检测 task to fetch letters for." });
+          return jsonResult({
+            success: false,
+            error: "No recent 内容检测 task to fetch letters for.",
+          });
         }
         let res: Record<string, unknown>;
         try {
-          res = await postForm(config, "/ai/fetch-letters", { jobId, siteId: config.siteId }, keyed.apiKey);
+          res = await postForm(
+            config,
+            "/ai/fetch-letters",
+            { jobId, siteId: config.siteId },
+            keyed.apiKey,
+          );
         } catch (error) {
           return failure(api, "letter_fetch", userId, error);
         }
@@ -291,6 +336,88 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
             letters.length > 0
               ? "文书已生成，请向用户展示结果。"
               : "⚠️ 文书仍在生成中。请立刻告知用户「文书正在生成，稍后可再询问」并结束本轮对话。禁止再次调用此工具。",
+        });
+      },
+    };
+  };
+}
+
+export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
+  const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+    return {
+      name: "complaint_submit",
+      label: "一键举报",
+      description:
+        "对最近一次内容检测任务一键举报：把侵权链接按平台提交投诉，并落库 legal_complaint 持续监测链接是否下架。" +
+        "举报理由由后端依据检测结果自动生成，无需手写。" +
+        "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
+        `仅支持 ${COMPLAINT_PLATFORMS}，其他平台链接会被过滤。` +
+        "异步执行——提交成功后告知用户「举报任务已提交」，无需再调用任何工具。",
+      parameters: ComplaintSubmitSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_submit");
+        if ("error" in keyed) {
+          return keyed.error;
+        }
+        let job: Record<string, unknown> | null;
+        try {
+          job = await resolveLatestJob(config, keyed.apiKey);
+        } catch (error) {
+          return failure(api, "complaint_submit", userId, error);
+        }
+        const jobId = Number(job?.id);
+        if (!Number.isInteger(jobId) || jobId <= 0) {
+          return jsonResult({
+            success: false,
+            error: "没有可举报的内容检测任务；请先完成一次侵权检测。",
+          });
+        }
+
+        // Reuse the detection task's own link unless the caller overrides with explicit links.
+        const provided = Array.isArray(rawParams.links)
+          ? (rawParams.links as unknown[]).map((v) => asString(v) ?? "").filter((v) => v.length > 0)
+          : [];
+        const jobLink = asString(job?.link);
+        const links = provided.length > 0 ? provided : jobLink ? [jobLink] : [];
+        if (links.length === 0) {
+          return jsonResult({
+            success: false,
+            error:
+              "未找到可举报的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
+          });
+        }
+
+        const role = rawParams.role === "Enterprise" ? "Enterprise" : "Personal";
+        const fields: Record<string, FieldValue> = {
+          id: jobId,
+          links: JSON.stringify(links),
+          role,
+        };
+        let res: Record<string, unknown>;
+        try {
+          res = await postForm(config, "/legal/save-complaint-job", fields, keyed.apiKey);
+        } catch (error) {
+          return failure(api, "complaint_submit", userId, error);
+        }
+        if (res.code !== "success") {
+          // e.g. "一键举报功能当前暂不支持您提供的链接"
+          return jsonResult({
+            success: false,
+            error: asString(res.message) ?? "后端拒绝了举报请求。",
+          });
+        }
+        return jsonResult({
+          success: true,
+          submitted: true,
+          message: asString(res.message) ?? "举报任务已提交，请耐心等待",
+          agentInstruction:
+            "举报任务已提交。请立刻告知用户举报已在后台提交、系统会持续监测被举报链接是否下架。不要再调用任何工具。",
         });
       },
     };

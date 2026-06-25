@@ -104,6 +104,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // 维权文书 / 任务
   letter_generate: "正在生成维权文书",
   letter_fetch: "正在查询维权文书",
+  complaint_submit: "正在提交一键举报",
   job_list: "正在查看任务进度",
   job_stop: "正在停止任务",
   // 失效链接 / 互动量刷新
@@ -167,6 +168,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   opinion_download_content: "report",
   letter_generate: "report",
   letter_fetch: "report",
+  complaint_submit: "report",
   job_list: "default",
   job_stop: "default",
   link_batch_create: "check",

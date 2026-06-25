@@ -1,4 +1,3 @@
-
 import { Type } from "@sinclair/typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import { extractUrl } from "./extract-url.js";
@@ -9,7 +8,6 @@ import type { LegalApiConfig } from "./types.js";
 
 /** Chat agents are named `rabbitmq-<userId>`; that userId is the trusted identity. */
 const RABBITMQ_AGENT_PATTERN = /^rabbitmq-(.+)$/;
-
 
 function extractUserId(agentId: string | undefined): string | null {
   const match = RABBITMQ_AGENT_PATTERN.exec(agentId ?? "");
@@ -291,10 +289,27 @@ function summarizeJob(jobId: number, res: Record<string, unknown>): Record<strin
     paragraphCount,
     letters: Object.keys(letterMap),
     detailPath: `/business/content/${jobId}`,
-    agentInstruction: terminal
-      ? "检测已完成，请向用户展示检测结果。如有违规且用户希望维权，可用 letter_generate 生成文书。"
-      : "⚠️ 检测仍在进行中。请立刻向用户报告当前进度并结束本轮对话。禁止再次调用此工具或任何其他工具。",
+    agentInstruction: terminalInstruction(done, failed, stopped),
   };
+}
+
+/** Steer the agent after a terminal/in-progress check; proactively offer next steps on success. */
+function terminalInstruction(done: boolean, failed: boolean, stopped: boolean): string {
+  if (done) {
+    return (
+      "检测已完成，请向用户展示检测结果。若发现侵权/违规内容，请主动询问用户是否需要进一步处理：" +
+      "① 一键举报（complaint_submit）——把侵权链接按平台提交投诉，并持续监测链接是否下架；" +
+      "② 生成维权文书（letter_generate）——撤稿函/举报信/投诉信等。" +
+      "用户明确同意后再调用对应工具，不要擅自提交。"
+    );
+  }
+  if (failed) {
+    return "检测失败，请如实告知用户，并建议稍后重试。";
+  }
+  if (stopped) {
+    return "检测已停止，请如实告知用户。";
+  }
+  return "⚠️ 检测仍在进行中。请立刻向用户报告当前进度并结束本轮对话。禁止再次调用此工具或任何其他工具。";
 }
 
 function failure(api: OpenClawPluginApi, tool: string, userId: string, error: unknown) {

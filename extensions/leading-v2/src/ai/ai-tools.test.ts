@@ -17,6 +17,7 @@ const {
   createJobStopToolFactory,
   createLetterGenerateToolFactory,
   createLetterFetchToolFactory,
+  createComplaintSubmitToolFactory,
 } = await import("./ai-tools.js");
 
 const fakeApi = {
@@ -53,7 +54,11 @@ describe("job_list", () => {
       jobs: [{ id: 1, label: "某检测", status: "Done", rate: 4.5, completion: 100, date: "d" }],
     });
     const res = parse(await tool.execute("j1", {}));
-    const [, path, params] = mockGetJson.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const [, path, params] = mockGetJson.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/ai/fetch-jobs");
     expect(params).toMatchObject({ workspace: "pr" });
     expect((res.list as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -65,7 +70,8 @@ describe("job_list", () => {
 });
 
 describe("letter_generate", () => {
-  const tool = () => createLetterGenerateToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+  const tool = () =>
+    createLetterGenerateToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
 
   it("rejects short errors without any backend call", async () => {
     const res = parse(await tool().execute("g0", { errors: "太短" }));
@@ -78,9 +84,16 @@ describe("letter_generate", () => {
     mockGetJson.mockResolvedValue({ jobs: [{ id: 6032 }] });
     mockPostForm.mockResolvedValue({ code: "success", message: "正在生成，请稍等！" });
     const res = parse(
-      await tool().execute("g1", { errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。", all: true }),
+      await tool().execute("g1", {
+        errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。",
+        all: true,
+      }),
     );
-    const [, path, fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/ai/generate-letter");
     expect(fields).toMatchObject({ jobId: 6032, siteId: "legal", all: 1 });
     expect(res).toMatchObject({ success: true, submitted: true });
@@ -91,7 +104,9 @@ describe("letter_generate", () => {
     mockGetJson.mockResolvedValue({ jobs: [{ id: 6032 }] });
     mockPostForm.mockResolvedValue({ code: "error", message: "文章违规程度较低，无法生成撤稿函" });
     const res = parse(
-      await tool().execute("g2", { errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。" }),
+      await tool().execute("g2", {
+        errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。",
+      }),
     );
     expect(res).toMatchObject({ success: false, error: "文章违规程度较低，无法生成撤稿函" });
   });
@@ -99,7 +114,9 @@ describe("letter_generate", () => {
   it("errors when there is no recent job", async () => {
     mockGetJson.mockResolvedValue({ jobs: [] });
     const res = parse(
-      await tool().execute("g3", { errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。" }),
+      await tool().execute("g3", {
+        errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。",
+      }),
     );
     expect(res.success).toBe(false);
     expect(mockPostForm).not.toHaveBeenCalled();
@@ -119,7 +136,11 @@ describe("letter_fetch", () => {
       size: 2,
     });
     const res = parse(await tool.execute("lf1"));
-    const [, path, fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/ai/fetch-letters");
     expect(fields).toMatchObject({ jobId: 6052 });
     expect(res.count).toBe(2);
@@ -143,10 +164,83 @@ describe("job_stop", () => {
   it("resolves latest job and posts stop-job/{id}", async () => {
     const tool = createJobStopToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
     mockGetJson.mockResolvedValue({ jobs: [{ id: 6058 }] });
-    mockPostForm.mockResolvedValue({ code: "success", job: { id: 6058, label: "某检测", status: "stop" } });
+    mockPostForm.mockResolvedValue({
+      code: "success",
+      job: { id: 6058, label: "某检测", status: "stop" },
+    });
     const res = parse(await tool.execute("st1"));
     const [, path] = mockPostForm.mock.calls[0] as [unknown, string];
     expect(path).toBe("/ai/stop-job/6058");
     expect(res).toMatchObject({ success: true, label: "某检测" });
+  });
+});
+
+describe("complaint_submit", () => {
+  const tool = () =>
+    createComplaintSubmitToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+
+  it("is hidden from non-rabbitmq agents", () => {
+    expect(
+      createComplaintSubmitToolFactory(fakeApi, resolver)({ agentId: "telegram-1" }),
+    ).toBeNull();
+  });
+
+  it("reuses the latest job's link and posts save-complaint-job", async () => {
+    mockGetJson.mockResolvedValue({
+      jobs: [{ id: 6070, link: "https://www.douyin.com/video/123" }],
+    });
+    mockPostForm.mockResolvedValue({ code: "success", message: "举报任务已提交，请耐心等待" });
+    const res = parse(await tool().execute("c1", {}));
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(path).toBe("/legal/save-complaint-job");
+    expect(fields).toMatchObject({
+      id: 6070,
+      links: JSON.stringify(["https://www.douyin.com/video/123"]),
+      role: "Personal",
+    });
+    expect(res).toMatchObject({ success: true, submitted: true });
+  });
+
+  it("prefers explicit links and honors Enterprise role", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6071, link: "https://ignored.example" }] });
+    mockPostForm.mockResolvedValue({ code: "success", message: "举报任务已提交，请耐心等待" });
+    await tool().execute("c2", {
+      links: ["https://www.xiaohongshu.com/a", ""],
+      role: "Enterprise",
+    });
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(fields).toMatchObject({
+      id: 6071,
+      links: JSON.stringify(["https://www.xiaohongshu.com/a"]),
+      role: "Enterprise",
+    });
+  });
+
+  it("errors without a backend call when there is no recent job", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [] });
+    const res = parse(await tool().execute("c3", {}));
+    expect(res.success).toBe(false);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("errors when the job has no link and none provided", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6072 }] });
+    const res = parse(await tool().execute("c4", {}));
+    expect(res.success).toBe(false);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the backend 'unsupported link' error", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6073, link: "https://unsupported.example/x" }] });
+    mockPostForm.mockResolvedValue({
+      code: "error",
+      message: "一键举报功能当前暂不支持您提供的链接",
+    });
+    const res = parse(await tool().execute("c5", {}));
+    expect(res).toMatchObject({ success: false, error: "一键举报功能当前暂不支持您提供的链接" });
   });
 });
