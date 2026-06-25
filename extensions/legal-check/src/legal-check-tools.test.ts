@@ -143,7 +143,9 @@ describe("legal_check_create proactive notification", () => {
       uid: "1749",
       backendId: "8100",
       sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_9",
-      title: "某文章",
+      // No title is sent: the submit-time label is a truncated URL; the poller
+      // sources the real title + full link from the backend instead.
+      title: null,
     });
     expect(res.agentInstruction).toContain("自动");
     expect(res.agentInstruction).toContain("第一时间");

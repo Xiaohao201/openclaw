@@ -240,7 +240,10 @@ export function createLegalCheckCreateToolFactory(
             uid: userId,
             backendId: String(jobId),
             sessionKey: sessionKey as string,
-            title: label,
+            // No title: at submit the backend label is just the URL/text
+            // truncated to 80 chars, so a clean "内容检测完成" heading + the full
+            // job.link in the polled summary reads better than a broken URL.
+            title: null,
             delivery: ctx.deliveryContext,
           });
 
@@ -354,6 +357,9 @@ function summarizeJob(jobId: number, res: Record<string, unknown>): Record<strin
     statusLabel: STATUS_LABELS[status] ?? status ?? "未知",
     ...(terminal ? { done, failed, stopped } : {}),
     label: asString(job.label) ?? null,
+    // The complete submitted URL (job.label is truncated to 80 chars; never use
+    // it as the link). Lets the agent show/quote the full link.
+    sourceLink: asString(job.link) ?? null,
     mode: Number(job.rumor) === 1 ? "rumor" : "violation",
     target: asString(job.target) ?? null,
     result: detail.result ?? null,

@@ -43,22 +43,62 @@ describe("pollLegalCheck", () => {
     expect(res.terminal).toBe(false);
   });
 
-  it("summarizes a completed check with the flagged-paragraph count", async () => {
+  it("summarizes a completed check with the fresh title, flagged count, and FULL link", async () => {
+    const fullLink = "https://www.msn.cn/zh-cn/entertainment/%E5%90%8D%E4%BA%BA/ar-AA26udhZ";
     getJson.mockResolvedValueOnce({
-      job: { status: "Done" },
+      job: { status: "Done", label: "锋菲恋再添新画面", link: fullLink },
       detail: { tableData: [{}, {}, {}] },
     });
     const res = await pollLegalCheck(task, "key", config);
     expect(res.terminal).toBe(true);
-    expect(res.summary).toContain("「某条检测」已完成");
+    expect(res.summary).toContain("「锋菲恋再添新画面」已完成");
     expect(res.summary).toContain("共发现 3 处");
+    // The complete link is shown, sourced from job.link (not the captured title).
+    expect(res.summary).toContain(fullLink);
+    // Violations found → offer 一键举报 with two inline action buttons.
+    expect(res.summary).toContain("是否需要对该内容一键举报");
+    expect(res.summary).toContain("[🚨 一键举报](#lobster-report)");
+    expect(res.summary).toContain("[暂不](#lobster-dismiss)");
   });
 
-  it("reports a Stop as terminal with a likely-cause hint", async () => {
-    getJson.mockResolvedValueOnce({ job: { status: "Stop" } });
+  it("omits the 一键举报 buttons when no violations were flagged", async () => {
+    getJson.mockResolvedValueOnce({
+      job: { status: "Done", label: "某合规内容", link: "https://a.com/ok" },
+      detail: { tableData: [] },
+    });
+    const res = await pollLegalCheck(task, "key", config);
+    expect(res.summary).toContain("已完成");
+    expect(res.summary).not.toContain("一键举报");
+    expect(res.summary).not.toContain("#lobster-report");
+  });
+
+  it("shows the full job.link even when the label is a truncated URL (the bug)", async () => {
+    const fullLink =
+      "https://www.msn.cn/zh-cn/entertainment/%E5%90%8D%E4%BA%BA/%E9%94%8B%E8%8F%B2%E6%81%8B/ar-AA26udhZ?ocid=TobArticle";
+    getJson.mockResolvedValueOnce({
+      // label is the 80-char-truncated URL the PHP backend stores at submit.
+      job: {
+        status: "Done",
+        label: "https://www.msn.cn/zh-cn/entertainment/%E5%90%8D%E4%BA%BA/%E9%94%8B%E8%8F%B2%E6%",
+        link: fullLink,
+      },
+      detail: { tableData: [] },
+    });
+    const res = await pollLegalCheck(task, "key", config);
+    // The mangled URL label is NOT shown as a name…
+    expect(res.summary).toContain("「该内容」");
+    // …and the complete, untruncated link IS present.
+    expect(res.summary).toContain(fullLink);
+    expect(res.summary).not.toContain("%E6%」"); // no broken mid-encoding inside 「」
+  });
+
+  it("reports a Stop as terminal with the full link and a likely-cause hint", async () => {
+    const fullLink = "https://www.msn.cn/zh-cn/a/ar-AA26udhZ?ocid=TobArticle";
+    getJson.mockResolvedValueOnce({ job: { status: "Stop", link: fullLink } });
     const res = await pollLegalCheck(task, "key", config);
     expect(res.terminal).toBe(true);
     expect(res.summary).toContain("已停止");
+    expect(res.summary).toContain(fullLink);
   });
 
   it("reports a Fail as terminal", async () => {
