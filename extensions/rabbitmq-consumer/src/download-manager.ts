@@ -80,6 +80,13 @@ export class DownloadManager {
      * one. Omitted for keyword-triggered reports (no explicit template).
      */
     templateId?: number;
+    /**
+     * Originating history_messages.id (the report-request turn). Stored so the
+     * report-generator can write the finished report back into that history row
+     * (metadata.report), letting the lobster history view show the full report
+     * instead of only the "正在生成中..." ack.
+     */
+    historyId?: number;
   }): Promise<number> {
     const pool = await this.getPool();
     const now = new Date();
@@ -123,6 +130,7 @@ export class DownloadManager {
       ...(params.mercureTopic ? { mercureTopic: params.mercureTopic } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.templateId ? { templateId: params.templateId } : {}),
+      ...(params.historyId ? { historyId: params.historyId } : {}),
     });
     const ip = "";
     const status = "Pending";

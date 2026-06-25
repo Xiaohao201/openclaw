@@ -18,6 +18,10 @@ export interface ResolvedTemplate {
   /** Period mapped to the Chinese ReportPeriod the report pipeline uses. */
   period: ReportPeriod;
   name: string;
+  /** Markdown template body; injected into the chat agent on the "learn" path. */
+  content: string;
+  /** Optional human description, shown to the agent alongside the body. */
+  description: string | null;
 }
 
 /**
@@ -66,7 +70,7 @@ export class ReportTemplateLookup {
     try {
       const pool = await this.getPool();
       const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-        `SELECT id, period, name
+        `SELECT id, period, name, content, description
          FROM report_template
          WHERE id = ?
            AND is_enable = 1
@@ -96,6 +100,8 @@ export class ReportTemplateLookup {
         id: Number(row.id),
         period,
         name: typeof row.name === "string" ? row.name : "",
+        content: typeof row.content === "string" ? row.content : "",
+        description: typeof row.description === "string" ? row.description : null,
       };
     } catch (error) {
       logger.error(`[TEMPLATE_LOOKUP] Lookup failed for #${templateId}: ${String(error)}`);

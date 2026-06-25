@@ -81,6 +81,21 @@ export class HistoryManager {
     ]);
   }
 
+  /**
+   * Persist a record's `metadata` JSON. Used to store the sanitized
+   * work-process timeline (`{ steps: [...] }`) so the lobster history view can
+   * replay the "工作过程" panel — these steps are otherwise transient Mercure
+   * events that were never saved. The caller passes a plain object; it is
+   * serialized here. Best-effort: a failure must never fail the chat turn.
+   */
+  async updateMetadata(historyId: number, metadata: Record<string, unknown>): Promise<void> {
+    const pool = this.getWriterPool();
+    await pool.execute("UPDATE history_messages SET metadata = ? WHERE id = ?", [
+      JSON.stringify(metadata),
+      historyId,
+    ]);
+  }
+
   /** Close all connection pools. */
   async close(): Promise<void> {
     if (this.readerPool) {

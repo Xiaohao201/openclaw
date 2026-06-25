@@ -5,14 +5,40 @@ import type { HistoryManager } from "./history-manager.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
-import type { ReportTemplateLookup } from "./report-template-lookup.js";
+import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
-import { ToolActivityNarrator, type StepCategory } from "./tool-activity.js";
+import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
 import type { TopicInfo, TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
+
+/** Hard cap on injected template body, so a huge MEDIUMTEXT can't blow the prompt. */
+const TEMPLATE_BODY_MAX = 6000;
+
+/**
+ * Build the context block injected into the chat agent when the user has a
+ * report template selected but is conversing (not requesting generation), so
+ * "先学习一下这份模板" lets the agent actually read and reason about the body.
+ * Returns "" when there is no usable template content.
+ */
+function buildTemplateContext(template: ResolvedTemplate): string {
+  const body = template.content?.trim();
+  if (!body) {
+    return "";
+  }
+  const clipped =
+    body.length > TEMPLATE_BODY_MAX
+      ? `${body.slice(0, TEMPLATE_BODY_MAX)}\n…(模板内容过长，已截断)`
+      : body;
+  const desc = template.description?.trim() ? `，说明：${template.description.trim()}` : "";
+  return (
+    `\n\n[用户当前选中了报告模板] 名称：${template.name}（${template.period}）${desc}。` +
+    "以下是该模板的正文，供你学习和参考（除非用户明确要求，否则不要原样输出整段模板）：\n" +
+    `---模板正文开始---\n${clipped}\n---模板正文结束---`
+  );
+}
 
 /**
  * Resolve the assistant text delta from an agent event payload.
@@ -145,7 +171,7 @@ async function resolveReportTopic(args: {
  * COUNT here is a best-effort volume hint pushed off the critical path.
  * Always emits a Mercure `done` so the frontend unlocks.
  */
-async function createReportTaskAndRespond(args: {
+interface EnqueueReportTaskArgs {
   period: ReportPeriod;
   requirement: string;
   dateScope: { start: string; end: string };
@@ -158,12 +184,20 @@ async function createReportTaskAndRespond(args: {
   chatMsg: ChatMessage;
   mercure: MercurePusher;
   mercureTopic: string;
-  historyManager: HistoryManager;
   downloadManager: DownloadManager;
   feedCounter: FeedCounter | undefined;
   reportTaskPublisher: ReportTaskPublisher | undefined;
   logger: PluginLogger;
-}): Promise<string> {
+}
+
+/**
+ * Create the report task row and kick off asynchronous generation: open the
+ * frontend report card (`report_created`), notify the report-generator, and fire
+ * off a best-effort volume hint. Does NOT push reply text or `done` — the caller
+ * owns the user-facing reply (a keyword ack, or the streamed acknowledgement on
+ * the template path). Returns the new task id.
+ */
+async function enqueueReportTask(args: EnqueueReportTaskArgs): Promise<number> {
   const {
     period,
     requirement,
@@ -175,7 +209,6 @@ async function createReportTaskAndRespond(args: {
     chatMsg,
     mercure,
     mercureTopic,
-    historyManager,
     downloadManager,
     feedCounter,
     reportTaskPublisher,
@@ -194,26 +227,22 @@ async function createReportTaskAndRespond(args: {
     masterId,
     mercureTopic,
     templateId,
+    // Originating history row, so the report-generator can write the finished
+    // report back into it (metadata.report) for the lobster history view.
+    historyId: chatMsg.historyId,
     // Same per-user agent the chat runs under, so the report subagent
     // inherits its workspace, DB skills, and schema knowledge.
     agentId: `rabbitmq-${chatMsg.userId}`,
   });
   logger.info(`[CHAT_PIPELINE] Created report task #${taskId} for user ${uid}`);
 
-  // Acknowledge the moment the task row exists — no DB count blocks this path.
-  const reportResponse = `${period}报告已创建，正在生成中...`;
-  await mercure.pushText(mercureTopic, reportResponse, chatMsg.historyId);
   // Let the frontend open a report card for this taskId right away; progress
   // (`report_text`) and the final `report` event will target the same card.
   await mercure.pushReportCreated(mercureTopic, taskId);
-  // Unlock the frontend; the report arrives later as a separate "report" event.
-  await mercure.pushDone(mercureTopic, chatMsg.historyId);
-  await historyManager.updateResponse(chatMsg.historyId, reportResponse);
 
   // Notify the report-generator so it starts immediately instead of waiting
-  // for its fallback poll cycle. Done after the ack pushes so the frontend
-  // sees "正在生成中" before the first streamed report chunk. Publish failure
-  // is tolerated: the poller picks up the Pending task.
+  // for its fallback poll cycle. Publish failure is tolerated: the poller picks
+  // up the Pending task.
   if (reportTaskPublisher) {
     const published = await reportTaskPublisher.publishTaskCreated(taskId);
     if (published) {
@@ -221,8 +250,8 @@ async function createReportTaskAndRespond(args: {
     }
   }
 
-  // Best-effort data-volume hint, fully decoupled from the ack above: a COUNT
-  // over a large topic can be slow, so it runs fire-and-forget and only emits a
+  // Best-effort data-volume hint, fully decoupled from the ack: a COUNT over a
+  // large topic can be slow, so it runs fire-and-forget and only emits a
   // transient `progress` line once it resolves. Failures and the empty case are
   // swallowed here — the report-generator owns the authoritative empty-data
   // message, so a slow or zero count never delays or blocks the user.
@@ -247,6 +276,26 @@ async function createReportTaskAndRespond(args: {
       });
   }
 
+  return taskId;
+}
+
+/**
+ * Keyword report path (no template): enqueue the report and reply with a fixed
+ * "正在生成中" ack, then unlock the frontend. The template path does NOT use this
+ * — there the user is greeted by a streamed conversational reply (see Step 2.4).
+ */
+async function createReportTaskAndRespond(
+  args: EnqueueReportTaskArgs & { historyManager: HistoryManager },
+): Promise<string> {
+  const { period, chatMsg, mercure, mercureTopic, historyManager } = args;
+
+  // Acknowledge before generation; the COUNT never blocks this path.
+  const reportResponse = `${period}报告已创建，正在生成中...`;
+  await mercure.pushText(mercureTopic, reportResponse, chatMsg.historyId);
+  await enqueueReportTask(args);
+  // Unlock the frontend; the report arrives later as a separate "report" event.
+  await mercure.pushDone(mercureTopic, chatMsg.historyId);
+  await historyManager.updateResponse(chatMsg.historyId, reportResponse);
   return reportResponse;
 }
 
@@ -360,16 +409,27 @@ export async function processChatMessage(
       return "Error: Empty message";
     }
 
-    // Step 2.4: Explicit template-driven report request. The frontend's report
-    // template panel sends the picked report_template.id; that template's own
-    // period drives the date scope and the report-generator loads this exact
-    // template. Takes precedence over keyword detection. An unresolvable id
-    // (deleted, disabled, another user's) falls through to ordinary handling.
-    if (chatMsg.templateId && downloadManager && templateLookup) {
+    // Step 2.4: A selected report template (frontend's template panel sends the
+    // picked report_template.id) ALWAYS produces a report — selecting a template
+    // is the user's request for it. But we no longer answer with a bare "报告已
+    // 生成中" card: that felt abrupt. Instead we run the normal streamed chat turn
+    // first (with the template body injected so the agent can reference it) so the
+    // agent greets the user and acknowledges their message, THEN enqueue the
+    // report just before `done` (see Step 8b). An unresolvable id (deleted,
+    // disabled, another user's) or a missing downloadManager falls through to
+    // ordinary chat handling with no report.
+    let selectedTemplate: ResolvedTemplate | null = null;
+    let pendingReport: {
+      tpl: ResolvedTemplate;
+      topic: { topicId: number; useSlaveTopic: boolean; masterId: number };
+      dateScope: { start: string; end: string };
+    } | null = null;
+    if (chatMsg.templateId && templateLookup) {
       const tpl = await templateLookup.resolve(chatMsg.templateId, userId, logger);
-      if (tpl) {
+      if (tpl && downloadManager) {
         logger.info(
-          `[CHAT_PIPELINE] Explicit template #${tpl.id} ("${tpl.name}") -> ${tpl.period} report`,
+          `[CHAT_PIPELINE] Template #${tpl.id} ("${tpl.name}") selected -> ` +
+            `acknowledge then generate ${tpl.period}`,
         );
         const topic = await resolveReportTopic({
           userId,
@@ -379,30 +439,21 @@ export async function processChatMessage(
           runtime,
           token: chatMsg.historyId,
         });
-        return await createReportTaskAndRespond({
-          period: tpl.period,
-          // The user's typed text becomes the requirement; it may just be the
-          // template name when they only clicked the template without editing.
-          requirement: userMessage,
-          dateScope: computeDateScope(tpl.period),
-          topicId: topic.topicId,
-          useSlaveTopic: topic.useSlaveTopic,
-          masterId: topic.masterId,
-          templateId: tpl.id,
-          chatMsg,
-          mercure,
-          mercureTopic,
-          historyManager,
-          downloadManager,
-          feedCounter,
-          reportTaskPublisher,
-          logger,
-        });
+        selectedTemplate = tpl;
+        pendingReport = { tpl, topic, dateScope: computeDateScope(tpl.period) };
+      } else if (tpl) {
+        // Resolved but no downloadManager: still let the agent reference the body.
+        selectedTemplate = tpl;
+        logger.warn(
+          `[CHAT_PIPELINE] Template #${tpl.id} resolved but no downloadManager; ` +
+            `replying without a report`,
+        );
+      } else {
+        logger.warn(
+          `[CHAT_PIPELINE] templateId=${chatMsg.templateId} did not resolve; ` +
+            `falling back to normal handling`,
+        );
       }
-      logger.warn(
-        `[CHAT_PIPELINE] templateId=${chatMsg.templateId} did not resolve; ` +
-          `falling back to normal handling`,
-      );
     }
 
     // Step 2.5: Check if this is a report generation request (keyword path)
@@ -501,17 +552,62 @@ export async function processChatMessage(
     // which also finalizes any still-running step on `done`, so a missed end is
     // harmless. Each phase starts/ends at most once (idempotent), so repeated
     // thinking/assistant events never duplicate or revive a phase.
+    // Accumulate the sanitized timeline as it streams so it can be persisted to
+    // history_messages.metadata at the end of the turn. Mirrors the frontend's
+    // applyStep merge (start → running step; end → mark completed/failed with
+    // duration) so the saved shape matches what the live panel rendered. Carries
+    // only label/category/status/duration — never tool args (see ActivityStep).
+    type StoredStep = {
+      id: string;
+      index: number;
+      label: string;
+      category: StepCategory;
+      status: "running" | "completed" | "failed";
+      durationMs?: number;
+      detail?: string;
+    };
+    const storedSteps: StoredStep[] = [];
+    const recordStep = (step: ActivityStep) => {
+      const existing = storedSteps.find((s) => s.id === step.stepId);
+      if (step.phase === "end") {
+        if (existing) {
+          existing.status = step.status ?? "completed";
+          if (step.durationMs != null) existing.durationMs = step.durationMs;
+          if (step.detail) existing.detail = step.detail;
+        } else {
+          storedSteps.push({
+            id: step.stepId,
+            index: step.index,
+            label: step.label,
+            category: step.category,
+            status: step.status ?? "completed",
+            durationMs: step.durationMs,
+            ...(step.detail ? { detail: step.detail } : {}),
+          });
+        }
+      } else if (!existing) {
+        storedSteps.push({
+          id: step.stepId,
+          index: step.index,
+          label: step.label,
+          category: step.category,
+          status: step.status ?? "running",
+        });
+      }
+    };
+    // Push a step to the live frontend AND record it for history persistence.
+    const emitStep = (step: ActivityStep) => {
+      recordStep(step);
+      void mercure.pushStep(mercureTopic, step, chatMsg.historyId);
+    };
+
     const phaseState = new Map<string, { ended: boolean; startedAt: number }>();
     const startPhase = (stepId: string, index: number, label: string, category: StepCategory) => {
       if (phaseState.has(stepId)) {
         return;
       }
       phaseState.set(stepId, { ended: false, startedAt: Date.now() });
-      void mercure.pushStep(
-        mercureTopic,
-        { phase: "start", stepId, index, label, category, status: "running" },
-        chatMsg.historyId,
-      );
+      emitStep({ phase: "start", stepId, index, label, category, status: "running" });
     };
     const endPhase = (stepId: string, label: string, category: StepCategory, detail?: string) => {
       const entry = phaseState.get(stepId);
@@ -519,20 +615,16 @@ export async function processChatMessage(
         return;
       }
       entry.ended = true;
-      void mercure.pushStep(
-        mercureTopic,
-        {
-          phase: "end",
-          stepId,
-          index: 0,
-          label,
-          category,
-          status: "completed",
-          durationMs: Math.max(0, Date.now() - entry.startedAt),
-          ...(detail ? { detail } : {}),
-        },
-        chatMsg.historyId,
-      );
+      emitStep({
+        phase: "end",
+        stepId,
+        index: 0,
+        label,
+        category,
+        status: "completed",
+        durationMs: Math.max(0, Date.now() - entry.startedAt),
+        ...(detail ? { detail } : {}),
+      });
     };
 
     const INIT_STEP_ID = "init";
@@ -584,7 +676,7 @@ export async function processChatMessage(
         // acting — close those phases so the tool step reads as the next stage.
         endInitStep();
         endThinkStep();
-        void mercure.pushStep(mercureTopic, step, chatMsg.historyId);
+        emitStep(step);
       },
     });
 
@@ -658,9 +750,23 @@ export async function processChatMessage(
           "answer only from the current conversation and the data provided. "
         : "";
 
+      // A selected template's body is injected so the agent can reference it
+      // (the "先学习一下模板" flow) while it greets the user.
+      const templateContext = selectedTemplate ? buildTemplateContext(selectedTemplate) : "";
+
+      // On the template path the report is generated right after this turn, so we
+      // steer the turn to be a short, natural acknowledgement of the user's
+      // message rather than a free-form answer (and never the report itself).
+      const ackDirective = pendingReport
+        ? "[acknowledge-and-report] 用户选择了报告模板" +
+          `《${pendingReport.tpl.name}》（${pendingReport.tpl.period}），` +
+          "系统会在你回复后立即开始生成这份报告。请用一两句自然、口语化的话承接用户刚才说的内容，" +
+          "并表明你已了解这份模板、马上为其生成报告。本轮不要调用任何工具，也不要输出报告正文。 "
+        : "";
+
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}`,
+        message: `${ackDirective}${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}`,
         deliver: false,
       });
 
@@ -727,6 +833,50 @@ export async function processChatMessage(
       endInitStep();
       endThinkStep();
       endPhase(ANSWER_STEP_ID, ANSWER_STEP_LABEL, "answer");
+
+      // Step 7b: Persist the now-finalized work-process timeline so the lobster
+      // history view can replay the "工作过程" panel. Best-effort — a metadata
+      // write failure must never fail an otherwise-successful turn.
+      if (storedSteps.length > 0) {
+        try {
+          await historyManager.updateMetadata(chatMsg.historyId, { steps: storedSteps });
+        } catch (metaErr) {
+          logger.warn(
+            `[CHAT_PIPELINE] Persisting steps metadata failed (non-fatal): ${String(metaErr)}`,
+          );
+        }
+      }
+
+      // Step 8b: Template path — now that the user has been greeted, enqueue the
+      // report. This opens the frontend report card (`report_created`) before the
+      // `done` below, and the report itself streams in later as a `report` event.
+      // Enqueue is a fast INSERT + publish; it never blocks on the data COUNT.
+      if (pendingReport && downloadManager) {
+        try {
+          await enqueueReportTask({
+            period: pendingReport.tpl.period,
+            // The user's typed text becomes the requirement; it may just be the
+            // template name when they only clicked the template without editing.
+            requirement: userMessage,
+            dateScope: pendingReport.dateScope,
+            topicId: pendingReport.topic.topicId,
+            useSlaveTopic: pendingReport.topic.useSlaveTopic,
+            masterId: pendingReport.topic.masterId,
+            templateId: pendingReport.tpl.id,
+            chatMsg,
+            mercure,
+            mercureTopic,
+            downloadManager,
+            feedCounter,
+            reportTaskPublisher,
+            logger,
+          });
+        } catch (reportErr) {
+          // The greeting already reached the user; a failed enqueue must not turn
+          // the whole turn into an error. Log and let the turn finish cleanly.
+          logger.error(`[CHAT_PIPELINE] Report enqueue failed after ack: ${String(reportErr)}`);
+        }
+      }
 
       // Step 8: Finish streaming — flush remaining buffer + push done signal
       await streamPusherCtx.streamPusher.finish();

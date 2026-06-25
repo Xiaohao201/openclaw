@@ -3,6 +3,7 @@ import { EmailSender } from "./src/email-sender.js";
 import { FeedCollector } from "./src/feed-collector.js";
 import { ReportGenerator } from "./src/generator.js";
 import { MercurePusher, StreamingMercurePusher } from "./src/mercure-pusher.js";
+import { ReportHistoryWriter, type ReportStep } from "./src/report-history-writer.js";
 import { TaskListener } from "./src/task-listener.js";
 import { TaskPoller } from "./src/task-poller.js";
 import { TemplateLoader } from "./src/template-loader.js";
@@ -158,6 +159,7 @@ export default definePluginEntry({
         const templateLoader = new TemplateLoader(config.historyDb);
         const reportGenerator = new ReportGenerator(api.runtime);
         const taskPoller = new TaskPoller(config.historyDb, config.pollIntervalMs);
+        const reportHistoryWriter = new ReportHistoryWriter(config.historyDb);
 
         feedCollectorRef = feedCollector;
         taskPollerRef = taskPoller;
@@ -200,7 +202,11 @@ export default definePluginEntry({
           // First-byte ack: the user sees a reaction the moment the task is
           // claimed, before template loading / query planning emit their
           // first progress line. Fire-and-forget: never blocks generation.
-          void mercurePusher.pushReportProgress(streamTopic, "已接到报告任务，正在准备数据…", task.id);
+          void mercurePusher.pushReportProgress(
+            streamTopic,
+            "已接到报告任务，正在准备数据…",
+            task.id,
+          );
 
           try {
             if (!dateScope.start || !dateScope.end) {
@@ -226,6 +232,49 @@ export default definePluginEntry({
                     logger,
                   )
                 : await templateLoader.loadTemplate(task.period, task.uid, logger, task.topicId);
+
+            // Accumulate the sanitized "工作过程" timeline as it streams so it can
+            // be persisted alongside the report (see report writeback below).
+            // Mirrors the frontend applyStep merge (start → running; end → mark
+            // completed/failed with duration). Sanitized fields only — no args.
+            const reportSteps: ReportStep[] = [];
+            const recordReportStep = (step: {
+              phase: "start" | "end";
+              stepId: string;
+              index: number;
+              label: string;
+              category: string;
+              status: "running" | "completed" | "failed";
+              durationMs?: number;
+              detail?: string;
+            }) => {
+              const existing = reportSteps.find((s) => s.id === step.stepId);
+              if (step.phase === "end") {
+                if (existing) {
+                  existing.status = step.status ?? "completed";
+                  if (step.durationMs != null) existing.durationMs = step.durationMs;
+                  if (step.detail) existing.detail = step.detail;
+                } else {
+                  reportSteps.push({
+                    id: step.stepId,
+                    index: step.index,
+                    label: step.label,
+                    category: step.category,
+                    status: step.status ?? "completed",
+                    durationMs: step.durationMs,
+                    ...(step.detail ? { detail: step.detail } : {}),
+                  });
+                }
+              } else if (!existing) {
+                reportSteps.push({
+                  id: step.stepId,
+                  index: step.index,
+                  label: step.label,
+                  category: step.category,
+                  status: step.status ?? "running",
+                });
+              }
+            };
 
             // Generate report, streaming LLM deltas to the frontend in real
             // time. Data flows LLM-plan -> code-validated SQL -> digest:
@@ -258,6 +307,7 @@ export default definePluginEntry({
                 // Structured timeline steps for the report card's "工作过程"
                 // panel. Fire-and-forget: never blocks generation.
                 onStep: (step) => {
+                  recordReportStep(step);
                   void mercurePusher.pushReportStep(streamTopic, step, task.id);
                 },
               },
@@ -266,6 +316,31 @@ export default definePluginEntry({
 
             // Update download record
             await taskPoller.updateTaskResult(task.id, report.title, report.content, "Done");
+
+            // Write the finished report back into the originating chat-history
+            // row (metadata.report) so the lobster history view shows the full
+            // report + its work-process, not just the "正在生成中..." ack. The
+            // historyId was stored in params by the rabbitmq-consumer. Keyword
+            // / scheduled tasks without one simply skip this. Best-effort.
+            const reportHistoryId =
+              typeof params.historyId === "number"
+                ? params.historyId
+                : typeof params.historyId === "string"
+                  ? parseInt(params.historyId, 10) || 0
+                  : 0;
+            if (reportHistoryId > 0) {
+              try {
+                await reportHistoryWriter.writeReport(
+                  reportHistoryId,
+                  { title: report.title, content: report.content, steps: reportSteps },
+                  logger,
+                );
+              } catch (writeErr) {
+                logger.warn(
+                  `[REPORT_GENERATOR] Report history writeback failed (non-fatal): ${String(writeErr)}`,
+                );
+              }
+            }
 
             // Flush any buffered stream text, then deliver the final report
             // event and unlock the frontend.

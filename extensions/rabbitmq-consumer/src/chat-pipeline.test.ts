@@ -674,22 +674,34 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
   });
 
-  it("queues an explicit template-driven report and bypasses the chat subagent", async () => {
-    // The frontend's template panel sends a report_template.id. Its own period
-    // (not message keywords) drives the report, and the chat subagent is never
-    // run for this turn.
+  it("greets the user then enqueues the report when a template is selected", async () => {
+    // Selecting a report_template ALWAYS produces a report, but the user is first
+    // greeted by a streamed conversational reply (the chat subagent runs), and
+    // the report is enqueued afterwards with the template's own period + id.
     const createReportTask = vi.fn(async (_args: Record<string, unknown>) => 123);
     const downloadManager = { createReportTask } as unknown as DownloadManager;
-    const resolve = vi.fn(async () => ({ id: 7, period: "周报" as const, name: "我的周报" }));
+    const resolve = vi.fn(async () => ({
+      id: 7,
+      period: "周报" as const,
+      name: "我的周报",
+      content: "# 舆情专报模板\n## 概述\n{summary}",
+      description: "客户定制模板",
+    }));
     const templateLookup = { resolve } as unknown as ReportTemplateLookup;
 
     let ranSubagent = false;
+    let capturedMessage = "";
     const runtime = createRuntimeMock({
       workspaceDir,
       onRun: () => {
         ranSubagent = true;
       },
-      sessionMessages: [{ role: "assistant", content: "should not be used" }],
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [
+        { role: "assistant", content: "好的，我看过这份模板了，这就为您生成周报。" },
+      ],
     });
     const { historyManager } = createHistoryManagerMock();
     const topicResolver = {
@@ -717,6 +729,7 @@ describe("processChatMessage", () => {
     );
 
     expect(resolve).toHaveBeenCalledWith(7, USER_ID, logger);
+    // The report is still created, with the template's period/id and resolved topic.
     expect(createReportTask).toHaveBeenCalledTimes(1);
     const taskArg = createReportTask.mock.calls[0][0] as unknown as {
       period: string;
@@ -728,9 +741,14 @@ describe("processChatMessage", () => {
     expect(taskArg.templateId).toBe(7);
     expect(taskArg.topicId).toBe(585);
     expect(taskArg.requirement).toBe("重点关注负面");
-    expect(result).toContain("周报报告已创建");
-    // Report path returns before the chat subagent runs.
-    expect(ranSubagent).toBe(false);
+    // The user is greeted first: the chat subagent ran and its reply is returned.
+    expect(ranSubagent).toBe(true);
+    expect(result).toBe("好的，我看过这份模板了，这就为您生成周报。");
+    // The acknowledgement turn is steered and sees the template body.
+    expect(capturedMessage).toContain("acknowledge-and-report");
+    expect(capturedMessage).toContain("我的周报");
+    expect(capturedMessage).toContain("舆情专报模板");
+    expect(capturedMessage).toContain("重点关注负面");
   });
 
   it("routes the report to the requirement-named topic, not just the primary", async () => {
@@ -965,5 +983,67 @@ describe("processChatMessage", () => {
 
     expect(createReportTask).not.toHaveBeenCalled();
     expect(result).toBe("normal answer");
+  });
+
+  it("greets first, then still generates the report, for a conversational template message", async () => {
+    // The original complaint: "你先学习一下这份模版，接下来合作" arrived WITH a templateId
+    // and spawned a report with no conversation. New behavior: the agent greets
+    // (chat subagent runs, template body injected so it can learn it) AND the
+    // report is still generated — selecting a template is the request for it.
+    const createReportTask = vi.fn(async () => 1);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    const resolve = vi.fn(async () => ({
+      id: 7,
+      period: "周报" as const,
+      name: "我的周报",
+      content: "# 舆情专报模板\n## 概述\n{summary}",
+      description: "客户定制模板",
+    }));
+    const templateLookup = { resolve } as unknown as ReportTemplateLookup;
+
+    let capturedMessage = "";
+    let ranSubagent = false;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {
+        ranSubagent = true;
+      },
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [
+        { role: "assistant", content: "好的，我已经看过这份模板了，这就为您生成。" },
+      ],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    const chatMsg: ChatMessage = {
+      ...createChatMessage(),
+      message: "你先学习一下这份舆情专报的模版，接下来我跟你一起合作",
+      templateId: 7,
+    };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      undefined,
+      undefined,
+      undefined,
+      templateLookup,
+    );
+
+    // Greeted first: the chat subagent ran and its reply is returned.
+    expect(ranSubagent).toBe(true);
+    expect(result).toBe("好的，我已经看过这份模板了，这就为您生成。");
+    // The report is still generated after the greeting.
+    expect(createReportTask).toHaveBeenCalledTimes(1);
+    // The template body is injected so the agent can actually "learn" it.
+    expect(capturedMessage).toContain("用户当前选中了报告模板");
+    expect(capturedMessage).toContain("舆情专报模板");
+    // The user's words are still present, ahead of the injected template block.
+    expect(capturedMessage).toContain("你先学习一下这份舆情专报的模版");
   });
 });
