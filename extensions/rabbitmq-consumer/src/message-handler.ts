@@ -29,6 +29,7 @@ const rabbitMqMessageSchema = z.object({
       use_websearch: z.boolean().optional().default(false),
       topic: z.string().optional(),
       template_id: templateIdSchema,
+      has_attachment: z.boolean().optional(),
     })
     .optional(),
   message: z.string().optional(),
@@ -41,6 +42,7 @@ const rabbitMqMessageSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   topic: z.string().optional(),
   template_id: templateIdSchema,
+  has_attachment: z.boolean().optional(),
 });
 
 /**
@@ -110,6 +112,7 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
       // Accept template_id from either the nested body or the top level so the
       // producer can put it wherever the rest of its fields live.
       templateId: msg.body.template_id ?? msg.template_id,
+      hasAttachment: msg.body.has_attachment ?? msg.has_attachment ?? false,
     };
   }
 
@@ -126,5 +129,6 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
     maxTokens: msg.max_tokens,
     topic: msg.topic,
     templateId: msg.template_id,
+    hasAttachment: msg.has_attachment ?? false,
   };
 }

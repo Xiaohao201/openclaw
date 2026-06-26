@@ -47,4 +47,23 @@ describe("parseMessage", () => {
     );
     expect(msg?.templateId).toBe(3);
   });
+
+  it("defaults hasAttachment to false when absent", () => {
+    const msg = parseMessage(buf({ id: 5, message: "hello", user_id: 42 }));
+    expect(msg?.hasAttachment).toBe(false);
+  });
+
+  it("parses has_attachment from the flat format", () => {
+    const msg = parseMessage(
+      buf({ id: 5, message: "分析这份表", user_id: 42, has_attachment: true }),
+    );
+    expect(msg?.hasAttachment).toBe(true);
+  });
+
+  it("reads has_attachment from the nested body (old format)", () => {
+    const msg = parseMessage(
+      buf({ id: 9, body: { message: "分析这份表", user_id: 42, has_attachment: true } }),
+    );
+    expect(msg?.hasAttachment).toBe(true);
+  });
 });

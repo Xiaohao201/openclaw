@@ -1093,4 +1093,114 @@ describe("processChatMessage", () => {
     // The user's words are still present, ahead of the injected template block.
     expect(capturedMessage).toContain("你先学习一下这份舆情专报的模版");
   });
+
+  it("does NOT route a keyword report to the internal DB when a file is attached", async () => {
+    // Regression: uploading an Excel + a prompt containing "日报/月报" wrongly
+    // triggered the keyword path, which queried the 智脑 feed tables (ignoring
+    // the upload) and returned "暂无舆情数据". With an attachment the turn must
+    // run as a normal chat so the agent analyzes the spliced file content.
+    const createReportTask = vi.fn(async () => 1);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    const countFeedData = vi.fn(async () => 0);
+    const feedCounter = { countFeedData } as unknown as never;
+
+    let ranSubagent = false;
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {
+        ranSubagent = true;
+      },
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "已根据附件生成日报分析" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    const chatMsg: ChatMessage = {
+      ...createChatMessage(),
+      message: "请基于附件生成深圳卫健委3月舆情日报分析",
+      hasAttachment: true,
+    };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      undefined,
+      feedCounter,
+    );
+
+    // No internal-DB report task, and the chat subagent ran on the upload.
+    expect(createReportTask).not.toHaveBeenCalled();
+    expect(ranSubagent).toBe(true);
+    expect(result).toBe("已根据附件生成日报分析");
+    // The agent is steered to use the attachment, not the internal 舆情库.
+    expect(capturedMessage).toContain("analyze-attachment");
+    expect(capturedMessage).toContain("仅依据附件中的数据");
+  });
+
+  it("keeps a selected template as a format guide (no internal-DB report) when a file is attached", async () => {
+    // Selecting a report template normally forces an internal-DB report. With an
+    // attachment, the template must instead serve only as a structure/format
+    // guide while the agent writes the report from the uploaded data.
+    const createReportTask = vi.fn(async () => 1);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    const resolve = vi.fn(async () => ({
+      id: 7,
+      period: "日报" as const,
+      name: "卫健委舆情专报",
+      content: "# 舆情专报模板\n## 重点事件\n{events}",
+      description: "政务模板",
+    }));
+    const templateLookup = { resolve } as unknown as ReportTemplateLookup;
+
+    let ranSubagent = false;
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {
+        ranSubagent = true;
+      },
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "已按模板用附件数据产出报告" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    const chatMsg: ChatMessage = {
+      ...createChatMessage(),
+      message: "请基于附件按这份专报模板生成分析",
+      templateId: 7,
+      hasAttachment: true,
+    };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      undefined,
+      undefined,
+      undefined,
+      templateLookup,
+    );
+
+    // The template resolved (so it can guide format) but NO report was enqueued.
+    expect(resolve).toHaveBeenCalledWith(7, USER_ID, logger);
+    expect(createReportTask).not.toHaveBeenCalled();
+    expect(ranSubagent).toBe(true);
+    expect(result).toBe("已按模板用附件数据产出报告");
+    // Template body is injected as a guide, and the attachment directive names it.
+    expect(capturedMessage).toContain("analyze-attachment");
+    expect(capturedMessage).toContain("卫健委舆情专报");
+    expect(capturedMessage).toContain("舆情专报模板");
+    // It must NOT use the report-acknowledgement directive (that path is skipped).
+    expect(capturedMessage).not.toContain("acknowledge-and-report");
+  });
 });

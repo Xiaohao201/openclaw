@@ -59,6 +59,14 @@ export interface ChatMessage {
    * template instead of waterfall-resolving one. Absent for ordinary chat.
    */
   templateId?: number;
+  /**
+   * True when the user attached one or more files this turn (the frontend
+   * splices their MarkItDown text into `message`). An attachment means the
+   * user wants the agent to analyze THAT content, so it overrides the
+   * internal-DB report routing (keyword + template paths): we never query the
+   * 智脑 feed tables when data was uploaded. See chat-pipeline Step 2.4/2.5.
+   */
+  hasAttachment?: boolean;
 }
 
 /** History record from MySQL */

@@ -468,7 +468,17 @@ export async function processChatMessage(
     } | null = null;
     if (chatMsg.templateId && templateLookup) {
       const tpl = await templateLookup.resolve(chatMsg.templateId, userId, logger);
-      if (tpl && downloadManager) {
+      if (tpl && chatMsg.hasAttachment) {
+        // Attachment overrides the internal-DB report: the user uploaded the
+        // data to analyze, so we keep the template as a FORMAT guide (injected
+        // below) but do not query the 智脑 feed tables. The turn runs as a
+        // normal chat turn and the agent writes the report from the attachment.
+        selectedTemplate = tpl;
+        logger.info(
+          `[CHAT_PIPELINE] Template #${tpl.id} ("${tpl.name}") selected WITH attachment -> ` +
+            `analyze upload using template as format guide (no internal-DB report)`,
+        );
+      } else if (tpl && downloadManager) {
         logger.info(
           `[CHAT_PIPELINE] Template #${tpl.id} ("${tpl.name}") selected -> ` +
             `acknowledge then generate ${tpl.period}`,
@@ -498,9 +508,13 @@ export async function processChatMessage(
       }
     }
 
-    // Step 2.5: Check if this is a report generation request (keyword path)
+    // Step 2.5: Check if this is a report generation request (keyword path).
+    // Skipped when the user attached a file: an upload means "analyze THIS data"
+    // and the keyword (日报/月报/…) in the prompt must not divert the turn to the
+    // internal 智脑 feed tables (which would ignore the attachment and report
+    // "暂无数据"). The attachment content is already in `userMessage`.
     const triggerResult = detectReportRequest(userMessage, logger);
-    if (triggerResult.isReportRequest && downloadManager) {
+    if (triggerResult.isReportRequest && downloadManager && !chatMsg.hasAttachment) {
       logger.info(`[CHAT_PIPELINE] Report request detected: ${triggerResult.period}`);
 
       const topic = await resolveReportTopic({
@@ -798,9 +812,25 @@ export async function processChatMessage(
           "本轮不要调用任何工具，也不要输出报告正文。 "
         : "";
 
+      // Attachment path: the user uploaded data (already spliced into the
+      // message) and wants it analyzed. Steer the agent to base its answer on
+      // the attached content — never on the internal 智脑 库 — and, when a
+      // template was selected, to follow that template's structure for the
+      // write-up. Tools stay allowed (the agent may use the excel skill, etc.).
+      const attachmentDirective =
+        chatMsg.hasAttachment && !pendingReport
+          ? "[analyze-attachment] 用户本轮上传了附件，正文里已包含附件内容。" +
+            "请【仅依据附件中的数据】进行分析与撰写，不要查询或编造系统内部舆情库的数据；" +
+            "若附件数据不足以回答某一点，如实说明而非以内部数据补足。" +
+            (selectedTemplate
+              ? `请按所选模板《${selectedTemplate.name}》的结构和文风，用附件数据产出完整的报告正文。`
+              : "") +
+            " "
+          : "";
+
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${ackDirective}${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}`,
+        message: `${ackDirective}${attachmentDirective}${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}`,
         deliver: false,
       });
 
