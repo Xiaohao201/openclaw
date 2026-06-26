@@ -1,10 +1,30 @@
 import { Type } from "@sinclair/typebox";
-import { jsonResult, type OpenClawPluginApi } from "../api.js";
+import { jsonResult, type OpenClawPluginApi, type PluginRuntime } from "../api.js";
 import { isNewsMedia } from "./media-whitelist.js";
 import { extractAssistantText } from "./message-text.js";
 import { buildRiskJudgeUserMessage, parseRiskResult, RISK_JUDGE_SYSTEM_PROMPT } from "./rubric.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+/**
+ * The gateway publishes its real subagent runtime onto this process-global at
+ * startup (see core `setGatewaySubagentRuntime`). We read it directly because a
+ * plugin TOOL invoked inside a live chat turn frequently gets a request-scoped
+ * runtime whose `api.runtime.subagent` is an UNAVAILABLE stub — calling `.run()`
+ * on it throws RequestScopedSubagentRuntimeError, which surfaced to the user as
+ * "风险研判工具暂时不可用". The core late-binding proxy reads the same global; we
+ * just resolve it explicitly so this tool works regardless of whether our
+ * plugin's registry happened to be loaded with gateway-subagent binding.
+ */
+const GATEWAY_SUBAGENT_SYMBOL = Symbol.for("openclaw.plugin.gatewaySubagentRuntime");
+
+/** Prefer the gateway-published subagent; fall back to the tool-context runtime. */
+function resolveSubagent(api: OpenClawPluginApi): PluginRuntime["subagent"] | undefined {
+  const holder = (globalThis as Record<PropertyKey, unknown>)[GATEWAY_SUBAGENT_SYMBOL] as
+    | { subagent?: PluginRuntime["subagent"] }
+    | undefined;
+  return holder?.subagent ?? api.runtime?.subagent;
+}
 
 const RiskJudgeSchema = Type.Object(
   {
@@ -68,9 +88,9 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
         const title = asString(rawParams.title);
         const authorIsMedia = isNewsMedia(author);
 
-        const runtime = api.runtime;
-        if (!runtime?.subagent) {
-          api.logger.error("[RISK_JUDGE] runtime.subagent unavailable");
+        const subagent = resolveSubagent(api);
+        if (!subagent) {
+          api.logger.error("[RISK_JUDGE] subagent runtime unavailable");
           return jsonResult({ success: false, error: "Model runtime is unavailable." });
         }
 
@@ -79,13 +99,13 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
         const userMessage = buildRiskJudgeUserMessage({ content, author, title, authorIsMedia });
 
         try {
-          const run = await runtime.subagent.run({
+          const run = await subagent.run({
             sessionKey,
             message: userMessage,
             extraSystemPrompt: RISK_JUDGE_SYSTEM_PROMPT,
             deliver: false,
           });
-          const wait = await runtime.subagent.waitForRun({
+          const wait = await subagent.waitForRun({
             runId: run.runId,
             timeoutMs: config.timeoutMs,
           });
@@ -98,7 +118,7 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
             });
           }
 
-          const session = await runtime.subagent.getSessionMessages({ sessionKey, limit: 5 });
+          const session = await subagent.getSessionMessages({ sessionKey, limit: 5 });
           const text = extractAssistantText(session.messages);
           const parsed = parseRiskResult(text);
           if (!parsed) {
@@ -118,7 +138,7 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
         } finally {
           // Best-effort cleanup of the ephemeral grading session.
           try {
-            await runtime.subagent.deleteSession({ sessionKey });
+            await subagent.deleteSession({ sessionKey });
           } catch {
             // ignore — session GC is not critical to the result
           }
