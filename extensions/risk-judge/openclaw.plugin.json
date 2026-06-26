@@ -1,0 +1,16 @@
+{
+  "id": "risk-judge",
+  "name": "Risk Judge",
+  "description": "舆情风险研判工具：对一段舆情内容套用标准化评级规则（3 标准 / 5 级 → 蓝/黄/橙/红/高危预警）并结合权威媒体白名单，调用当前配置的模型产出可复现的研判正文与处置建议。",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "timeoutMs": {
+        "type": "number",
+        "default": 120000,
+        "description": "Max time to wait for the model to produce a 研判 before failing the tool."
+      }
+    },
+    "additionalProperties": false
+  }
+}

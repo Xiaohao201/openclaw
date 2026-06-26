@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/risk-judge",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw risk-judge plugin: 舆情风险研判 tool applying a standardized 3-标准/5-级 rubric (蓝/黄/橙/红/高危) plus an authoritative media whitelist, run against the agent's configured model.",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.16"
+    },
+    "build": {
+      "openclawVersion": "2026.4.16"
+    }
+  }
+}
