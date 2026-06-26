@@ -1,4 +1,4 @@
-import { sanitizeInternalRefs } from "./sanitize-output.js";
+import { stripInternalRefs } from "./sanitize-output.js";
 import type { ActivityStep } from "./tool-activity.js";
 import type { MercureConfig } from "./types.js";
 
@@ -196,6 +196,13 @@ export class StreamingMercurePusher {
    * Flush buffered text immediately (ordered after in-flight pushes), stripping
    * any internal references before they reach the client.
    *
+   * Uses {@link stripInternalRefs} (refs only, NO whitespace tidying): a chunk
+   * boundary is arbitrary and often lands on the blank line between markdown
+   * blocks or the space after a `###` marker, so trimming per chunk would delete
+   * that structural whitespace and the frontend would render glued, broken
+   * markdown (`---##`, `###1.`). The final persisted response is tidied once as a
+   * whole document in the chat pipeline, where boundary whitespace is interior.
+   *
    * To keep a path that straddles two flush windows from being pushed half-open
    * (and thus slipping past the sanitizer), an unterminated code span — odd
    * number of backticks — is held back in the buffer until its closing backtick
@@ -212,7 +219,7 @@ export class StreamingMercurePusher {
     } else {
       this.buffer = "";
     }
-    const safe = sanitizeInternalRefs(chunk);
+    const safe = stripInternalRefs(chunk);
     this.pending = this.pending.then(async () => {
       if (safe) {
         await this.pusher.pushText(this.topic, safe, this.historyId);

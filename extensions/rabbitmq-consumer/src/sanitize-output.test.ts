@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeInternalRefs } from "./sanitize-output.js";
+import { sanitizeInternalRefs, stripInternalRefs } from "./sanitize-output.js";
 
 describe("sanitizeInternalRefs", () => {
   it("removes a backticked workspace path together with its lead-in verb", () => {
@@ -79,5 +79,37 @@ describe("sanitizeInternalRefs", () => {
     expect(out).toContain("下一步：B。");
     // The sentence that was nothing but a path leaves no dangling "。" line.
     expect(out).not.toMatch(/(^|\n)。(\n|$)/);
+  });
+});
+
+describe("stripInternalRefs", () => {
+  it("strips internal refs but PRESERVES surrounding whitespace (no trim/tidy)", () => {
+    // This is the streaming-safe variant: it must never touch boundary whitespace.
+    expect(stripInternalRefs("\n\n### ")).toBe("\n\n### ");
+    expect(stripInternalRefs("环节\n\n")).toBe("环节\n\n");
+    expect(stripInternalRefs("  leading and trailing  ")).toBe("  leading and trailing  ");
+    expect(stripInternalRefs("a\n\n\n\nb")).toBe("a\n\n\n\nb"); // 4 newlines NOT collapsed
+  });
+
+  it("still removes internal paths / injected context / session keys", () => {
+    expect(stripInternalRefs("见 `memory/x.md` 完成")).not.toContain("memory");
+    expect(stripInternalRefs("ctx [userId:42] 你好")).not.toContain("userId");
+    expect(stripInternalRefs("run agent:rabbitmq-1:rabbitmq:1:abc done")).not.toContain("agent:");
+  });
+
+  it("is whitespace-boundary-safe across an adversarially split block boundary", () => {
+    // The exact failure mode: a flush boundary on the blank line / heading space.
+    // Stripping each fragment then rejoining must equal the original document.
+    const doc = "环节\n\n### 10. 港大深圳医院";
+    const a = stripInternalRefs("环节\n\n") + stripInternalRefs("### 10. 港大深圳医院");
+    const b = stripInternalRefs("环节\n\n### ") + stripInternalRefs("10. 港大深圳医院");
+    expect(a).toBe(doc);
+    expect(b).toBe(doc);
+  });
+
+  it("returns empty string for non-string input without throwing", () => {
+    expect(() => stripInternalRefs([{ text: "x" }] as never)).not.toThrow();
+    expect(stripInternalRefs(null as never)).toBe("");
+    expect(stripInternalRefs(undefined as never)).toBe("");
   });
 });

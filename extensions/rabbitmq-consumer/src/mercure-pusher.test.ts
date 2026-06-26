@@ -122,4 +122,48 @@ describe("StreamingMercurePusher push ordering", () => {
     await errorPromise;
     expect(calls).toEqual(["text:部分输出", "error:boom"]);
   });
+
+  it("preserves structural whitespace when markdown is split across flush windows", async () => {
+    // Regression: the flusher used to run the whitespace-tidying sanitizer per
+    // chunk, so a flush boundary landing on the blank line between blocks (or on
+    // the space after a `###` marker) was trimmed away. The frontend then
+    // concatenated the pieces with that whitespace gone, rendering glued markdown
+    // (`---##`, `环节### 10`, `###1.`). The pushed pieces must rejoin byte-for-byte.
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 9, 80);
+    const drain = async () => {
+      while (resolvers.length) {
+        resolvers.shift()!();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    };
+
+    const doc =
+      "**标题**\n\n---\n\n## （一）清单\n\n正文一段。\n\n### 1. 事件甲\n\n描述。\n\n### 2. 事件乙\n\n表格如下：\n\n| 列 | 值 |\n|----|----|\n| a | 1 |\n";
+    // Adversarial slices: boundaries fall exactly on the blank lines and on the
+    // space right after the `###` / `##` markers — the spots the old code ate.
+    const slices = [
+      "**标题**\n\n",
+      "---\n\n## ",
+      "（一）清单\n\n正文一段。\n\n### ",
+      "1. 事件甲\n\n描述。\n\n### ",
+      "2. 事件乙\n\n表格如下：\n\n| 列 | 值 |\n|----|----|\n| a | 1 |\n",
+    ];
+    expect(slices.join("")).toBe(doc); // sanity: slices reconstruct the source
+
+    for (const s of slices) {
+      pusher.appendDelta(s);
+      await vi.advanceTimersByTimeAsync(80);
+      await drain();
+    }
+    const finishPromise = pusher.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await drain();
+    await finishPromise;
+
+    const streamed = calls
+      .filter((c) => c.startsWith("text:"))
+      .map((c) => c.slice("text:".length))
+      .join("");
+    expect(streamed).toBe(doc);
+  });
 });

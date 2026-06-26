@@ -68,22 +68,41 @@ function tidy(text: string): string {
 }
 
 /**
- * Remove internal references from a chunk of assistant text. Pure: returns a new
- * string, never mutates. Safe to call on streaming fragments and on the final
- * persisted response.
+ * Remove internal references WITHOUT touching whitespace. Pure: returns a new
+ * string, never mutates.
+ *
+ * Use this on STREAMING fragments. The streaming flusher cuts the reply into
+ * arbitrary chunks (every ~80ms); a chunk boundary routinely lands on the blank
+ * line between two markdown blocks, or on the single space after a `###` ATX
+ * marker. The whitespace-tidying `tidy()` ends in `.trim()` and strips line-edge
+ * whitespace, so running it per chunk DELETES that boundary whitespace — the
+ * frontend then concatenates the pieces with the blank line / heading space gone
+ * (`---##`, `环节### 10`, `###1.`). Stripping refs alone is boundary-safe.
  */
-export function sanitizeInternalRefs(text: string): string {
+export function stripInternalRefs(text: string): string {
   // Defensive: callers should pass a string, but a non-string (e.g. a raw
   // content-block array) must never crash the chat pipeline via `.replace`.
   if (typeof text !== "string" || !text) {
     return typeof text === "string" ? text : "";
   }
-  const stripped = text
+  return text
     .replace(BACKTICKED_INTERNAL, "")
     .replace(OPENCLAW_ROOT, "")
     .replace(BARE_INTERNAL_PATH, "")
     .replace(INJECTED_CONTEXT, "")
     .replace(AGENT_SESSION_KEY, "")
     .replace(AGENT_ID, "");
-  return tidy(stripped);
+}
+
+/**
+ * Remove internal references AND tidy whitespace. Pure: returns a new string,
+ * never mutates. Apply this to a WHOLE document (the final persisted response),
+ * never to a streaming fragment — see {@link stripInternalRefs} for why tidying
+ * a chunk corrupts markdown structure at the chunk boundary.
+ */
+export function sanitizeInternalRefs(text: string): string {
+  if (typeof text !== "string" || !text) {
+    return typeof text === "string" ? text : "";
+  }
+  return tidy(stripInternalRefs(text));
 }
