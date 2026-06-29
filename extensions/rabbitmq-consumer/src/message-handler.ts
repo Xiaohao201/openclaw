@@ -26,8 +26,8 @@ const attachmentRefSchema = z.object({
   filename: z.string().min(1),
   ext: z.string().min(1),
   kind: z.literal("spreadsheet"),
-  storage: z.literal("inbox"),
-  ref: z.string().min(1),
+  storage: z.literal("oss"),
+  ref: z.string().url(),
   totalDataRows: z.number().int().nonnegative().default(0),
 });
 

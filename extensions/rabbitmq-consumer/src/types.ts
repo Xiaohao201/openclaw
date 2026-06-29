@@ -41,11 +41,11 @@ export interface RabbitMqPluginConfig {
 }
 
 /**
- * Large-sheet attachment reference. The frontend persists an oversized Excel
- * (rows beyond the inline threshold) to a shared "inbox" directory and sends
- * only this lightweight reference — never the full table — so the message body
- * stays small. The consumer materializes the file into the user's agent
- * workspace, letting the agent read full row-level data on demand (code
+ * Large-sheet attachment reference. The frontend uploads an oversized Excel
+ * (rows beyond the inline threshold) to OSS and sends only this lightweight
+ * reference — never the full table — so the message body stays small. The
+ * consumer (on a different host) downloads the file via HTTP into the user's
+ * agent workspace, letting the agent read full row-level data on demand (code
  * execution / Excel skill) instead of estimating from a 15-row sample.
  * Shape must match the frontend attachment-store.
  */
@@ -54,8 +54,8 @@ export interface AttachmentRef {
   filename: string;
   ext: string;
   kind: "spreadsheet";
-  storage: "inbox";
-  /** Filename inside the inbox dir: `${fileId}.${ext}`. */
+  storage: "oss";
+  /** OSS public direct link the consumer downloads from. */
   ref: string;
   /** SheetJS-computed total data rows (excluding headers); used in the prompt. */
   totalDataRows: number;

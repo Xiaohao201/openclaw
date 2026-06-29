@@ -1,20 +1,18 @@
-import { constants } from "node:fs";
-import { copyFile, mkdir, rm, access } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, type OpenClawConfig, type PluginLogger } from "../api.js";
 import type { AttachmentRef } from "./types.js";
 
 /**
- * Materialize large-sheet attachments (originals persisted by the frontend to a
- * shared inbox) into the user's agent workspace, so the agent's file/code tools
- * — which are contained to the workspace — can read full row-level data on
- * demand instead of estimating from the inline 15-row sample.
+ * Materialize large-sheet attachments (originals uploaded by the frontend to
+ * OSS) into the user's agent workspace, so the agent's file/code tools — which
+ * are contained to the workspace — can read full row-level data on demand
+ * instead of estimating from the inline 15-row sample.
  *
- * Transfer is plan A1: a neutral inbox directory the frontend writes and this
- * consumer reads. On a single host os.tmpdir() matches, so the default works
- * out of the box; cross-host, set ATTACHMENT_INBOX to the same shared path on
- * both sides. The inbox copy is removed after a successful materialize.
+ * Transfer is plan A2: the frontend and this consumer run on different hosts
+ * (no shared filesystem), so the file travels via OSS. The frontend uploads the
+ * original and sends a public direct link; here we HTTP GET that link and write
+ * it under <workspace>/uploads/. No OSS SDK/credentials are needed on this side.
  */
 
 /** A spreadsheet now sitting in the agent workspace, ready for full-data reads. */
@@ -27,19 +25,40 @@ export interface MaterializedAttachment {
   totalDataRows: number;
 }
 
-/** Must mirror the frontend's resolveInboxDir default. */
-const resolveInboxDir = (): string =>
-  process.env.ATTACHMENT_INBOX?.trim() || path.join(os.tmpdir(), "openclaw-attachments");
-
 /** Subdirectory under the workspace where uploads land. */
 const UPLOADS_SUBDIR = "uploads";
+
+/** Cap on a single attachment download, so a bad/huge link can't exhaust memory. */
+const MAX_DOWNLOAD_BYTES = 60 * 1024 * 1024; // 60MB (frontend caps uploads at 50MB)
+
+/** Abort a stuck download rather than blocking the chat turn. */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 /** Strip path separators and parent refs so a filename can't escape uploads/. */
 const sanitizeFilename = (name: string): string =>
   path.basename(name).replace(/[\\/]/g, "_").replace(/\.\.+/g, ".").trim() || "file";
 
+/** Download an OSS public link into a buffer, bounded by size and time. */
+async function downloadToBuffer(url: string): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > MAX_DOWNLOAD_BYTES) {
+      throw new Error(`download too large (${buf.byteLength} bytes)`);
+    }
+    return buf;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * Copy each attachment from the inbox into `<workspace>/uploads/`. Returns the
+ * Download each attachment from OSS into `<workspace>/uploads/`. Returns the
  * ones that landed successfully (relative workspace paths). Never throws: a
  * failed attachment is logged and skipped so the turn degrades to the inline
  * overview+sample rather than erroring the whole chat.
@@ -56,7 +75,6 @@ export async function materializeAttachments(
 
   const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
   const uploadsDir = path.join(workspaceDir, UPLOADS_SUBDIR);
-  const inboxDir = resolveInboxDir();
 
   try {
     await mkdir(uploadsDir, { recursive: true });
@@ -67,30 +85,27 @@ export async function materializeAttachments(
 
   const results: MaterializedAttachment[] = [];
   for (const att of attachments) {
-    if (att.kind !== "spreadsheet" || att.storage !== "inbox") {
+    if (att.kind !== "spreadsheet" || att.storage !== "oss") {
       continue;
     }
-    const src = path.join(inboxDir, att.ref);
     // Prefix with fileId to avoid collisions when two uploads share a name.
     const destName = `${att.fileId}-${sanitizeFilename(att.filename)}`;
     const dest = path.join(uploadsDir, destName);
     try {
-      await access(src, constants.R_OK);
-      await copyFile(src, dest);
-      // Best-effort inbox cleanup; the workspace copy is the durable one.
-      await rm(src, { force: true }).catch(() => {});
+      const buf = await downloadToBuffer(att.ref);
+      await writeFile(dest, buf);
       results.push({
         filename: att.filename,
         workspacePath: `${UPLOADS_SUBDIR}/${destName}`,
         totalDataRows: att.totalDataRows,
       });
       logger.info(
-        `[ATTACHMENT] Materialized "${att.filename}" -> ${UPLOADS_SUBDIR}/${destName} ` +
-          `(agent ${agentId}, ${att.totalDataRows} rows)`,
+        `[ATTACHMENT] Downloaded "${att.filename}" -> ${UPLOADS_SUBDIR}/${destName} ` +
+          `(agent ${agentId}, ${att.totalDataRows} rows, ${buf.byteLength} bytes)`,
       );
     } catch (err) {
       logger.warn(
-        `[ATTACHMENT] Failed to materialize "${att.filename}" from ${src} (skipping): ${String(err)}`,
+        `[ATTACHMENT] Failed to download "${att.filename}" from ${att.ref} (skipping): ${String(err)}`,
       );
     }
   }
