@@ -865,15 +865,36 @@ export async function processChatMessage(
           "总数与占比一律以上方概览为准，不要从样本估算。 "
         : "";
 
+      // Does this attachment turn ask for a report (vs an ad-hoc question like
+      // "华东有多少条")? Template selection, the 日/周/月报 detector, or an
+      // explicit report word all count. Only then do we force full-report output
+      // — a plain question should still get a plain answer.
+      const wantsReport =
+        !!selectedTemplate ||
+        triggerResult.isReportRequest ||
+        /报告|简报|研判|通报/.test(userMessage);
+
+      // Report turns: force the COMPLETE report inline. This path streams the
+      // report AS the chat reply and stores it in history_messages.response —
+      // there is no separate file/Word export. So the model must NOT summarize
+      // and then pretend a full version was saved/exported (a recurring failure:
+      // "全文约5600字…完整报告已保存…可导出Word/PDF" while only emitting a digest).
+      const reportOutputDirective = wantsReport
+        ? "本轮是报告撰写请求：请在本次回复里【直接输出完整的报告正文】，按章节逐节完整展开" +
+          "（标题、各板块、数据分析、结论与建议全部写全），不要只给摘要、目录或要点列表。" +
+          (selectedTemplate ? `结构与文风遵循所选模板《${selectedTemplate.name}》。` : "") +
+          "本系统不会把报告另存为文件，也没有 Word/PDF 导出能力——你这次输出的正文就是最终交付物。" +
+          "因此严禁出现“完整报告已保存”“原文已存档”“可导出为Word/PDF”“全文约X字”等说法，" +
+          "更不要用一段摘要替代正文。 "
+        : "";
+
       const attachmentDirective =
         chatMsg.hasAttachment && !pendingReport
           ? "[analyze-attachment] 用户本轮上传了附件，正文里已包含附件内容。" +
             "请【仅依据附件中的数据】进行分析与撰写，不要查询或编造系统内部舆情库的数据；" +
             "若附件数据不足以回答某一点，如实说明而非以内部数据补足。" +
             largeSheetDirective +
-            (selectedTemplate
-              ? `请按所选模板《${selectedTemplate.name}》的结构和文风，用附件数据产出完整的报告正文。`
-              : "") +
+            reportOutputDirective +
             " "
           : "";
 
