@@ -7,6 +7,7 @@ import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
+import { materializeAttachments } from "./attachment-materializer.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
@@ -584,6 +585,14 @@ export async function processChatMessage(
     const agentId = `rabbitmq-${userId}`;
     const sessionKey = `agent:${agentId}:rabbitmq:${userId}:${sessionId}`;
 
+    // Large-sheet attachments: copy the originals (persisted by the frontend to
+    // the shared inbox) into this agent's workspace so the agent can read full
+    // row-level data on demand. Best-effort — failures degrade to the inline
+    // overview+sample already in `userMessage`.
+    const materializedAttachments = chatMsg.attachments?.length
+      ? await materializeAttachments(chatMsg.attachments, agentId, logger)
+      : [];
+
     // Step 3: Set up streaming pusher + subscribe to agent events.
     // Tag every push with this turn's historyId so stale frontend
     // subscriptions on the shared per-user topic can drop foreign chunks.
@@ -817,11 +826,28 @@ export async function processChatMessage(
       // the attached content — never on the internal 智脑 库 — and, when a
       // template was selected, to follow that template's structure for the
       // write-up. Tools stay allowed (the agent may use the excel skill, etc.).
+      // Large-sheet path: the full file is in the workspace. Tell the agent to
+      // read it with code (pandas/openpyxl) and — critically — to keep the data
+      // in the subprocess, returning only small computed results (counts,
+      // filtered subsets, aggregations) so it never floods context. The inline
+      // overview is the authoritative source for totals/percentages.
+      const largeSheetDirective = materializedAttachments.length
+        ? "本轮附件含大表，完整文件已就绪于 workspace：" +
+          materializedAttachments
+            .map((a) => `「${a.filename}」→ ${a.workspacePath}（约 ${a.totalDataRows} 行）`)
+            .join("、") +
+          "。消息正文里只内联了概览+前若干行样本。如需逐行明细、按任意字段筛选或自定义聚合，" +
+          "请用代码（pandas/openpyxl 读取该文件路径）在子进程内完成计算，" +
+          "只返回小结果（计数/筛选出的少量行/分组聚合表），切勿把整表打印进回复；" +
+          "总数与占比一律以上方概览为准，不要从样本估算。 "
+        : "";
+
       const attachmentDirective =
         chatMsg.hasAttachment && !pendingReport
           ? "[analyze-attachment] 用户本轮上传了附件，正文里已包含附件内容。" +
             "请【仅依据附件中的数据】进行分析与撰写，不要查询或编造系统内部舆情库的数据；" +
             "若附件数据不足以回答某一点，如实说明而非以内部数据补足。" +
+            largeSheetDirective +
             (selectedTemplate
               ? `请按所选模板《${selectedTemplate.name}》的结构和文风，用附件数据产出完整的报告正文。`
               : "") +

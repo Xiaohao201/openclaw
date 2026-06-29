@@ -40,6 +40,27 @@ export interface RabbitMqPluginConfig {
   mercure: MercureConfig;
 }
 
+/**
+ * Large-sheet attachment reference. The frontend persists an oversized Excel
+ * (rows beyond the inline threshold) to a shared "inbox" directory and sends
+ * only this lightweight reference — never the full table — so the message body
+ * stays small. The consumer materializes the file into the user's agent
+ * workspace, letting the agent read full row-level data on demand (code
+ * execution / Excel skill) instead of estimating from a 15-row sample.
+ * Shape must match the frontend attachment-store.
+ */
+export interface AttachmentRef {
+  fileId: string;
+  filename: string;
+  ext: string;
+  kind: "spreadsheet";
+  storage: "inbox";
+  /** Filename inside the inbox dir: `${fileId}.${ext}`. */
+  ref: string;
+  /** SheetJS-computed total data rows (excluding headers); used in the prompt. */
+  totalDataRows: number;
+}
+
 /** Parsed RabbitMQ message body */
 export interface ChatMessage {
   historyId: number;
@@ -67,6 +88,13 @@ export interface ChatMessage {
    * 智脑 feed tables when data was uploaded. See chat-pipeline Step 2.4/2.5.
    */
   hasAttachment?: boolean;
+  /**
+   * Large-sheet file references (originals persisted to the shared inbox). The
+   * pipeline materializes these into the agent workspace so the agent can read
+   * full data on demand. Small files/non-spreadsheets carry no ref (their text
+   * is already inlined in `message`).
+   */
+  attachments?: AttachmentRef[];
 }
 
 /** History record from MySQL */

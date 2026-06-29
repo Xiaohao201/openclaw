@@ -18,6 +18,19 @@ const templateIdSchema = z
     return Number.isInteger(n) && n > 0 ? n : undefined;
   });
 
+// Large-sheet attachment reference (see types.AttachmentRef). Additive and
+// optional: ordinary chat and old producers omit it. Malformed entries are
+// dropped by safeParse, degrading gracefully to overview+sample.
+const attachmentRefSchema = z.object({
+  fileId: z.string().min(1),
+  filename: z.string().min(1),
+  ext: z.string().min(1),
+  kind: z.literal("spreadsheet"),
+  storage: z.literal("inbox"),
+  ref: z.string().min(1),
+  totalDataRows: z.number().int().nonnegative().default(0),
+});
+
 const rabbitMqMessageSchema = z.object({
   id: z.number().int().positive(),
   body: z
@@ -30,6 +43,7 @@ const rabbitMqMessageSchema = z.object({
       topic: z.string().optional(),
       template_id: templateIdSchema,
       has_attachment: z.boolean().optional(),
+      attachments: z.array(attachmentRefSchema).optional(),
     })
     .optional(),
   message: z.string().optional(),
@@ -43,6 +57,7 @@ const rabbitMqMessageSchema = z.object({
   topic: z.string().optional(),
   template_id: templateIdSchema,
   has_attachment: z.boolean().optional(),
+  attachments: z.array(attachmentRefSchema).optional(),
 });
 
 /**
@@ -113,6 +128,7 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
       // producer can put it wherever the rest of its fields live.
       templateId: msg.body.template_id ?? msg.template_id,
       hasAttachment: msg.body.has_attachment ?? msg.has_attachment ?? false,
+      attachments: msg.body.attachments ?? msg.attachments,
     };
   }
 
@@ -130,5 +146,6 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
     topic: msg.topic,
     templateId: msg.template_id,
     hasAttachment: msg.has_attachment ?? false,
+    attachments: msg.attachments,
   };
 }
