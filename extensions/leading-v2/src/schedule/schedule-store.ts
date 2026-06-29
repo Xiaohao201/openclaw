@@ -23,26 +23,6 @@ interface ScheduleRow extends RowDataPacket {
   created_at: number | string;
 }
 
-const CREATE_TABLE = `CREATE TABLE IF NOT EXISTS schedule_tasks (
-  id            VARCHAR(64)  NOT NULL PRIMARY KEY,
-  uid           VARCHAR(64)  NOT NULL,
-  title         VARCHAR(255) NOT NULL,
-  schedule      JSON         NOT NULL,
-  tz            VARCHAR(64)  NOT NULL,
-  action        JSON         NOT NULL,
-  session_key   TEXT         NOT NULL,
-  mercure_topic VARCHAR(255) NOT NULL,
-  delivery      JSON         NOT NULL,
-  enabled       TINYINT(1)   NOT NULL DEFAULT 1,
-  next_run_at   BIGINT       NOT NULL,
-  last_run_at   BIGINT       NULL,
-  fail_count    INT          NOT NULL DEFAULT 0,
-  created_at    BIGINT       NOT NULL,
-  deleted       TINYINT(1)   NOT NULL DEFAULT 0,
-  KEY idx_uid (uid),
-  KEY idx_deleted_enabled_next (deleted, enabled, next_run_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
-
 function parseJson<T>(raw: unknown, fallback: T): T {
   if (raw == null) {
     return fallback;
@@ -105,19 +85,10 @@ export class ScheduleStore {
     }
     this.initialized = true;
     if (this.db) {
-      // Best-effort auto-create. The connection user may lack the CREATE
-      // privilege (least-privilege writer accounts), in which case the table is
-      // expected to be provisioned out-of-band by an admin. Note: MySQL checks
-      // the CREATE privilege even for `CREATE TABLE IF NOT EXISTS` on an
-      // existing table, so this can throw with the table already present — keep
-      // it isolated from reload() so a denied create never blocks loading.
-      try {
-        await execute(this.db, CREATE_TABLE, undefined, { idempotent: true });
-      } catch (error) {
-        logger.warn(
-          `[LEADING_V2_SCHED] CREATE TABLE skipped (table should be pre-provisioned): ${String(error)}`,
-        );
-      }
+      // `schedule_tasks` is provisioned out-of-band by an admin: the writer
+      // account runs least-privilege (no CREATE), and MySQL checks the CREATE
+      // privilege even for `CREATE TABLE IF NOT EXISTS` on an existing table, so
+      // any auto-create attempt only logged noise. Just load the existing rows.
       try {
         await this.reload();
         logger.info(`[LEADING_V2_SCHED] Loaded ${this.tasks.size} scheduled task(s) from MySQL`);
