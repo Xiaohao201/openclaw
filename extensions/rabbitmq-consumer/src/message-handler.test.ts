@@ -66,4 +66,53 @@ describe("parseMessage", () => {
     );
     expect(msg?.hasAttachment).toBe(true);
   });
+
+  it("parses a valid OSS attachment ref", () => {
+    const att = {
+      fileId: "abc",
+      filename: "data.xlsx",
+      ext: "xlsx",
+      kind: "spreadsheet",
+      storage: "oss",
+      ref: "https://oss.leadingnews.cn/ibtai/lobster/attachments/2026/06/abc.xlsx",
+      totalDataRows: 1234,
+    };
+    const msg = parseMessage(buf({ id: 5, message: "分析", user_id: 42, attachments: [att] }));
+    expect(msg?.attachments).toHaveLength(1);
+    expect(msg?.attachments?.[0].ref).toContain("abc.xlsx");
+  });
+
+  it("drops a malformed/stale attachment WITHOUT failing the whole message", () => {
+    // Old inbox-format ref (storage:'inbox', non-url ref) must not drop the turn.
+    const stale = {
+      fileId: "x",
+      filename: "f.xlsx",
+      ext: "xlsx",
+      kind: "spreadsheet",
+      storage: "inbox",
+      ref: "x.xlsx",
+    };
+    const msg = parseMessage(
+      buf({ id: 5, message: "分析这份表", user_id: 42, attachments: [stale] }),
+    );
+    expect(msg).not.toBeNull();
+    expect(msg?.message).toBe("分析这份表");
+    expect(msg?.attachments).toBeUndefined();
+  });
+
+  it("keeps valid attachments and drops invalid ones in the same message", () => {
+    const good = {
+      fileId: "g",
+      filename: "g.xlsx",
+      ext: "xlsx",
+      kind: "spreadsheet",
+      storage: "oss",
+      ref: "https://oss.leadingnews.cn/g.xlsx",
+      totalDataRows: 10,
+    };
+    const bad = { fileId: "b", storage: "inbox" };
+    const msg = parseMessage(buf({ id: 5, message: "m", user_id: 42, attachments: [good, bad] }));
+    expect(msg?.attachments).toHaveLength(1);
+    expect(msg?.attachments?.[0].fileId).toBe("g");
+  });
 });

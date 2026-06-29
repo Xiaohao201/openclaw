@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ChatMessage } from "./types.js";
+import type { AttachmentRef, ChatMessage } from "./types.js";
 
 /**
  * Zod schema for validating incoming RabbitMQ messages.
@@ -19,8 +19,10 @@ const templateIdSchema = z
   });
 
 // Large-sheet attachment reference (see types.AttachmentRef). Additive and
-// optional: ordinary chat and old producers omit it. Malformed entries are
-// dropped by safeParse, degrading gracefully to overview+sample.
+// optional: ordinary chat and old producers omit it. Validated per-element by
+// parseAttachments (NOT inline in the message schema) so a malformed/old-format
+// attachment is dropped — degrading to overview+sample — and never fails the
+// whole message parse (which would silently drop the user's turn).
 const attachmentRefSchema = z.object({
   fileId: z.string().min(1),
   filename: z.string().min(1),
@@ -30,6 +32,25 @@ const attachmentRefSchema = z.object({
   ref: z.string().url(),
   totalDataRows: z.number().int().nonnegative().default(0),
 });
+
+/**
+ * Coerce a raw `attachments` value into valid AttachmentRefs, dropping anything
+ * that fails validation. Returns undefined when there are none — so a bad or
+ * stale-format attachment can never block the message itself.
+ */
+function parseAttachments(raw: unknown): AttachmentRef[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const valid: AttachmentRef[] = [];
+  for (const el of raw) {
+    const result = attachmentRefSchema.safeParse(el);
+    if (result.success) {
+      valid.push(result.data);
+    }
+  }
+  return valid.length ? valid : undefined;
+}
 
 const rabbitMqMessageSchema = z.object({
   id: z.number().int().positive(),
@@ -43,7 +64,9 @@ const rabbitMqMessageSchema = z.object({
       topic: z.string().optional(),
       template_id: templateIdSchema,
       has_attachment: z.boolean().optional(),
-      attachments: z.array(attachmentRefSchema).optional(),
+      // Lenient on purpose: validated/filtered by parseAttachments so a bad
+      // entry never fails the whole message. See attachmentRefSchema note.
+      attachments: z.unknown().optional(),
     })
     .optional(),
   message: z.string().optional(),
@@ -57,7 +80,8 @@ const rabbitMqMessageSchema = z.object({
   topic: z.string().optional(),
   template_id: templateIdSchema,
   has_attachment: z.boolean().optional(),
-  attachments: z.array(attachmentRefSchema).optional(),
+  // Lenient on purpose (validated by parseAttachments, see above).
+  attachments: z.unknown().optional(),
 });
 
 /**
@@ -99,16 +123,25 @@ export function parseWarmup(rawBody: Buffer): WarmupMessage | null {
  * Parse and validate a raw RabbitMQ message buffer into a ChatMessage.
  * Supports both old (nested `body`) and new (flat) message formats.
  */
-export function parseMessage(rawBody: Buffer): ChatMessage | null {
+export function parseMessage(
+  rawBody: Buffer,
+  logger?: { error: (msg: string) => void },
+): ChatMessage | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawBody.toString("utf-8"));
-  } catch {
+  } catch (error) {
+    logger?.error(`[RABBITMQ_CONSUMER] JSON parse failed: ${String(error)}`);
     return null;
   }
 
   const result = rabbitMqMessageSchema.safeParse(parsed);
   if (!result.success) {
+    // Surface the validation reason; a silent null made attachment/format
+    // regressions impossible to diagnose from logs.
+    logger?.error(
+      `[RABBITMQ_CONSUMER] Schema validation failed: ${JSON.stringify(result.error.issues)}`,
+    );
     return null;
   }
 
@@ -128,7 +161,7 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
       // producer can put it wherever the rest of its fields live.
       templateId: msg.body.template_id ?? msg.template_id,
       hasAttachment: msg.body.has_attachment ?? msg.has_attachment ?? false,
-      attachments: msg.body.attachments ?? msg.attachments,
+      attachments: parseAttachments(msg.body.attachments ?? msg.attachments),
     };
   }
 
@@ -146,6 +179,6 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
     topic: msg.topic,
     templateId: msg.template_id,
     hasAttachment: msg.has_attachment ?? false,
-    attachments: msg.attachments,
+    attachments: parseAttachments(msg.attachments),
   };
 }

@@ -136,7 +136,7 @@ export default definePluginEntry({
             return;
           }
 
-          const chatMsg = parseMessage(msg.content);
+          const chatMsg = parseMessage(msg.content, ctx.logger);
           if (!chatMsg) {
             ctx.logger.error("[RABBITMQ_CONSUMER] Failed to parse message");
             return;
