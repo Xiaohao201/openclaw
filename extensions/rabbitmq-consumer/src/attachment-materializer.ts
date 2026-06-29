@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { copyFile, mkdir, rm, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getRuntimeConfigSnapshot, resolveAgentWorkspaceDir, type PluginLogger } from "../api.js";
+import { resolveAgentWorkspaceDir, type OpenClawConfig, type PluginLogger } from "../api.js";
 import type { AttachmentRef } from "./types.js";
 
 /**
@@ -47,19 +47,14 @@ const sanitizeFilename = (name: string): string =>
 export async function materializeAttachments(
   attachments: AttachmentRef[],
   agentId: string,
+  config: OpenClawConfig,
   logger: PluginLogger,
 ): Promise<MaterializedAttachment[]> {
   if (!attachments.length) {
     return [];
   }
 
-  const cfg = getRuntimeConfigSnapshot();
-  if (!cfg) {
-    logger.warn("[ATTACHMENT] No runtime config snapshot; cannot resolve workspace, skipping");
-    return [];
-  }
-
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
   const uploadsDir = path.join(workspaceDir, UPLOADS_SUBDIR);
   const inboxDir = resolveInboxDir();
 

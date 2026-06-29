@@ -1,4 +1,10 @@
-import type { PluginRuntime, PluginLogger } from "../api.js";
+import {
+  getRuntimeConfigSnapshot,
+  type OpenClawConfig,
+  type PluginRuntime,
+  type PluginLogger,
+} from "../api.js";
+import { materializeAttachments } from "./attachment-materializer.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
@@ -7,7 +13,6 @@ import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
-import { materializeAttachments } from "./attachment-materializer.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
@@ -360,6 +365,12 @@ export async function processChatMessage(
   feedCounter?: FeedCounter,
   reportTaskPublisher?: ReportTaskPublisher,
   templateLookup?: ReportTemplateLookup,
+  /**
+   * Live config used to resolve the agent workspace for attachment
+   * materialization. Passed from the plugin api (`api.config`) because the
+   * process-global runtime snapshot isn't populated in this consumer's path.
+   */
+  config?: OpenClawConfig,
 ): Promise<string> {
   const mercure = new MercurePusher(mercureConfig);
 
@@ -588,10 +599,22 @@ export async function processChatMessage(
     // Large-sheet attachments: copy the originals (persisted by the frontend to
     // the shared inbox) into this agent's workspace so the agent can read full
     // row-level data on demand. Best-effort — failures degrade to the inline
-    // overview+sample already in `userMessage`.
-    const materializedAttachments = chatMsg.attachments?.length
-      ? await materializeAttachments(chatMsg.attachments, agentId, logger)
-      : [];
+    // overview+sample already in `userMessage`. Prefer the passed-in config
+    // (api.config); the process-global snapshot is a fallback only.
+    const attachmentConfig = config ?? getRuntimeConfigSnapshot();
+    let materializedAttachments: Awaited<ReturnType<typeof materializeAttachments>> = [];
+    if (chatMsg.attachments?.length) {
+      if (attachmentConfig) {
+        materializedAttachments = await materializeAttachments(
+          chatMsg.attachments,
+          agentId,
+          attachmentConfig,
+          logger,
+        );
+      } else {
+        logger.warn("[ATTACHMENT] No config available; cannot resolve workspace, skipping");
+      }
+    }
 
     // Step 3: Set up streaming pusher + subscribe to agent events.
     // Tag every push with this turn's historyId so stale frontend

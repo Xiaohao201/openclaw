@@ -158,6 +158,7 @@ export default definePluginEntry({
             feedCounterRef,
             reportPublisherRef,
             templateLookupRef,
+            api.config,
           );
         });
 
