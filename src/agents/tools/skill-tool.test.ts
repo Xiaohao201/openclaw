@@ -41,7 +41,7 @@ function row(over: Partial<SkillRow> = {}): SkillRow {
     name: "flow",
     description: "d",
     content: "c",
-    source: "agent",
+    source: "workspace",
     category: null,
     is_enable: 1,
     references: null,
@@ -127,7 +127,7 @@ describe("skill_save", () => {
     ).rejects.toThrow(/Could not save the skill/);
   });
 
-  it("creates a new skill when none exists, tagging source=agent", async () => {
+  it("creates a new skill when none exists, tagging source=workspace", async () => {
     getSkillByName.mockResolvedValue(null);
     createSkill.mockResolvedValue(row({ id: 42 }));
 
@@ -143,7 +143,7 @@ describe("skill_save", () => {
         name: "my-flow",
         description: "summarize the daily report",
         content: "# do the thing",
-        source: "agent",
+        source: "workspace",
         category: "reports",
       },
       1749,
@@ -169,7 +169,7 @@ describe("skill_save", () => {
         name: "flow",
         description: "new desc",
         is_enable: 1,
-        source: "agent",
+        source: "workspace",
       }),
       1749,
     );

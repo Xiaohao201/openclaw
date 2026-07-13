@@ -30,7 +30,11 @@ const MAX_DESCRIPTION_LEN = 1024;
 const MAX_CATEGORY_LEN = 128;
 // Stay under skills.limits.maxSkillFileBytes (default 256_000) with headroom.
 const MAX_CONTENT_BYTES = 200_000;
-const SKILL_SOURCE = "agent";
+// `skills.source` is an enum('bundled','managed','workspace','extra'); 'agent'
+// is NOT a member, so writing it fails under STRICT_TRANS_TABLES with "Data
+// truncated for column 'source'". Agent-saved skills are materialized into the
+// user's workspace/skills dir, so 'workspace' is the honest, valid tag.
+const SKILL_SOURCE = "workspace";
 
 type SkillToolOptions = {
   /** Trusted session key — the only source of the user id (never model args). */

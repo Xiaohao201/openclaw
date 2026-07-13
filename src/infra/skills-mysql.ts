@@ -48,19 +48,38 @@ function resolveConfig(): MySqlConfig {
   const mysqlCfg = pluginEntries?.["feed-search"]?.config as Record<string, unknown> | undefined;
   const env = process.env;
 
-  // Skills live in the same `superworker` DB the rabbitmq-consumer reads, which
-  // is configured via HISTORY_MYSQL_*. Prefer those, then the older FEED_MYSQL_*
-  // names, then the local default. Without this, a missing FEED_MYSQL_* config
-  // silently fell back to 127.0.0.1 and failed with "Access denied".
+  // The `skills` table is read+write: `skill_save` inserts/updates rows, so this
+  // connection MUST use a writable account. Prefer WRITER_MYSQL_* (e.g.
+  // btclaw_writer); the HISTORY_MYSQL_* creds are the read-only account, under
+  // which SELECT succeeds (listing works) while INSERT/UPDATE fail with "command
+  // denied to user" — i.e. skill_save silently fails. Fall back to HISTORY_* then
+  // the legacy FEED_MYSQL_* names, then the local default. Host/port/db share one
+  // `superworker` server across the reader and writer accounts.
   return {
     host:
-      (mysqlCfg?.host as string) ?? env.HISTORY_MYSQL_HOST ?? env.FEED_MYSQL_HOST ?? "127.0.0.1",
-    port: Number(mysqlCfg?.port ?? env.HISTORY_MYSQL_PORT ?? env.FEED_MYSQL_PORT ?? 3306),
-    user: (mysqlCfg?.user as string) ?? env.HISTORY_MYSQL_USER ?? env.FEED_MYSQL_USER ?? "",
+      (mysqlCfg?.host as string) ??
+      env.WRITER_MYSQL_HOST ??
+      env.HISTORY_MYSQL_HOST ??
+      env.FEED_MYSQL_HOST ??
+      "127.0.0.1",
+    port: Number(
+      mysqlCfg?.port ?? env.WRITER_MYSQL_PORT ?? env.HISTORY_MYSQL_PORT ?? env.FEED_MYSQL_PORT ?? 3306,
+    ),
+    user:
+      (mysqlCfg?.user as string) ??
+      env.WRITER_MYSQL_USER ??
+      env.HISTORY_MYSQL_USER ??
+      env.FEED_MYSQL_USER ??
+      "",
     password:
-      (mysqlCfg?.password as string) ?? env.HISTORY_MYSQL_PASSWORD ?? env.FEED_MYSQL_PASSWORD ?? "",
+      (mysqlCfg?.password as string) ??
+      env.WRITER_MYSQL_PASSWORD ??
+      env.HISTORY_MYSQL_PASSWORD ??
+      env.FEED_MYSQL_PASSWORD ??
+      "",
     database:
       (mysqlCfg?.database as string) ??
+      env.WRITER_MYSQL_DATABASE ??
       env.HISTORY_MYSQL_DATABASE ??
       env.FEED_MYSQL_DATABASE ??
       "superworker",
@@ -235,14 +254,18 @@ export async function createSkill(
 ): Promise<SkillRow> {
   const p = getPool();
   const now = new Date();
+  // `references` is NOT NULL with no default, so it must be supplied or the
+  // INSERT fails under strict mode with "Field 'references' doesn't have a
+  // default value". `source` must be a valid enum member (see skill-tool's
+  // SKILL_SOURCE); default to 'workspace' rather than the invalid 'manual'.
   const [result] = await p.execute<mysql.ResultSetHeader>(
-    "INSERT INTO skills (user_id, name, description, content, source, category, is_enable, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+    "INSERT INTO skills (user_id, name, description, content, source, category, is_enable, `references`, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, '', ?, ?)",
     [
       userId,
       data.name,
       data.description ?? null,
       data.content ?? null,
-      data.source ?? "manual",
+      data.source ?? "workspace",
       data.category ?? null,
       now,
       now,
