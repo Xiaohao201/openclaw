@@ -1,0 +1,136 @@
+{
+  "id": "milvus",
+  "name": "Milvus Vector Database",
+  "description": "General-purpose vector-database tools: semantic upsert/search/delete against a Milvus server, embedding text via any OpenAI-compatible embeddings API.",
+  "uiHints": {
+    "connection.address": {
+      "label": "Milvus Address",
+      "placeholder": "localhost:19530",
+      "help": "Milvus server address as host:port (or https://host:port for Zilliz Cloud)"
+    },
+    "connection.token": {
+      "label": "API Token",
+      "sensitive": true,
+      "placeholder": "${MILVUS_TOKEN}",
+      "help": "API token (Zilliz Cloud) or user:password token; supports ${ENV_VAR}",
+      "advanced": true
+    },
+    "connection.username": {
+      "label": "Username",
+      "placeholder": "${MILVUS_USERNAME}",
+      "help": "Username for username/password authentication; supports ${ENV_VAR}",
+      "advanced": true
+    },
+    "connection.password": {
+      "label": "Password",
+      "sensitive": true,
+      "placeholder": "${MILVUS_PASSWORD}",
+      "help": "Password for username/password authentication; supports ${ENV_VAR}",
+      "advanced": true
+    },
+    "connection.ssl": {
+      "label": "Use SSL/TLS",
+      "advanced": true
+    },
+    "connection.database": {
+      "label": "Database",
+      "placeholder": "default",
+      "advanced": true
+    },
+    "embedding.apiKey": {
+      "label": "Embedding API Key",
+      "sensitive": true,
+      "placeholder": "sk-...",
+      "help": "API key for the OpenAI-compatible embeddings endpoint (or use ${OPENAI_API_KEY})"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "Embedding model name"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "Base URL for compatible providers (e.g. DashScope, Ollama)",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Dimensions",
+      "placeholder": "1536",
+      "help": "Vector dimensions for custom/non-standard models (required unless using a known OpenAI model)",
+      "advanced": true
+    },
+    "embedding.sendDimensions": {
+      "label": "Send Dimensions Param",
+      "help": "Whether to send a dimensions param to the embeddings endpoint. Disable for providers that reject it (e.g. Volcengine Ark).",
+      "advanced": true
+    },
+    "embeddingProfiles": {
+      "label": "Additional Embedding Profiles",
+      "help": "Named embedding configs (same shape as embedding) selectable per tool call via embeddingProfile, for collections that use a different provider/model/dimension.",
+      "advanced": true
+    },
+    "defaultCollection": {
+      "label": "Default Collection",
+      "placeholder": "openclaw_vectors",
+      "advanced": true
+    },
+    "readOnlyCollections": {
+      "label": "Read-Only Collections",
+      "help": "Collection names that milvus_upsert/milvus_delete must refuse to write to.",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "connection": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "address": { "type": "string" },
+          "token": { "type": "string" },
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "ssl": { "type": "boolean" },
+          "database": { "type": "string" }
+        },
+        "required": ["address"]
+      },
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "dimensions": { "type": "number" },
+          "sendDimensions": { "type": "boolean" }
+        },
+        "required": ["apiKey"]
+      },
+      "embeddingProfiles": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiKey": { "type": "string" },
+            "model": { "type": "string" },
+            "baseUrl": { "type": "string" },
+            "dimensions": { "type": "number" },
+            "sendDimensions": { "type": "boolean" }
+          },
+          "required": ["apiKey"]
+        }
+      },
+      "defaultCollection": { "type": "string" },
+      "readOnlyCollections": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["connection", "embedding"]
+  }
+}

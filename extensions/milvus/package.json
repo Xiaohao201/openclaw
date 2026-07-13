@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/milvus",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw Milvus plugin: general-purpose vector-database tools (semantic upsert/search/delete) backed by a Milvus server and an OpenAI-compatible embeddings API.",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "@zilliz/milvus2-sdk-node": "^2.6.17",
+    "openai": "^6.34.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.16"
+    },
+    "build": {
+      "openclawVersion": "2026.4.16"
+    }
+  }
+}

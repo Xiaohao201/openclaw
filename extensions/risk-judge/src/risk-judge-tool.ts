@@ -1,10 +1,18 @@
 import { Type } from "@sinclair/typebox";
 import { jsonResult, type OpenClawPluginApi, type PluginRuntime } from "../api.js";
 import { isNewsMedia } from "./media-whitelist.js";
-import { extractAssistantText } from "./message-text.js";
-import { buildRiskJudgeUserMessage, parseRiskResult, RISK_JUDGE_SYSTEM_PROMPT } from "./rubric.js";
+import { collectAssistantTexts } from "./message-text.js";
+import {
+  buildRiskJudgeSystemPrompt,
+  buildRiskJudgeUserMessage,
+  parseRiskResult,
+} from "./rubric.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_PRECEDENT_COLLECTION = "risk_judge_cases";
+const DEFAULT_PRECEDENT_TOP_K = 5;
+/** Generous enough to cover a search + upsert tool-call round-trip within one turn. */
+const SESSION_MESSAGES_LIMIT = 20;
 
 /**
  * The gateway publishes its real subagent runtime onto this process-global at
@@ -50,11 +58,37 @@ function asString(value: unknown): string | undefined {
 
 interface RiskJudgeConfig {
   timeoutMs: number;
+  enablePrecedentRag: boolean;
+  precedentCollection: string;
+  precedentTopK: number;
 }
 
 function resolveConfig(raw: Record<string, unknown>): RiskJudgeConfig {
   const t = raw.timeoutMs;
-  return { timeoutMs: typeof t === "number" && t > 0 ? t : DEFAULT_TIMEOUT_MS };
+  const topK = raw.precedentTopK;
+  const collection = raw.precedentCollection;
+  return {
+    timeoutMs: typeof t === "number" && t > 0 ? t : DEFAULT_TIMEOUT_MS,
+    enablePrecedentRag: raw.enablePrecedentRag === true,
+    precedentCollection:
+      typeof collection === "string" && collection.trim()
+        ? collection.trim()
+        : DEFAULT_PRECEDENT_COLLECTION,
+    precedentTopK: typeof topK === "number" && topK > 0 ? topK : DEFAULT_PRECEDENT_TOP_K,
+  };
+}
+
+/** Milvus collection names are restricted to `[a-zA-Z0-9_]`; sanitize an agentId into a safe suffix. */
+function sanitizeCollectionSuffix(agentId: string): string {
+  return agentId.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+/** Per-tenant collection name so historical cases from one agent never leak into another's precedent search. */
+function resolvePrecedentCollection(config: RiskJudgeConfig, agentId: string | undefined): string {
+  if (!agentId) {
+    return config.precedentCollection;
+  }
+  return `${config.precedentCollection}_${sanitizeCollectionSuffix(agentId)}`;
 }
 
 /**
@@ -97,12 +131,22 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
         const agentPart = ctx.agentId ? `agent:${ctx.agentId}:` : "";
         const sessionKey = `${agentPart}risk-judge:${ctx.sessionId ?? "adhoc"}:${Date.now()}`;
         const userMessage = buildRiskJudgeUserMessage({ content, author, title, authorIsMedia });
+        const extraSystemPrompt = buildRiskJudgeSystemPrompt(
+          config.enablePrecedentRag
+            ? {
+                rag: {
+                  collection: resolvePrecedentCollection(config, ctx.agentId),
+                  topK: config.precedentTopK,
+                },
+              }
+            : {},
+        );
 
         try {
           const run = await subagent.run({
             sessionKey,
             message: userMessage,
-            extraSystemPrompt: RISK_JUDGE_SYSTEM_PROMPT,
+            extraSystemPrompt,
             deliver: false,
           });
           const wait = await subagent.waitForRun({
@@ -118,9 +162,16 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
             });
           }
 
-          const session = await subagent.getSessionMessages({ sessionKey, limit: 5 });
-          const text = extractAssistantText(session.messages);
-          const parsed = parseRiskResult(text);
+          const session = await subagent.getSessionMessages({
+            sessionKey,
+            limit: SESSION_MESSAGES_LIMIT,
+          });
+          // In a tool-using turn the final assistant message may be a closing
+          // remark (e.g. after a milvus_upsert call) rather than the JSON
+          // answer, so try each assistant text in order until one parses.
+          const parsed = collectAssistantTexts(session.messages)
+            .map((text) => parseRiskResult(text))
+            .find((result): result is NonNullable<typeof result> => result !== null);
           if (!parsed) {
             api.logger.warn("[RISK_JUDGE] could not parse a risk level from model output");
             return jsonResult({ success: false, error: "未能从模型输出中解析出风险等级。" });

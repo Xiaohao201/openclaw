@@ -29,28 +29,11 @@ export function extractMessageText(content: unknown): string {
   return "";
 }
 
-/** Return the most recent assistant message's text from a session message list. */
-export function extractAssistantText(messages: unknown[]): string {
-  if (!Array.isArray(messages)) {
-    return "";
-  }
-  for (const msg of messages.toReversed()) {
-    const m = msg as { role?: unknown; content?: unknown };
-    if (m.role === "assistant") {
-      const text = extractMessageText(m.content).trim();
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return "";
-}
-
 /**
  * Return every non-empty assistant message's text, most recent first. In a
  * tool-using session the final assistant message may be a closing remark
- * rather than the answer (e.g. after a milvus_upsert call), so callers should
- * try each entry in order instead of assuming the last one is the answer.
+ * rather than the answer, so callers should try each entry in order instead
+ * of assuming the last one is the answer.
  */
 export function collectAssistantTexts(messages: unknown[]): string[] {
   if (!Array.isArray(messages)) {

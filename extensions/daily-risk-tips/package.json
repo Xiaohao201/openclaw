@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/daily-risk-tips",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw daily-risk-tips plugin: 每日风险提示 generation tool that retrieves similar finalized examples from a Milvus collection and writes a new risk tip in the same style.",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.16"
+    },
+    "build": {
+      "openclawVersion": "2026.4.16"
+    }
+  }
+}

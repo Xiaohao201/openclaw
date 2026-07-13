@@ -1,0 +1,36 @@
+{
+  "id": "daily-risk-tips",
+  "name": "Daily Risk Tips",
+  "description": "每日风险提示生成工具：检索 Milvus 中人工审核定稿的历史范例，提炼写作规则后生成一条符合深圳市网信办撰写规范的新风险提示（≤150字）。",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "timeoutMs": {
+        "type": "number",
+        "default": 120000,
+        "description": "Max time to wait for each model turn before failing the tool."
+      },
+      "sourceCollection": {
+        "type": "string",
+        "default": "DailyRiskTips",
+        "description": "Milvus collection holding the human-approved finalized 每日风险提示 examples. Read-only."
+      },
+      "embeddingProfile": {
+        "type": "string",
+        "default": "doubao",
+        "description": "Name of the milvus plugin's embeddingProfiles entry to use for retrieval (must match the embedding model the collection was built with)."
+      },
+      "topK": {
+        "type": "number",
+        "default": 10,
+        "description": "How many similar finalized examples to retrieve."
+      },
+      "queryMaxChars": {
+        "type": "number",
+        "default": 6000,
+        "description": "Truncate the retrieval query to this many characters before embedding."
+      }
+    },
+    "additionalProperties": false
+  }
+}

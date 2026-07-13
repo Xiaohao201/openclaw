@@ -1,7 +1,7 @@
 {
   "id": "risk-judge",
   "name": "Risk Judge",
-  "description": "舆情风险研判工具：对一段舆情内容套用标准化评级规则（3 标准 / 5 级 → 蓝/黄/橙/红/高危预警）并结合权威媒体白名单，调用当前配置的模型产出可复现的研判正文与处置建议。",
+  "description": "舆情风险研判工具：对一段舆情内容套用标准化评级规则（3 标准 / 5 级 → 蓝/黄/橙/红/高危预警）并结合权威媒体白名单，调用当前配置的模型产出可复现的研判正文与处置建议。可选结合 milvus 插件做历史案例检索，提升跨事件评级一致性。",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -9,6 +9,21 @@
         "type": "number",
         "default": 120000,
         "description": "Max time to wait for the model to produce a 研判 before failing the tool."
+      },
+      "enablePrecedentRag": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether to ask the model to search/store historical cases via the milvus plugin's milvus_search/milvus_upsert tools for cross-event consistency. Requires the milvus plugin to be configured and both plugins' tools to be allowed on the target agent's tools.profile."
+      },
+      "precedentCollection": {
+        "type": "string",
+        "default": "risk_judge_cases",
+        "description": "Base milvus collection name for historical cases. The actual collection is suffixed per agent (e.g. risk_judge_cases_<agentId>) so tenants never share precedent data."
+      },
+      "precedentTopK": {
+        "type": "number",
+        "default": 5,
+        "description": "How many historical cases to request from milvus_search when enablePrecedentRag is on."
       }
     },
     "additionalProperties": false

@@ -63,6 +63,32 @@ export const RISK_JUDGE_SYSTEM_PROMPT = `你是一位在市级网信办舆情监
 }
 \`\`\``;
 
+export interface RiskJudgePrecedentOptions {
+  /** Milvus collection to search/write historical cases against. */
+  collection: string;
+  /** How many precedent cases to request from `milvus_search`. */
+  topK: number;
+}
+
+/** Build the appendix that instructs the model to use milvus for cross-time consistency. */
+function buildPrecedentAppendix(opts: RiskJudgePrecedentOptions): string {
+  return `
+
+历史案例参考（可选增强，工具不可用或检索为空时按上面规则独立研判，不得因此报错或改变输出格式）：
+  1. 研判前，先调用 milvus_search 工具，collection 传 "${opts.collection}"，query 用本次的标题+内容摘要，topK 传 ${opts.topK}，检索是否存在相似的历史研判案例；
+  2. 若检索到高相似度案例，参考其 metadata.risk_level 与 metadata.reason_summary，同类事件尽量保持等级一致，除非本次出现明显的升级/降级要素；
+  3. 在内部完成最终等级判定后，调用 milvus_upsert 工具把本次案例写回同一 collection："${opts.collection}"，entries[0].text 只写"标题 + 不超过 500 字的内容摘要"（禁止写入原文全文或可定位到具体自然人/账号的敏感信息），entries[0].metadata 包含 risk_level、author_is_media、reason_summary（研判理由摘要）、title、ts（ISO 时间戳）；
+  4. 检索与写回是内部动作，不得出现在对外正文里；最终仍必须只输出一个 \`\`\`json 代码块，且该代码块必须是你整个回复的最后一段输出，写回 milvus_upsert 之后不得再补充任何文字。`;
+}
+
+/** Compose the system prompt, optionally appending the milvus 历史案例 RAG instructions. */
+export function buildRiskJudgeSystemPrompt(opts: { rag?: RiskJudgePrecedentOptions } = {}): string {
+  if (!opts.rag) {
+    return RISK_JUDGE_SYSTEM_PROMPT;
+  }
+  return RISK_JUDGE_SYSTEM_PROMPT + buildPrecedentAppendix(opts.rag);
+}
+
 /** Compose the user message fed to the model alongside the system prompt. */
 export function buildRiskJudgeUserMessage(input: RiskJudgeInput): string {
   const lines: string[] = [];

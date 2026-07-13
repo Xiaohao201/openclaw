@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRiskJudgeSystemPrompt,
   buildRiskJudgeUserMessage,
   normalizeRiskLevel,
   parseRiskResult,
+  RISK_JUDGE_SYSTEM_PROMPT,
   RISK_LEVELS,
 } from "./rubric.js";
 
@@ -59,6 +61,26 @@ describe("parseRiskResult", () => {
   it("returns null when no level can be determined", () => {
     expect(parseRiskResult("这是一段没有任何等级判定的普通文本。")).toBeNull();
     expect(parseRiskResult("")).toBeNull();
+  });
+});
+
+describe("buildRiskJudgeSystemPrompt", () => {
+  it("returns the base prompt unchanged when RAG is not requested", () => {
+    expect(buildRiskJudgeSystemPrompt()).toBe(RISK_JUDGE_SYSTEM_PROMPT);
+    expect(buildRiskJudgeSystemPrompt({})).toBe(RISK_JUDGE_SYSTEM_PROMPT);
+  });
+
+  it("appends milvus precedent instructions naming the given collection and topK", () => {
+    const prompt = buildRiskJudgeSystemPrompt({
+      rag: { collection: "risk_judge_cases_agent1", topK: 3 },
+    });
+    expect(prompt.startsWith(RISK_JUDGE_SYSTEM_PROMPT)).toBe(true);
+    expect(prompt).toContain("milvus_search");
+    expect(prompt).toContain("milvus_upsert");
+    expect(prompt).toContain("risk_judge_cases_agent1");
+    expect(prompt).toContain("topK 传 3");
+    // The output contract must still hold: a single trailing json block.
+    expect(prompt).toContain("只输出一个");
   });
 });
 
