@@ -95,6 +95,14 @@ export interface ChatMessage {
    * is already inlined in `message`).
    */
   attachments?: AttachmentRef[];
+  /**
+   * Active custom skill ids the user enabled in the frontend's "我的Skills"
+   * panel. Sent on every message while active (they persist across turns, unlike
+   * a one-shot template). The pipeline resolves each id's content from the
+   * `skills` table (ownership + is_enable checked) and injects it into the agent
+   * context — never spliced into the visible message. Absent for ordinary chat.
+   */
+  skillIds?: number[];
 }
 
 /** History record from MySQL */

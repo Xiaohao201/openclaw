@@ -7,6 +7,7 @@ import { processChatMessage } from "./chat-pipeline.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { HistoryManager } from "./history-manager.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
+import type { SkillLookup } from "./skill-lookup.js";
 import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
@@ -1202,5 +1203,88 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain("舆情专报模板");
     // It must NOT use the report-acknowledgement directive (that path is skipped).
     expect(capturedMessage).not.toContain("acknowledge-and-report");
+  });
+
+  it("injects active custom skills into the subagent context, not the visible message", async () => {
+    // A skill activated in "我的Skills" is resolved by id (ownership-checked) and
+    // its instructions are APPENDED to the agent context — after the user's text —
+    // so the chat bubble never shows the raw instructions.
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const resolveMany = vi.fn(async () => [
+      { id: 3, name: "竞品负面过滤器", content: "只保留竞品相关的负面舆情", description: "过滤器" },
+      { id: 5, name: "口径校准", content: "统一称谓为“本行”", description: null },
+    ]);
+    const skillLookup = { resolveMany } as unknown as SkillLookup;
+
+    const chatMsg: ChatMessage = { ...createChatMessage(), skillIds: [3, 5] };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      skillLookup,
+    );
+
+    expect(resolveMany).toHaveBeenCalledWith([3, 5], USER_ID, logger);
+    expect(result).toBe("ok");
+    // Both skills' names + bodies are present in the injected block.
+    expect(capturedMessage).toContain("启用了以下自定义技能");
+    expect(capturedMessage).toContain("竞品负面过滤器");
+    expect(capturedMessage).toContain("只保留竞品相关的负面舆情");
+    expect(capturedMessage).toContain("口径校准");
+    // The user's original text stays ahead of the injected skill block.
+    const userIdx = capturedMessage.indexOf("hi there");
+    const skillIdx = capturedMessage.indexOf("启用了以下自定义技能");
+    expect(userIdx).toBeGreaterThanOrEqual(0);
+    expect(skillIdx).toBeGreaterThan(userIdx);
+  });
+
+  it("does not inject a skill block when no skill id resolves", async () => {
+    // Unresolvable ids (deleted / disabled / another user's) resolve to [] and the
+    // turn degrades to an ordinary chat with no injected block.
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const skillLookup = { resolveMany: vi.fn(async () => []) } as unknown as SkillLookup;
+
+    const chatMsg: ChatMessage = { ...createChatMessage(), skillIds: [999] };
+    await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      skillLookup,
+    );
+
+    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+    expect(capturedMessage).not.toContain("启用了以下自定义技能");
   });
 });

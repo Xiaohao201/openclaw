@@ -12,6 +12,7 @@ import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
+import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
@@ -22,6 +23,47 @@ import type { ChatMessage, MercureConfig } from "./types.js";
 
 /** Hard cap on injected template body, so a huge MEDIUMTEXT can't blow the prompt. */
 const TEMPLATE_BODY_MAX = 6000;
+
+/** Per-skill and total caps on injected skill instructions, so many/long skills can't blow the prompt. */
+const SKILL_BODY_MAX = 4000;
+const SKILL_CONTEXT_TOTAL_MAX = 12000;
+
+/**
+ * Build the context block injected into the chat agent for the user's active
+ * custom skills (the "我的Skills" panel). Each skill's instruction body is
+ * treated as an authoritative directive the agent should follow this turn. The
+ * block is injected into the agent context — NOT spliced into the user's
+ * visible message — so the chat bubble never shows the raw instructions.
+ * Returns "" when no skill has usable content. Bounded per-skill and in total.
+ */
+function buildSkillContext(skills: ResolvedSkill[]): string {
+  const parts: string[] = [];
+  let total = 0;
+  for (const skill of skills) {
+    const body = skill.content?.trim();
+    if (!body) {
+      continue;
+    }
+    const clipped =
+      body.length > SKILL_BODY_MAX ? `${body.slice(0, SKILL_BODY_MAX)}\n…(技能内容过长，已截断)` : body;
+    const desc = skill.description?.trim() ? `（${skill.description.trim()}）` : "";
+    const entry = `● 技能「${skill.name}」${desc}：\n${clipped}`;
+    // Stop before exceeding the overall cap; the skills already added still apply.
+    if (total + entry.length > SKILL_CONTEXT_TOTAL_MAX) {
+      break;
+    }
+    parts.push(entry);
+    total += entry.length;
+  }
+  if (parts.length === 0) {
+    return "";
+  }
+  return (
+    "\n\n[用户启用了以下自定义技能，请在本轮严格按这些技能的指令来完成任务；" +
+    "如多个技能有冲突，以更具体的要求为准，并可向用户澄清]：\n" +
+    `---启用的技能开始---\n${parts.join("\n\n")}\n---启用的技能结束---`
+  );
+}
 
 /**
  * Build the context block injected into the chat agent when the user has a
@@ -365,6 +407,7 @@ export async function processChatMessage(
   feedCounter?: FeedCounter,
   reportTaskPublisher?: ReportTaskPublisher,
   templateLookup?: ReportTemplateLookup,
+  skillLookup?: SkillLookup,
   /**
    * Live config used to resolve the agent workspace for attachment
    * materialization. Passed from the plugin api (`api.config`) because the
@@ -516,6 +559,22 @@ export async function processChatMessage(
         logger.warn(
           `[CHAT_PIPELINE] templateId=${chatMsg.templateId} did not resolve; ` +
             `falling back to normal handling`,
+        );
+      }
+    }
+
+    // Step 2.4b: Resolve the user's active custom skills (from the "我的Skills"
+    // panel). Their instruction bodies are injected into the agent context below
+    // so the agent follows them this turn — never spliced into the visible
+    // message. Ownership + is_enable are enforced in the lookup; unresolved ids
+    // are simply dropped. Failure degrades to an ordinary turn (no skills).
+    let selectedSkills: ResolvedSkill[] = [];
+    if (chatMsg.skillIds?.length && skillLookup) {
+      selectedSkills = await skillLookup.resolveMany(chatMsg.skillIds, userId, logger);
+      if (selectedSkills.length) {
+        logger.info(
+          `[CHAT_PIPELINE] Injecting ${selectedSkills.length} active skill(s) for userId=${userId}: ` +
+            selectedSkills.map((s) => `#${s.id}"${s.name}"`).join(", "),
         );
       }
     }
@@ -831,6 +890,10 @@ export async function processChatMessage(
       // (the "先学习一下模板" flow) while it greets the user.
       const templateContext = selectedTemplate ? buildTemplateContext(selectedTemplate) : "";
 
+      // Active custom skills: inject their instructions so the agent follows
+      // them this turn. Kept out of the visible message (appended to context).
+      const skillContext = selectedSkills.length ? buildSkillContext(selectedSkills) : "";
+
       // On the template path the report is generated right after this turn, so we
       // steer the turn to be a short, natural acknowledgement of the user's
       // message rather than a free-form answer (and never the report itself).
@@ -900,7 +963,7 @@ export async function processChatMessage(
 
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${ackDirective}${attachmentDirective}${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}`,
+        message: `${ackDirective}${attachmentDirective}${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
         deliver: false,
       });
 

@@ -18,6 +18,31 @@ const templateIdSchema = z
     return Number.isInteger(n) && n > 0 ? n : undefined;
   });
 
+// Active custom skill ids. Additive/optional: ordinary chat and old producers
+// omit it. Each element may arrive as a number or numeric string (producers
+// vary); coerce to positive ints, drop the rest, de-dupe, and cap. A malformed
+// or missing value degrades to undefined (no skills) rather than failing the
+// whole message parse — never silently drop the user's turn over a bad id.
+const SKILL_IDS_MAX = 20;
+const skillIdsSchema = z
+  .array(z.union([z.number(), z.string()]))
+  .optional()
+  .transform((value) => {
+    if (!value || value.length === 0) {
+      return undefined;
+    }
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    for (const v of value) {
+      const n = typeof v === "number" ? v : parseInt(v, 10);
+      if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
+        seen.add(n);
+        ids.push(n);
+      }
+    }
+    return ids.length ? ids.slice(0, SKILL_IDS_MAX) : undefined;
+  });
+
 // Large-sheet attachment reference (see types.AttachmentRef). Additive and
 // optional: ordinary chat and old producers omit it. Validated per-element by
 // parseAttachments (NOT inline in the message schema) so a malformed/old-format
@@ -63,6 +88,7 @@ const rabbitMqMessageSchema = z.object({
       use_websearch: z.boolean().optional().default(false),
       topic: z.string().optional(),
       template_id: templateIdSchema,
+      skill_ids: skillIdsSchema,
       has_attachment: z.boolean().optional(),
       // Lenient on purpose: validated/filtered by parseAttachments so a bad
       // entry never fails the whole message. See attachmentRefSchema note.
@@ -79,6 +105,7 @@ const rabbitMqMessageSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   topic: z.string().optional(),
   template_id: templateIdSchema,
+  skill_ids: skillIdsSchema,
   has_attachment: z.boolean().optional(),
   // Lenient on purpose (validated by parseAttachments, see above).
   attachments: z.unknown().optional(),
@@ -160,6 +187,7 @@ export function parseMessage(
       // Accept template_id from either the nested body or the top level so the
       // producer can put it wherever the rest of its fields live.
       templateId: msg.body.template_id ?? msg.template_id,
+      skillIds: msg.body.skill_ids ?? msg.skill_ids,
       hasAttachment: msg.body.has_attachment ?? msg.has_attachment ?? false,
       attachments: parseAttachments(msg.body.attachments ?? msg.attachments),
     };
@@ -178,6 +206,7 @@ export function parseMessage(
     maxTokens: msg.max_tokens,
     topic: msg.topic,
     templateId: msg.template_id,
+    skillIds: msg.skill_ids,
     hasAttachment: msg.has_attachment ?? false,
     attachments: parseAttachments(msg.attachments),
   };

@@ -48,6 +48,53 @@ describe("parseMessage", () => {
     expect(msg?.templateId).toBe(3);
   });
 
+  it("leaves skillIds undefined when absent (ordinary chat)", () => {
+    const msg = parseMessage(buf({ id: 5, message: "hello", user_id: 42 }));
+    expect(msg?.skillIds).toBeUndefined();
+  });
+
+  it("parses a numeric skill_ids array in the flat format", () => {
+    const msg = parseMessage(buf({ id: 5, message: "x", user_id: 42, skill_ids: [7, 9] }));
+    expect(msg?.skillIds).toEqual([7, 9]);
+  });
+
+  it("coerces numeric-string skill ids and preserves order", () => {
+    const msg = parseMessage(buf({ id: 5, message: "x", user_id: 42, skill_ids: ["3", 1, "2"] }));
+    expect(msg?.skillIds).toEqual([3, 1, 2]);
+  });
+
+  it("drops invalid skill ids and de-dupes, keeping valid ones", () => {
+    const msg = parseMessage(
+      buf({ id: 5, message: "x", user_id: 42, skill_ids: [7, 0, -1, "abc", 3.5, 7, 9] }),
+    );
+    expect(msg?.skillIds).toEqual([7, 9]);
+  });
+
+  it("leaves skillIds undefined when the array has no valid id", () => {
+    const msg = parseMessage(buf({ id: 5, message: "x", user_id: 42, skill_ids: [0, "abc"] }));
+    expect(msg?.skillIds).toBeUndefined();
+  });
+
+  it("caps skill_ids at 20", () => {
+    const many = Array.from({ length: 30 }, (_, i) => i + 1);
+    const msg = parseMessage(buf({ id: 5, message: "x", user_id: 42, skill_ids: many }));
+    expect(msg?.skillIds).toHaveLength(20);
+    expect(msg?.skillIds?.[0]).toBe(1);
+    expect(msg?.skillIds?.[19]).toBe(20);
+  });
+
+  it("reads skill_ids from the nested body (old format)", () => {
+    const msg = parseMessage(
+      buf({ id: 9, body: { message: "x", user_id: 42, skill_ids: [12, 5] } }),
+    );
+    expect(msg?.skillIds).toEqual([12, 5]);
+  });
+
+  it("falls back to top-level skill_ids when body omits it (old format)", () => {
+    const msg = parseMessage(buf({ id: 9, skill_ids: [4], body: { message: "x", user_id: 42 } }));
+    expect(msg?.skillIds).toEqual([4]);
+  });
+
   it("defaults hasAttachment to false when absent", () => {
     const msg = parseMessage(buf({ id: 5, message: "hello", user_id: 42 }));
     expect(msg?.hasAttachment).toBe(false);
