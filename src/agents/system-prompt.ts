@@ -156,10 +156,10 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
-    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
-    "- If multiple could apply: choose the most specific one, then read/follow it.",
+    `- Single task (one skill applies, or several overlap): pick the most specific match, read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    "- One message covering several distinct tasks that map to different skills: read and follow each matching skill in turn, finishing one task before starting the next.",
     "- If none clearly apply: do not read any SKILL.md.",
-    "Constraints: never read more than one skill up front; only read after selecting.",
+    "Constraints: read a SKILL.md only after selecting it, and only for a skill you will actually act on; do not preload skills you won't use.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
     "",

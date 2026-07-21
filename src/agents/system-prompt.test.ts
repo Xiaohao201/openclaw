@@ -382,7 +382,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+      "- Single task (one skill applies, or several overlap): pick the most specific match, read its SKILL.md at <location> with `Read`, then follow it.",
+    );
+    expect(prompt).toContain(
+      "- One message covering several distinct tasks that map to different skills: read and follow each matching skill in turn, finishing one task before starting the next.",
     );
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -535,7 +538,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "- Single task (one skill applies, or several overlap): pick the most specific match, read its SKILL.md at <location> with `read`, then follow it.",
     );
   });
 
