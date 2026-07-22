@@ -45,7 +45,10 @@ export function buildCitationDirective(): string {
     "④有争议/学界未定论的议题；⑤医疗/法律/金融/工程等专业建议；⑥用到联网搜索或检索(RAG)得到的网页/文档。" +
     "以下情形不要加角标：通用常识、纯逻辑或数学推演、对用户文本的翻译/改写/润色、纯创意创作。" +
     "角标序号从 1 递增，同一来源多次引用复用同一序号。url 必须是你在搜索/检索工具结果里真实见到的外部链接，" +
-    "严禁编造链接或凭空引用。若本轮没有用到任何外部来源，则完全不要输出下面的来源块。" +
+    "严禁编造链接或凭空引用。角标与来源块必须成对出现：只要正文里用了任何 [n] 角标，就【必须】输出来源块，" +
+    "且每个角标序号都要能在来源清单里找到对应条目；反之，若你拿不出真实可访问的来源链接（例如结论来自内部数据库检索、" +
+    "或搜索工具没有返回网页链接），则正文中【不要】使用任何 [n] 角标，直接正常行文。" +
+    "若本轮没有用到任何外部来源，则完全不要输出下面的来源块。" +
     "输出格式：正常写完回答正文（含内联 [n] 角标）后，另起一行原样输出标记 " +
     CITATIONS_MARKER +
     " ，其后紧跟一个 JSON 数组（不要用代码块包裹、其后不要再有任何文字），每个元素形如 " +
@@ -84,6 +87,39 @@ export function splitCitations(
   const tail = fullText.slice(idx + CITATIONS_MARKER.length);
   const citations = parseCitations(tail, allowedUrls);
   return { text, citations };
+}
+
+/**
+ * Remove "dangling" inline citation markers — `[n]` whose id has no matching
+ * entry in `citations` — from a markdown answer. Covers the recurring model
+ * failure of footnoting sentences but omitting (or botching) the sources
+ * block: without this the user sees dead `[1][2]` markers that link nowhere.
+ *
+ * Skips fenced code blocks and inline code so array indexing like `arr[0]`
+ * is never touched. Also eats spaces/tabs immediately before a removed marker
+ * so "fact [1]." collapses to "fact." rather than "fact .".
+ */
+export function stripDanglingCitationMarkers(
+  text: string,
+  citations: readonly Citation[],
+): string {
+  if (typeof text !== "string" || !text || !/\[\d{1,3}\]/.test(text)) {
+    return text;
+  }
+  const valid = new Set(citations.map((c) => c.id));
+  // Odd-indexed segments are the captured code spans (fenced or inline) —
+  // passed through untouched; markers are only rewritten outside them.
+  return text
+    .split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/)
+    .map((seg, i) => {
+      if (i % 2 === 1) {
+        return seg;
+      }
+      return seg.replace(/[ \t]*\[(\d{1,3})\]/g, (m, n: string) =>
+        valid.has(Number(n)) ? m : "",
+      );
+    })
+    .join("");
 }
 
 /** Normalize a URL for dedupe/allowlist comparison (drop trailing slash). */

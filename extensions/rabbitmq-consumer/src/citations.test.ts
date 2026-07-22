@@ -4,6 +4,7 @@ import {
   CITATIONS_MARKER,
   hasCitationsMarker,
   splitCitations,
+  stripDanglingCitationMarkers,
 } from "./citations.js";
 
 describe("splitCitations", () => {
@@ -82,6 +83,50 @@ describe("splitCitations", () => {
     const { text, citations } = splitCitations(full);
     expect(text).toBe("答案[1]。");
     expect(citations).toEqual([]);
+  });
+});
+
+describe("stripDanglingCitationMarkers", () => {
+  const cite = (id: number) => ({ id, title: `t${id}`, url: `https://a.com/${id}`, snippet: "" });
+
+  it("removes all [n] markers when there are no citations at all", () => {
+    const text = "目前暂无官方回应[1]。文章指出存在多处信披疑点[2]，传播时机敏感。";
+    expect(stripDanglingCitationMarkers(text, [])).toBe(
+      "目前暂无官方回应。文章指出存在多处信披疑点，传播时机敏感。",
+    );
+  });
+
+  it("keeps markers that have a matching citation and drops the rest", () => {
+    const text = "结论一[1]。结论二[2]。结论三[3]。";
+    expect(stripDanglingCitationMarkers(text, [cite(1), cite(3)])).toBe(
+      "结论一[1]。结论二。结论三[3]。",
+    );
+  });
+
+  it("eats spaces before a removed marker so prose stays clean", () => {
+    expect(stripDanglingCitationMarkers("a fact [1]. done", [])).toBe("a fact. done");
+  });
+
+  it("never touches fenced code blocks or inline code", () => {
+    const text = "取值 `arr[1]`[2]：\n```js\nconst x = arr[1];\n```\n完毕[2]。";
+    expect(stripDanglingCitationMarkers(text, [])).toBe(
+      "取值 `arr[1]`：\n```js\nconst x = arr[1];\n```\n完毕。",
+    );
+  });
+
+  it("leaves an unterminated code fence untouched", () => {
+    const text = "```js\nconst x = arr[1];";
+    expect(stripDanglingCitationMarkers(text, [])).toBe(text);
+  });
+
+  it("is a no-op when every marker resolves", () => {
+    const text = "事实[1]与事实[2]。";
+    expect(stripDanglingCitationMarkers(text, [cite(1), cite(2)])).toBe(text);
+  });
+
+  it("ignores 4+ digit bracket numbers (e.g. 文号 [2026])", () => {
+    const text = "苏信办[2026]12号通告。";
+    expect(stripDanglingCitationMarkers(text, [])).toBe(text);
   });
 });
 

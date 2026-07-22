@@ -5,7 +5,11 @@ import {
   type PluginLogger,
 } from "../api.js";
 import { materializeAttachments } from "./attachment-materializer.js";
-import { buildCitationDirective, splitCitations } from "./citations.js";
+import {
+  buildCitationDirective,
+  splitCitations,
+  stripDanglingCitationMarkers,
+} from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
@@ -1032,7 +1036,10 @@ export async function processChatMessage(
       // Split off the machine citations block (marker + JSON) the model appends,
       // so only the user-visible answer is stored/returned; the structured
       // sources go to the frontend separately.
-      const { text: visibleResponse, citations } = splitCitations(fullResponse);
+      const { text: splitText, citations } = splitCitations(fullResponse);
+      // Drop inline [n] markers that have no matching source (model footnoted
+      // but omitted/botched the sources block) so no dead markers are stored.
+      const visibleResponse = stripDanglingCitationMarkers(splitText, citations);
 
       // Hard backstop behind the workspace prompt rule: strip any internal file
       // paths / identifiers the model may have narrated before they are stored
@@ -1126,9 +1133,12 @@ export async function processChatMessage(
       try {
         const partialText = streamPusherCtx.streamPusher?.getFullText();
         if (partialText) {
-          // Strip any half-written citations block from the interrupted stream.
-          const { text: visiblePartial } = splitCitations(partialText);
-          const safePartial = sanitizeInternalRefs(visiblePartial);
+          // Strip any half-written citations block from the interrupted stream,
+          // plus inline [n] markers left dangling by the lost sources block.
+          const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
+          const safePartial = sanitizeInternalRefs(
+            stripDanglingCitationMarkers(partialVisible, partialCites),
+          );
           await historyManager.updateResponse(chatMsg.historyId, safePartial);
           logger.info(
             `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars) before connection reset`,
