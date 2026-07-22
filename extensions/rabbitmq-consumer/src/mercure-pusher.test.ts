@@ -29,6 +29,10 @@ describe("StreamingMercurePusher push ordering", () => {
         calls.push("done");
         return true;
       }),
+      pushCitations: vi.fn(async (_topic: string, citations: unknown[]) => {
+        calls.push(`citations:${JSON.stringify(citations)}`);
+        return true;
+      }),
       pushError: vi.fn(async (_topic: string, error: string) => {
         calls.push(`error:${error}`);
         return true;
@@ -165,5 +169,88 @@ describe("StreamingMercurePusher push ordering", () => {
       .map((c) => c.slice("text:".length))
       .join("");
     expect(streamed).toBe(doc);
+  });
+});
+
+describe("StreamingMercurePusher citations block", () => {
+  let calls: string[];
+  let fakePusher: MercurePusher;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    calls = [];
+    fakePusher = {
+      pushText: vi.fn(async (_topic: string, content: string) => {
+        calls.push(`text:${content}`);
+        return true;
+      }),
+      pushDone: vi.fn(async () => {
+        calls.push("done");
+        return true;
+      }),
+      pushCitations: vi.fn(async (_topic: string, citations: unknown[]) => {
+        calls.push(`citations:${JSON.stringify(citations)}`);
+        return true;
+      }),
+      pushError: vi.fn(async () => true),
+    } as unknown as MercurePusher;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const streamedText = () =>
+    calls
+      .filter((c) => c.startsWith("text:"))
+      .map((c) => c.slice("text:".length))
+      .join("");
+
+  it("never streams the citations marker or the JSON block to the client", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 1, 80);
+    pusher.appendDelta("深圳发布了限行政策[1]。\n\n");
+    await vi.advanceTimersByTimeAsync(80);
+    pusher.appendDelta('<<<CITATIONS>>>\n[{"id":1,"url":"https://a.com"}]');
+    await vi.advanceTimersByTimeAsync(80);
+    await pusher.finish();
+
+    const streamed = streamedText();
+    expect(streamed).toBe("深圳发布了限行政策[1]。\n\n");
+    expect(streamed).not.toContain("<<<CITATIONS>>>");
+    expect(streamed).not.toContain("https://a.com");
+    // getFullText keeps the block so the pipeline can parse it.
+    expect(pusher.getFullText()).toContain("<<<CITATIONS>>>");
+  });
+
+  it("holds back the marker even when it is split across two flush windows", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 2, 80);
+    pusher.appendDelta("答案[1]。<<<CIT");
+    await vi.advanceTimersByTimeAsync(80);
+    // The partial marker prefix must not have leaked as visible text.
+    expect(streamedText()).toBe("答案[1]。");
+    pusher.appendDelta('ATIONS>>>\n[{"id":1,"url":"https://a.com"}]');
+    await vi.advanceTimersByTimeAsync(80);
+    await pusher.finish();
+    expect(streamedText()).toBe("答案[1]。");
+    expect(streamedText()).not.toContain("<<<CIT");
+  });
+
+  it("pushes citations before done and after all text", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 3, 80);
+    pusher.appendDelta("答案[1]。");
+    await vi.advanceTimersByTimeAsync(80);
+    await pusher.pushCitations([{ id: 1, title: "T", url: "https://a.com", snippet: "s" }]);
+    await pusher.finish();
+    expect(calls).toEqual([
+      "text:答案[1]。",
+      'citations:[{"id":1,"title":"T","url":"https://a.com","snippet":"s"}]',
+      "done",
+    ]);
+  });
+
+  it("pushCitations is a no-op for an empty list", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 4, 80);
+    await pusher.pushCitations([]);
+    expect(fakePusher.pushCitations).not.toHaveBeenCalled();
   });
 });

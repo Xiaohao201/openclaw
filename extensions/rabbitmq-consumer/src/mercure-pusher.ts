@@ -1,6 +1,7 @@
+import { CITATIONS_MARKER } from "./citations.js";
 import { stripInternalRefs } from "./sanitize-output.js";
 import type { ActivityStep } from "./tool-activity.js";
-import type { MercureConfig } from "./types.js";
+import type { Citation, MercureConfig } from "./types.js";
 
 /**
  * Mercure Hub push client.
@@ -95,6 +96,24 @@ export class MercurePusher {
     });
   }
 
+  /**
+   * Push the structured citation/footnote sources for an answer. Typed
+   * `citations` so the frontend attaches them to the assistant message (inline
+   * `[n]` cards + end-of-answer sources panel) instead of the reply body. Sent
+   * as one whole payload (not streamed) right before `done`.
+   */
+  async pushCitations(
+    topic: string,
+    citations: Citation[],
+    historyId?: number,
+  ): Promise<boolean> {
+    return this.sendToMercure(topic, {
+      type: "citations",
+      citations,
+      ...(historyId === undefined ? {} : { historyId }),
+    });
+  }
+
   /** Push a done signal (frontend stops animation), tagged with the chat turn. */
   async pushDone(topic: string, historyId?: number): Promise<boolean> {
     return this.sendToMercure(topic, {
@@ -159,9 +178,14 @@ export class StreamingMercurePusher {
   private readonly topic: string;
   private readonly historyId: number | undefined;
   private readonly flushIntervalMs: number;
-  private buffer = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private fullText = "";
+  /**
+   * Offset into {@link fullText} up to which the VISIBLE stream has been pushed.
+   * The visible region ends at the citations marker (if any), so once the model
+   * starts the machine citations block nothing more is streamed to the client.
+   */
+  private pushedLen = 0;
   /**
    * Chains flushes so pushes always reach the hub in order. Without it, a
    * timer-scheduled flush still in flight races the `done` POST from
@@ -182,14 +206,27 @@ export class StreamingMercurePusher {
     if (!delta) {
       return;
     }
-    this.buffer += delta;
     this.fullText += delta;
     this.scheduleFlush();
   }
 
-  /** Get all accumulated text so far. */
+  /**
+   * Get all accumulated text so far — INCLUDING the citations block (marker +
+   * JSON) if the model has emitted it. Callers that need the user-visible reply
+   * must split it off with {@link splitCitations}.
+   */
   getFullText(): string {
     return this.fullText;
+  }
+
+  /**
+   * End of the visible region: the citations marker if the model has started the
+   * machine block, otherwise the whole accumulated text. Everything at/after the
+   * marker is withheld from the client so the raw JSON never flashes on screen.
+   */
+  private visibleLimit(): number {
+    const idx = this.fullText.indexOf(CITATIONS_MARKER);
+    return idx < 0 ? this.fullText.length : idx;
   }
 
   /**
@@ -211,19 +248,45 @@ export class StreamingMercurePusher {
    */
   async flush(opts?: { final?: boolean }): Promise<void> {
     this.cancelTimer();
-    let chunk = this.buffer;
-    if (!opts?.final && (chunk.match(/`/g)?.length ?? 0) % 2 === 1) {
-      const lastTick = chunk.lastIndexOf("`");
-      this.buffer = chunk.slice(lastTick);
-      chunk = chunk.slice(0, lastTick);
-    } else {
-      this.buffer = "";
+    let chunk = this.fullText.slice(this.pushedLen, this.visibleLimit());
+    if (!opts?.final) {
+      // Hold back a tail that is a partial prefix of the citations marker, so a
+      // marker straddling two flush windows (`…\n<<<CIT` then `ATIONS>>>…`) is
+      // never streamed as visible text before we can recognize and truncate it.
+      const partial = partialMarkerSuffixLen(chunk, CITATIONS_MARKER);
+      if (partial > 0) {
+        chunk = chunk.slice(0, chunk.length - partial);
+      }
+      // Hold back an unterminated code span (odd number of backticks) until its
+      // closing backtick arrives, so an internal path straddling two windows is
+      // not pushed half-open past the sanitizer.
+      if ((chunk.match(/`/g)?.length ?? 0) % 2 === 1) {
+        const lastTick = chunk.lastIndexOf("`");
+        chunk = chunk.slice(0, lastTick);
+      }
     }
+    // Advance by the RAW consumed length (not the sanitized length): stripped
+    // internal refs were still part of the visible stream we've now consumed.
+    this.pushedLen += chunk.length;
     const safe = stripInternalRefs(chunk);
     this.pending = this.pending.then(async () => {
       if (safe) {
         await this.pusher.pushText(this.topic, safe, this.historyId);
       }
+    });
+    await this.pending;
+  }
+
+  /**
+   * Push the structured citations for this answer (whole payload, ordered after
+   * any in-flight text pushes). Call before {@link finish}. No-op on empty list.
+   */
+  async pushCitations(citations: Citation[]): Promise<void> {
+    if (!citations.length) {
+      return;
+    }
+    this.pending = this.pending.then(async () => {
+      await this.pusher.pushCitations(this.topic, citations, this.historyId);
     });
     await this.pending;
   }
@@ -237,7 +300,9 @@ export class StreamingMercurePusher {
   /** Push an error after draining in-flight text pushes. */
   async pushError(error: string): Promise<void> {
     this.cancelTimer();
-    this.buffer = "";
+    // Freeze the visible cursor so no further deltas can be streamed after the
+    // error (any tail is dropped, matching the old buffer-clear behavior).
+    this.pushedLen = this.fullText.length;
     await this.pending;
     await this.pusher.pushError(this.topic, error, this.historyId);
   }
@@ -258,4 +323,19 @@ export class StreamingMercurePusher {
       this.timer = null;
     }
   }
+}
+
+/**
+ * Length of the longest suffix of `text` that is a proper, non-empty prefix of
+ * `marker` (0 if none). Used to hold back a chunk tail that might be the start
+ * of the citations marker split across two flush windows.
+ */
+function partialMarkerSuffixLen(text: string, marker: string): number {
+  const max = Math.min(text.length, marker.length - 1);
+  for (let k = max; k > 0; k -= 1) {
+    if (text.endsWith(marker.slice(0, k))) {
+      return k;
+    }
+  }
+  return 0;
 }

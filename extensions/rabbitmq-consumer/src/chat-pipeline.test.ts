@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginLogger, PluginRuntime } from "../api.js";
 import { processChatMessage } from "./chat-pipeline.js";
+import { buildCitationDirective } from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { HistoryManager } from "./history-manager.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
@@ -22,6 +23,12 @@ type AgentEventListener = (evt: {
 
 const USER_ID = "42";
 const SESSION_ID = "s1";
+
+// The citation directive is prepended to every turn's message; strip it so the
+// message-composition assertions can keep their strong exact-match on the rest.
+const CITATION_DIRECTIVE = buildCitationDirective();
+const withoutCitation = (message: string): string =>
+  message.startsWith(CITATION_DIRECTIVE) ? message.slice(CITATION_DIRECTIVE.length) : message;
 const SESSION_KEY = `agent:rabbitmq-${USER_ID}:rabbitmq:${USER_ID}:${SESSION_ID}`;
 
 function createChatMessage(): ChatMessage {
@@ -541,7 +548,7 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(capturedMessage).toBe(
+    expect(withoutCitation(capturedMessage)).toBe(
       `[userId:${USER_ID}] [topicId:585 topicName:"广本监测专项" useSlaveTopic:true] hi there`,
     );
   });
@@ -581,7 +588,7 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(capturedMessage).toBe(
+    expect(withoutCitation(capturedMessage)).toBe(
       `[userId:${USER_ID}] [topicId:585 topicName:"专题E" useSlaveTopic:false]` +
         ` [allTopics: 116:"专题A", 357, 585:"专题E"] hi there`,
     );
@@ -618,7 +625,7 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(capturedMessage).toBe(
+    expect(withoutCitation(capturedMessage)).toBe(
       `[userId:${USER_ID}] [topicId:585 topicName:"专项[A] \\"测试\\"" useSlaveTopic:true] hi there`,
     );
   });
@@ -654,7 +661,7 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(capturedMessage).toBe(`[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] hi there`);
+    expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] hi there`);
   });
 
   it("falls back to the plain userId prefix when topic resolution fails", async () => {
@@ -685,7 +692,7 @@ describe("processChatMessage", () => {
     );
 
     expect(result).toBe("ok");
-    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+    expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] hi there`);
   });
 
   it("omits topic context when the user has no topic mapping", async () => {
@@ -719,7 +726,7 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+    expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] hi there`);
   });
 
   it("greets the user then enqueues the report when a template is selected", async () => {
@@ -918,7 +925,7 @@ describe("processChatMessage", () => {
       logger,
     );
 
-    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+    expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] hi there`);
     expect(capturedMessage).not.toContain("no-memory");
   });
 
@@ -1284,7 +1291,7 @@ describe("processChatMessage", () => {
       skillLookup,
     );
 
-    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+    expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] hi there`);
     expect(capturedMessage).not.toContain("启用了以下自定义技能");
   });
 });

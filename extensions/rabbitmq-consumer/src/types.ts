@@ -105,6 +105,19 @@ export interface ChatMessage {
   skillIds?: number[];
 }
 
+/**
+ * A single citation/footnote source attached to an assistant answer. Emitted to
+ * the frontend so it can render inline `[n]` markers (hover/click → source card)
+ * and an end-of-answer "参考来源（共 X 个）" panel. `id` matches the `[n]` the
+ * model wrote inline; `url` is always an external http(s) link.
+ */
+export interface Citation {
+  id: number;
+  title: string;
+  url: string;
+  snippet: string;
+}
+
 /** History record from MySQL */
 export interface HistoryRecord {
   id: number;

@@ -82,16 +82,36 @@ export class HistoryManager {
   }
 
   /**
-   * Persist a record's `metadata` JSON. Used to store the sanitized
-   * work-process timeline (`{ steps: [...] }`) so the lobster history view can
-   * replay the "工作过程" panel — these steps are otherwise transient Mercure
-   * events that were never saved. The caller passes a plain object; it is
-   * serialized here. Best-effort: a failure must never fail the chat turn.
+   * Merge a patch into a record's `metadata` JSON. Independent writers touch
+   * different keys — the work-process timeline (`{ steps: [...] }`), citation
+   * sources (`{ citations: [...] }`), and the report-generator (`{ report }`) —
+   * so this reads the current metadata and spreads the patch over it rather than
+   * overwriting, or one writer would clobber another's keys. The read uses the
+   * writer pool to avoid reading a stale replica of our own just-written row.
+   * The caller passes a plain object; it is serialized here. Best-effort: a
+   * failure must never fail the chat turn.
    */
-  async updateMetadata(historyId: number, metadata: Record<string, unknown>): Promise<void> {
+  async updateMetadata(historyId: number, patch: Record<string, unknown>): Promise<void> {
     const pool = this.getWriterPool();
+    let existing: Record<string, unknown> = {};
+    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT metadata FROM history_messages WHERE id = ?",
+      [historyId],
+    );
+    const raw = rows?.[0]?.metadata;
+    if (typeof raw === "string" && raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Corrupt/legacy metadata — start fresh rather than fail the write.
+      }
+    }
+    const merged = { ...existing, ...patch };
     await pool.execute("UPDATE history_messages SET metadata = ? WHERE id = ?", [
-      JSON.stringify(metadata),
+      JSON.stringify(merged),
       historyId,
     ]);
   }

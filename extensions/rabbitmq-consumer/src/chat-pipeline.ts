@@ -5,6 +5,7 @@ import {
   type PluginLogger,
 } from "../api.js";
 import { materializeAttachments } from "./attachment-materializer.js";
+import { buildCitationDirective, splitCitations } from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
@@ -961,9 +962,14 @@ export async function processChatMessage(
             " "
           : "";
 
+      // Ask the model to footnote external facts and end with a machine sources
+      // block (split off in Step 6). It self-gates per the "when to cite" rules,
+      // so pure chat/creative turns simply omit it.
+      const citationDirective = buildCitationDirective();
+
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${ackDirective}${attachmentDirective}${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        message: `${ackDirective}${attachmentDirective}${memoryDirective}${citationDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
         deliver: false,
       });
 
@@ -1021,13 +1027,28 @@ export async function processChatMessage(
         fullResponse = streamPusherCtx.streamPusher.getFullText() || "(No response generated)";
       }
 
+      // Split off the machine citations block (marker + JSON) the model appends,
+      // so only the user-visible answer is stored/returned; the structured
+      // sources go to the frontend separately.
+      const { text: visibleResponse, citations } = splitCitations(fullResponse);
+
       // Hard backstop behind the workspace prompt rule: strip any internal file
       // paths / identifiers the model may have narrated before they are stored
       // or returned to the web client.
-      const safeResponse = sanitizeInternalRefs(fullResponse);
+      const safeResponse = sanitizeInternalRefs(visibleResponse);
 
       // Step 7: Update history record
       await historyManager.updateResponse(chatMsg.historyId, safeResponse);
+
+      // Persist citation sources into metadata so the lobster history view can
+      // replay footnotes on reload (best-effort; merges with the timeline steps).
+      if (citations.length > 0) {
+        try {
+          await historyManager.updateMetadata(chatMsg.historyId, { citations });
+        } catch (metaErr) {
+          logger.warn(`[CHAT_PIPELINE] Persist citations failed: ${String(metaErr)}`);
+        }
+      }
 
       // Close any open phase steps so the timeline ends clean (with real
       // durations) rather than relying on the frontend's done-time finalize.
@@ -1071,7 +1092,12 @@ export async function processChatMessage(
         }
       }
 
-      // Step 8: Finish streaming — flush remaining buffer + push done signal
+      // Step 8: Emit citation sources (whole payload) then finish streaming —
+      // flush remaining buffer + push done signal. Citations go before done so
+      // the frontend has them when it finalizes the bubble.
+      if (citations.length > 0) {
+        await streamPusherCtx.streamPusher.pushCitations(citations);
+      }
       await streamPusherCtx.streamPusher.finish();
 
       logger.info(
@@ -1098,7 +1124,9 @@ export async function processChatMessage(
       try {
         const partialText = streamPusherCtx.streamPusher?.getFullText();
         if (partialText) {
-          const safePartial = sanitizeInternalRefs(partialText);
+          // Strip any half-written citations block from the interrupted stream.
+          const { text: visiblePartial } = splitCitations(partialText);
+          const safePartial = sanitizeInternalRefs(visiblePartial);
           await historyManager.updateResponse(chatMsg.historyId, safePartial);
           logger.info(
             `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars) before connection reset`,
