@@ -13,9 +13,9 @@ import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
-import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
+import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
@@ -46,7 +46,9 @@ function buildSkillContext(skills: ResolvedSkill[]): string {
       continue;
     }
     const clipped =
-      body.length > SKILL_BODY_MAX ? `${body.slice(0, SKILL_BODY_MAX)}\n…(技能内容过长，已截断)` : body;
+      body.length > SKILL_BODY_MAX
+        ? `${body.slice(0, SKILL_BODY_MAX)}\n…(技能内容过长，已截断)`
+        : body;
     const desc = skill.description?.trim() ? `（${skill.description.trim()}）` : "";
     const entry = `● 技能「${skill.name}」${desc}：\n${clipped}`;
     // Stop before exceeding the overall cap; the skills already added still apply.

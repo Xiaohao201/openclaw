@@ -102,11 +102,7 @@ export class MercurePusher {
    * `[n]` cards + end-of-answer sources panel) instead of the reply body. Sent
    * as one whole payload (not streamed) right before `done`.
    */
-  async pushCitations(
-    topic: string,
-    citations: Citation[],
-    historyId?: number,
-  ): Promise<boolean> {
+  async pushCitations(topic: string, citations: Citation[], historyId?: number): Promise<boolean> {
     return this.sendToMercure(topic, {
       type: "citations",
       citations,
