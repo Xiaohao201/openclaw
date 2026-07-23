@@ -119,7 +119,7 @@ export class RabbitMqClient {
 
     this.channel = await this.connection.createChannel();
     await this.channel.assertQueue(this.config.queue, { durable: true });
-    await this.channel.prefetch(1);
+    await this.channel.prefetch(this.config.prefetch);
 
     this.logger.info(`[RABBITMQ] Started consuming from queue: ${this.config.queue}`);
 

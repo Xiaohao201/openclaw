@@ -3,13 +3,26 @@ import { processChatMessage, warmupAgent } from "./src/chat-pipeline.js";
 import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
-import { parseMessage, parseWarmup } from "./src/message-handler.js";
+import { createMessageConsumer } from "./src/message-consumer.js";
 import { RabbitMqClient } from "./src/rabbitmq-client.js";
 import { ReportTaskPublisher } from "./src/report-task-publisher.js";
 import { ReportTemplateLookup } from "./src/report-template-lookup.js";
 import { SkillLookup } from "./src/skill-lookup.js";
 import { TopicResolver } from "./src/topic-resolver.js";
 import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
+
+/**
+ * Clamp the channel prefetch to a sane window. Default 6: with the pipeline's
+ * 300s waitForRun ceiling, a single user's back-to-back burst keeps its last
+ * unacked message under RabbitMQ's default 30min consumer_timeout (6 × 300s).
+ * Raising it beyond 6 requires raising consumer_timeout on the broker first.
+ */
+function clampPrefetch(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 6;
+  }
+  return Math.min(32, Math.max(1, Math.floor(value)));
+}
 
 /**
  * Resolve plugin config from the plugin config object, with env var fallbacks.
@@ -26,6 +39,7 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
       user: (rabbitmq?.user as string) ?? process.env.RABBITMQ_USER ?? "",
       password: (rabbitmq?.password as string) ?? process.env.RABBITMQ_PASSWORD ?? "",
       queue: (rabbitmq?.queue as string) ?? process.env.RABBITMQ_QUEUE ?? "MessageProxy",
+      prefetch: clampPrefetch(Number(rabbitmq?.prefetch ?? process.env.RABBITMQ_PREFETCH ?? 6)),
       reportTaskQueue:
         (rabbitmq?.reportTaskQueue as string) ??
         process.env.RABBITMQ_REPORT_TASK_QUEUE ??
@@ -129,42 +143,32 @@ export default definePluginEntry({
           ctx.logger,
         );
 
-        const client = new RabbitMqClient(pluginConfig.rabbitmq, ctx.logger, async (msg) => {
-          // Warmup envelopes carry no history id and must be handled before
-          // parseMessage (which would reject them). Best-effort, fire silently.
-          const warmup = parseWarmup(msg.content);
-          if (warmup) {
-            ctx.logger.info(`[RABBITMQ_CONSUMER] Warmup request: userId=${warmup.userId}`);
-            await warmupAgent(warmup.userId, api.runtime, ctx.logger);
-            return;
-          }
-
-          const chatMsg = parseMessage(msg.content, ctx.logger);
-          if (!chatMsg) {
-            ctx.logger.error("[RABBITMQ_CONSUMER] Failed to parse message");
-            return;
-          }
-
-          ctx.logger.info(
-            `[RABBITMQ_CONSUMER] Received message: historyId=${chatMsg.historyId}, ` +
-              `userId=${chatMsg.userId}`,
-          );
-
-          await processChatMessage(
-            chatMsg,
-            historyRef!,
-            pluginConfig.mercure,
-            api.runtime,
-            ctx.logger,
-            downloadRef,
-            topicResolverRef,
-            feedCounterRef,
-            reportPublisherRef,
-            templateLookupRef,
-            skillLookupRef,
-            api.config,
-          );
-        });
+        // Per-user serialization lives in the consumer (see message-consumer.ts):
+        // with prefetch > 1 different users' turns run concurrently while one
+        // user's messages stay strictly ordered.
+        const client = new RabbitMqClient(
+          pluginConfig.rabbitmq,
+          ctx.logger,
+          createMessageConsumer({
+            logger: ctx.logger,
+            runWarmup: (userId) => warmupAgent(userId, api.runtime, ctx.logger),
+            runChat: (chatMsg) =>
+              processChatMessage(
+                chatMsg,
+                historyRef!,
+                pluginConfig.mercure,
+                api.runtime,
+                ctx.logger,
+                downloadRef,
+                topicResolverRef,
+                feedCounterRef,
+                reportPublisherRef,
+                templateLookupRef,
+                skillLookupRef,
+                api.config,
+              ),
+          }),
+        );
 
         clientRef = client;
 

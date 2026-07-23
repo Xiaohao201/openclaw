@@ -33,6 +33,7 @@ const config: RabbitMqConfig = {
   password: "guest",
   queue: "chat",
   reportTaskQueue: "report_tasks",
+  prefetch: 6,
 };
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -54,6 +55,57 @@ describe("RabbitMqClient connection resilience", () => {
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("Connection error: Unexpected close"),
     );
+
+    await client.stop();
+  });
+});
+
+describe("RabbitMqClient concurrency", () => {
+  it("applies the configured prefetch to the channel", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+
+    const client = new RabbitMqClient(config, logger as never, vi.fn());
+    void client.start();
+    await flush();
+
+    expect(conn.channel.prefetch).toHaveBeenCalledWith(6);
+
+    await client.stop();
+  });
+
+  it("acks each message independently — a slow handler never blocks a fast one's ack", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+
+    let releaseSlow!: () => void;
+    const slowDone = new Promise<void>((r) => {
+      releaseSlow = r;
+    });
+    const handler = vi.fn((msg: { content: Buffer }) =>
+      msg.content.toString() === "slow" ? slowDone : Promise.resolve(),
+    );
+
+    const client = new RabbitMqClient(config, logger as never, handler as never);
+    void client.start();
+    await flush();
+
+    const consumeCb = conn.channel.consume.mock.calls[0]?.[1] as (msg: unknown) => Promise<void>;
+    const slowMsg = { content: Buffer.from("slow") };
+    const fastMsg = { content: Buffer.from("fast") };
+
+    void consumeCb(slowMsg);
+    void consumeCb(fastMsg);
+    await flush();
+
+    // The fast message is acked while the slow one is still in flight.
+    expect(conn.channel.ack).toHaveBeenCalledTimes(1);
+    expect(conn.channel.ack).toHaveBeenCalledWith(fastMsg);
+
+    releaseSlow();
+    await flush();
+    expect(conn.channel.ack).toHaveBeenCalledTimes(2);
+    expect(conn.channel.ack).toHaveBeenLastCalledWith(slowMsg);
 
     await client.stop();
   });

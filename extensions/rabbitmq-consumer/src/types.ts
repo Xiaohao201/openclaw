@@ -7,6 +7,13 @@ export interface RabbitMqConfig {
   queue: string;
   /** Queue used to notify the report-generator plugin of new report tasks. */
   reportTaskQueue: string;
+  /**
+   * Channel prefetch: how many unacked messages the broker hands us at once,
+   * i.e. the cross-user concurrency ceiling (per-user ordering is enforced in
+   * message-consumer.ts). Keep ≤ 6 unless the broker's consumer_timeout has
+   * been raised (see clampPrefetch in index.ts).
+   */
+  prefetch: number;
 }
 
 /** History database MySQL config */
