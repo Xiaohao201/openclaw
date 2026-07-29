@@ -43,20 +43,28 @@ const skillIdsSchema = z
     return ids.length ? ids.slice(0, SKILL_IDS_MAX) : undefined;
   });
 
-// Large-sheet attachment reference (see types.AttachmentRef). Additive and
-// optional: ordinary chat and old producers omit it. Validated per-element by
+// Attachment reference (see types.AttachmentRef). Additive and optional:
+// ordinary chat and old producers omit it. Validated per-element by
 // parseAttachments (NOT inline in the message schema) so a malformed/old-format
 // attachment is dropped — degrading to overview+sample — and never fails the
 // whole message parse (which would silently drop the user's turn).
-const attachmentRefSchema = z.object({
-  fileId: z.string().min(1),
-  filename: z.string().min(1),
-  ext: z.string().min(1),
-  kind: z.literal("spreadsheet"),
-  storage: z.literal("oss"),
-  ref: z.string().url(),
-  totalDataRows: z.number().int().nonnegative().default(0),
-});
+// `spreadsheet` carries totalDataRows; `image` (证件图片，投诉建档) carries the OSS
+// object key so the agent can store it via infringe_profile_save — an image
+// without an ossKey is useless for that, so it's refined out.
+const attachmentRefSchema = z
+  .object({
+    fileId: z.string().min(1),
+    filename: z.string().min(1),
+    ext: z.string().min(1),
+    kind: z.enum(["spreadsheet", "image"]),
+    storage: z.literal("oss"),
+    ref: z.string().url(),
+    totalDataRows: z.number().int().nonnegative().default(0),
+    ossKey: z.string().min(1).optional(),
+  })
+  .refine((a) => a.kind !== "image" || !!a.ossKey, {
+    message: "image attachment requires ossKey",
+  });
 
 /**
  * Coerce a raw `attachments` value into valid AttachmentRefs, dropping anything

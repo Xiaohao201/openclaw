@@ -147,6 +147,36 @@ describe("parseMessage", () => {
     expect(msg?.attachments).toBeUndefined();
   });
 
+  it("parses a 证件 image attachment carrying an ossKey", () => {
+    const att = {
+      fileId: "img1",
+      filename: "身份证正面.jpg",
+      ext: "jpg",
+      kind: "image",
+      storage: "oss",
+      ref: "https://oss.leadingnews.cn/ibtai/lobster/certs/2026/07/img1.jpg",
+      ossKey: "ibtai/lobster/certs/2026/07/img1.jpg",
+    };
+    const msg = parseMessage(buf({ id: 7, message: "帮我建档", user_id: 42, attachments: [att] }));
+    expect(msg?.attachments).toHaveLength(1);
+    expect(msg?.attachments?.[0].kind).toBe("image");
+    expect(msg?.attachments?.[0].ossKey).toBe("ibtai/lobster/certs/2026/07/img1.jpg");
+  });
+
+  it("drops an image attachment missing its ossKey (unusable for save-profile)", () => {
+    const att = {
+      fileId: "img2",
+      filename: "no-key.png",
+      ext: "png",
+      kind: "image",
+      storage: "oss",
+      ref: "https://oss.leadingnews.cn/ibtai/lobster/certs/2026/07/img2.png",
+    };
+    const msg = parseMessage(buf({ id: 8, message: "建档", user_id: 42, attachments: [att] }));
+    expect(msg).not.toBeNull();
+    expect(msg?.attachments).toBeUndefined();
+  });
+
   it("keeps valid attachments and drops invalid ones in the same message", () => {
     const good = {
       fileId: "g",

@@ -1,5 +1,20 @@
 import mysql from "mysql2/promise";
-import type { HistoryDbConfig, WriterDbConfig, HistoryRecord } from "./types.js";
+import type { HistoryDbConfig, WriterDbConfig, HistoryRecord, TurnUsageRecord } from "./types.js";
+
+/**
+ * MySQL error code for a column that does not exist. The token/cost columns are
+ * added by a separate migration (see src/migrations/20260728-history-messages-usage.sql);
+ * until an operator runs it, usage writes must degrade to a warning instead of
+ * erroring on every turn.
+ */
+const ER_BAD_FIELD_ERROR = "ER_BAD_FIELD_ERROR";
+
+/** DECIMAL(16,8) in the schema — round here so MySQL never truncates silently. */
+const roundCost = (value: number): number =>
+  Number.isFinite(value) ? Math.round(value * 1e8) / 1e8 : 0;
+
+const roundTokens = (value: number): number =>
+  Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 
 /**
  * Manages read/write access to the history_messages MySQL table.
@@ -99,7 +114,13 @@ export class HistoryManager {
       [historyId],
     );
     const raw = rows?.[0]?.metadata;
-    if (typeof raw === "string" && raw) {
+    // mysql2 returns a JSON column as an already-parsed object (the normal
+    // case); tolerate a legacy string value too. Missing the object branch made
+    // every write clobber the sibling keys — e.g. the later steps write wiped
+    // the citations written earlier in the same turn, so history lost footnotes.
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      existing = raw as Record<string, unknown>;
+    } else if (typeof raw === "string" && raw) {
       try {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -114,6 +135,71 @@ export class HistoryManager {
       JSON.stringify(merged),
       historyId,
     ]);
+  }
+
+  /**
+   * Add one run's token/cost accounting to a history row.
+   *
+   * Accumulates (`col = col + ?`) rather than assigning: a single chat row can
+   * be billed twice — once for the conversational turn, and again later when
+   * the asynchronously generated report for that same turn finishes — and the
+   * second write must not erase the first. `llm_provider`/`llm_model` keep the
+   * FIRST writer's value (COALESCE) so the label reflects the conversation
+   * itself; the full per-model detail goes to metadata.usage.
+   *
+   * Throws on failure (including a not-yet-migrated table, rewritten into an
+   * actionable message). Callers treat usage accounting as best-effort and must
+   * not fail a turn that already answered the user.
+   */
+  async addUsage(historyId: number, usage: TurnUsageRecord): Promise<void> {
+    const pool = this.getWriterPool();
+    try {
+      await pool.execute(
+        `UPDATE history_messages SET
+           input_tokens = COALESCE(input_tokens, 0) + ?,
+           output_tokens = COALESCE(output_tokens, 0) + ?,
+           cache_read_tokens = COALESCE(cache_read_tokens, 0) + ?,
+           cache_write_tokens = COALESCE(cache_write_tokens, 0) + ?,
+           total_tokens = COALESCE(total_tokens, 0) + ?,
+           input_cost = COALESCE(input_cost, 0) + ?,
+           output_cost = COALESCE(output_cost, 0) + ?,
+           cache_read_cost = COALESCE(cache_read_cost, 0) + ?,
+           cache_write_cost = COALESCE(cache_write_cost, 0) + ?,
+           total_cost = COALESCE(total_cost, 0) + ?,
+           llm_calls = COALESCE(llm_calls, 0) + ?,
+           cost_currency = ?,
+           llm_provider = COALESCE(llm_provider, ?),
+           llm_model = COALESCE(llm_model, ?)
+         WHERE id = ?`,
+        [
+          roundTokens(usage.inputTokens),
+          roundTokens(usage.outputTokens),
+          roundTokens(usage.cacheReadTokens),
+          roundTokens(usage.cacheWriteTokens),
+          roundTokens(usage.totalTokens),
+          roundCost(usage.inputCost),
+          roundCost(usage.outputCost),
+          roundCost(usage.cacheReadCost),
+          roundCost(usage.cacheWriteCost),
+          roundCost(usage.totalCost),
+          roundTokens(usage.calls),
+          usage.currency,
+          usage.provider ?? null,
+          usage.model ?? null,
+          historyId,
+        ],
+      );
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === ER_BAD_FIELD_ERROR) {
+        throw new Error(
+          "history_messages is missing the token/cost columns; run " +
+            "extensions/rabbitmq-consumer/src/migrations/20260728-history-messages-usage.sql",
+          { cause: err },
+        );
+      }
+      throw err;
+    }
   }
 
   /** Close all connection pools. */

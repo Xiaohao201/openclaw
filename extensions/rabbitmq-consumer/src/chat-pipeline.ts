@@ -3,6 +3,7 @@ import {
   type OpenClawConfig,
   type PluginRuntime,
   type PluginLogger,
+  type SessionTurnCurrencyPolicy,
 } from "../api.js";
 import { materializeAttachments } from "./attachment-materializer.js";
 import {
@@ -24,6 +25,7 @@ import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./to
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
 import type { TopicInfo, TopicResolver } from "./topic-resolver.js";
+import { persistTurnUsage } from "./turn-usage-writer.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
 /** Hard cap on injected template body, so a huge MEDIUMTEXT can't blow the prompt. */
@@ -421,6 +423,11 @@ export async function processChatMessage(
    * process-global runtime snapshot isn't populated in this consumer's path.
    */
   config?: OpenClawConfig,
+  /**
+   * Currency policy for per-turn cost accounting (see usage-pricing.ts). When
+   * omitted the turn still runs; only the token/cost writeback is skipped.
+   */
+  usageCurrency?: SessionTurnCurrencyPolicy,
 ): Promise<string> {
   const mercure = new MercurePusher(mercureConfig);
 
@@ -467,6 +474,29 @@ export async function processChatMessage(
         `[CHAT_PIPELINE] Persisting steps metadata failed (non-fatal): ${String(metaErr)}`,
       );
     }
+  };
+
+  // Per-turn token/cost accounting. Filled in just before the agent run so the
+  // window starts at the run, and declared at function scope so EVERY exit path
+  // (success, subagent error/timeout, connection reset) bills the turn — an
+  // errored turn still burned tokens. Idempotent (bills at most once) and
+  // best-effort (see persistTurnUsage).
+  let usageContext: { sessionKey: string; agentId: string; sinceMs: number } | null = null;
+  let usageBilled = false;
+  const persistUsage = async (): Promise<void> => {
+    const ctx = usageContext;
+    if (usageBilled || !ctx || !usageCurrency) {
+      return;
+    }
+    usageBilled = true;
+    await persistTurnUsage({
+      historyId: chatMsg.historyId,
+      ...ctx,
+      historyManager,
+      policy: usageCurrency,
+      config,
+      logger,
+    });
   };
 
   try {
@@ -924,15 +954,37 @@ export async function processChatMessage(
       // in the subprocess, returning only small computed results (counts,
       // filtered subsets, aggregations) so it never floods context. The inline
       // overview is the authoritative source for totals/percentages.
-      const largeSheetDirective = materializedAttachments.length
+      const materializedSheets = materializedAttachments.filter((a) => a.kind === "spreadsheet");
+      const largeSheetDirective = materializedSheets.length
         ? "本轮附件含大表，完整文件已就绪于 workspace：" +
-          materializedAttachments
-            .map((a) => `「${a.filename}」→ ${a.workspacePath}（约 ${a.totalDataRows} 行）`)
+          materializedSheets
+            .map((a) => `「${a.filename}」→ ${a.workspacePath}（约 ${a.totalDataRows ?? 0} 行）`)
             .join("、") +
           "。消息正文里只内联了概览+前若干行样本。如需逐行明细、按任意字段筛选或自定义聚合，" +
           "请用代码（pandas/openpyxl 读取该文件路径）在子进程内完成计算，" +
           "只返回小结果（计数/筛选出的少量行/分组聚合表），切勿把整表打印进回复；" +
           "总数与占比一律以上方概览为准，不要从样本估算。 "
+        : "";
+
+      // 证件图片（投诉建档）：图片已落到 workspace，且各自带回 OSS objectKey。
+      // 让 agent 先 read 逐张「看」图自主识别证件类型，再把对应 ossKey 填进
+      // infringe_profile_save 的字段——用户无需手工标注每张是什么证件。
+      // 图片附件带回了 workspace 路径与 OSS objectKey。软性、意图门控：仅当用户
+      // 意在投诉/维权建档时才据此建档；普通图片对话不受影响。
+      const materializedImages = materializedAttachments.filter((a) => a.kind === "image");
+      const certImageDirective = materializedImages.length
+        ? "[图片附件] 用户本轮上传了图片，已存入 workspace 并各自带回 OSS objectKey：" +
+          materializedImages
+            .map((a) => `「${a.filename}」→ ${a.workspacePath}（ossKey=${a.ossKey ?? ""}）`)
+            .join("；") +
+          "。若这些是投诉/维权所需证件（身份证 / 营业执照 / 公章 / 授权委托书），请代用户建立或完善「投诉主体档案」：" +
+          "①用 read 工具逐张查看，自主识别每张属于哪类证件（身份证正面 / 身份证反面 / 手持身份证 / 营业执照 / 公章 / 授权委托书）；" +
+          "②按识别结果把每张的 ossKey 填入 infringe_profile_save 对应字段" +
+          "（身份证正面→idCardFront，反面→idCardBack，手持→idCardHold，营业执照→businessLicense，公章→sealImage，委托书→powerOfAttorney）；" +
+          "③主体类型 subjectType：出现营业执照按 Enterprise，否则 Personal；" +
+          "④名称 name / 证件号 idNumber 等文本字段，图中能清晰读到就据实填写，读不到就简要询问用户后再建档，切勿编造；" +
+          "⑤建档成功后用返回的 missingDocs 告知用户还缺哪些证件，以及提交投诉时仍需网页端上传的盖章《投诉通知书》。" +
+          "若这些只是普通图片、与投诉无关，则忽略本条，按用户实际问题正常处理。 "
         : "";
 
       // Does this attachment turn ask for a report (vs an ad-hoc question like
@@ -973,9 +1025,14 @@ export async function processChatMessage(
       // so pure chat/creative turns simply omit it.
       const citationDirective = buildCitationDirective();
 
+      // Open the accounting window BEFORE the run: every assistant message the
+      // agent appends from here on (one per tool-loop iteration) belongs to this
+      // turn, and anything older belongs to a previous turn in the same session.
+      usageContext = { sessionKey, agentId, sinceMs: Date.now() };
+
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${ackDirective}${attachmentDirective}${memoryDirective}${citationDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        message: `${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
         deliver: false,
       });
 
@@ -995,6 +1052,8 @@ export async function processChatMessage(
         // Persist the timeline with unfinished steps marked failed, so the
         // history view shows a clean failed timeline rather than a spinner.
         await persistTimeline("failed");
+        // The failed run still consumed tokens; bill what it spent.
+        await persistUsage();
         return `Error: ${waitResult.error}`;
       }
 
@@ -1002,6 +1061,7 @@ export async function processChatMessage(
         logger.warn(`[CHAT_PIPELINE] Subagent timed out for runId=${runResult.runId}`);
         await streamPusherCtx.streamPusher.pushError("Processing timed out");
         await persistTimeline("failed");
+        await persistUsage();
         return "Error: Processing timed out";
       }
 
@@ -1069,6 +1129,10 @@ export async function processChatMessage(
       // running step coerced to "completed") so the lobster history view can
       // replay the "工作过程" panel without a step stuck spinning.
       await persistTimeline("completed");
+
+      // Step 7c: Bill the turn — sum every model call the run made (one per
+      // tool-loop iteration) and write tokens + cost onto the history row.
+      await persistUsage();
 
       // Step 8b: Template path — now that the user has been greeted, enqueue the
       // report. This opens the frontend report card (`report_created`) before the
@@ -1150,11 +1214,13 @@ export async function processChatMessage(
       // Finalize the timeline too, so a reopened history shows a failed (not
       // spinning) work-process panel.
       await persistTimeline("failed");
+      await persistUsage();
       return `Error: Connection reset by client (possible timeout). Response may be incomplete.`;
     }
 
     logger.error(`[CHAT_PIPELINE] Unhandled error: ${String(error)}, code=${errCode}`);
     await persistTimeline("failed");
+    await persistUsage();
     return `Error: ${String(error)}`;
   }
 }

@@ -18,6 +18,9 @@ const {
   createLetterGenerateToolFactory,
   createLetterFetchToolFactory,
   createComplaintSubmitToolFactory,
+  createInfringeProfileListToolFactory,
+  createInfringeComplaintSubmitToolFactory,
+  createInfringeProfileSaveToolFactory,
 } = await import("./ai-tools.js");
 
 const fakeApi = {
@@ -242,5 +245,206 @@ describe("complaint_submit", () => {
     });
     const res = parse(await tool().execute("c5", {}));
     expect(res).toMatchObject({ success: false, error: "一键举报功能当前暂不支持您提供的链接" });
+  });
+});
+
+describe("infringe_profile_list", () => {
+  it("is hidden from non-rabbitmq agents", () => {
+    expect(
+      createInfringeProfileListToolFactory(fakeApi, resolver)({ agentId: "telegram-1" }),
+    ).toBeNull();
+  });
+
+  it("summarizes profiles with subject/type/委托书 labels", async () => {
+    const tool = createInfringeProfileListToolFactory(
+      fakeApi,
+      resolver,
+    )({
+      agentId: "rabbitmq-1749",
+    })!;
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      list: [
+        {
+          id: 12,
+          label: "张三名誉",
+          name: "张三",
+          subjectType: "Personal",
+          defaultInfringeType: "Reputation",
+          powerOfAttorney: "",
+          contactName: "张三",
+          contactEmail: "a@b.com",
+        },
+      ],
+    });
+    const res = parse(await tool.execute("p1", {}));
+    const [, path] = mockGetJson.mock.calls[0] as [unknown, string];
+    expect(path).toBe("/infringe-complaint/fetch-profiles");
+    expect(res).toMatchObject({ success: true, total: 1 });
+    expect((res.list as Array<Record<string, unknown>>)[0]).toMatchObject({
+      id: 12,
+      subjectTypeLabel: "个人",
+      defaultInfringeTypeLabel: "名誉权",
+      hasPowerOfAttorney: false,
+    });
+  });
+});
+
+describe("infringe_complaint_submit", () => {
+  const tool = () =>
+    createInfringeComplaintSubmitToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+
+  it("is hidden from non-rabbitmq agents", () => {
+    expect(
+      createInfringeComplaintSubmitToolFactory(fakeApi, resolver)({ agentId: "telegram-1" }),
+    ).toBeNull();
+  });
+
+  it("posts save-complaint-job with explicit profile + stamped letter, reusing the job link", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6080, link: "https://www.douyin.com/video/1" }] });
+    mockPostForm.mockResolvedValue({
+      code: "success",
+      taskId: 55,
+      count: 1,
+      message: "已提交 1 条投诉，请耐心等待",
+    });
+    const res = parse(
+      await tool().execute("i1", { profileId: 12, stampedComplaint: "oss/stamp.pdf" }),
+    );
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(path).toBe("/infringe-complaint/save-complaint-job");
+    expect(fields).toMatchObject({
+      profileId: 12,
+      infringeType: "Reputation",
+      links: JSON.stringify(["https://www.douyin.com/video/1"]),
+      stampedComplaint: "oss/stamp.pdf",
+      jobId: 6080,
+    });
+    expect(res).toMatchObject({ success: true, submitted: true, taskId: 55, count: 1 });
+  });
+
+  it("auto-selects the sole profile when profileId is omitted", async () => {
+    mockGetJson.mockImplementation((...args: unknown[]) =>
+      args[1] === "/infringe-complaint/fetch-profiles"
+        ? Promise.resolve({ list: [{ id: 9 }] })
+        : Promise.resolve({ jobs: [{ id: 6081, link: "https://weibo.com/x" }] }),
+    );
+    mockPostForm.mockResolvedValue({ code: "success", message: "ok" });
+    await tool().execute("i2", { stampedComplaint: "oss/s.pdf", infringeType: "Goodwill" });
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(fields).toMatchObject({ profileId: 9, infringeType: "Goodwill" });
+  });
+
+  it("asks for a profileId when the account has multiple profiles", async () => {
+    mockGetJson.mockResolvedValue({ list: [{ id: 1 }, { id: 2 }] });
+    const res = parse(await tool().execute("i3", { stampedComplaint: "oss/s.pdf" }));
+    expect(res.success).toBe(false);
+    expect((res.profiles as unknown[]).length).toBe(2);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("errors when there is no profile at all", async () => {
+    mockGetJson.mockResolvedValue({ list: [] });
+    const res = parse(await tool().execute("i4", { stampedComplaint: "oss/s.pdf" }));
+    expect(res.success).toBe(false);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("blocks (no backend call) when the stamped complaint letter is missing", async () => {
+    const res = parse(await tool().execute("i5", { profileId: 12 }));
+    expect(res.success).toBe(false);
+    expect(String(res.error)).toContain("盖章");
+    expect(mockGetJson).not.toHaveBeenCalled();
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the backend gate (agent complaint without 委托书)", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6082, link: "https://www.douyin.com/v/1" }] });
+    mockPostForm.mockResolvedValue({
+      code: "danger",
+      message: "代理投诉需先在该主体档案上传「授权委托书」",
+    });
+    const res = parse(
+      await tool().execute("i6", { profileId: 12, stampedComplaint: "oss/s.pdf", agentId: 3 }),
+    );
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(fields).toMatchObject({ agentId: 3 });
+    expect(res).toMatchObject({
+      success: false,
+      error: "代理投诉需先在该主体档案上传「授权委托书」",
+    });
+  });
+});
+
+describe("infringe_profile_save", () => {
+  const tool = () =>
+    createInfringeProfileSaveToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+
+  it("is hidden from non-rabbitmq agents", () => {
+    expect(
+      createInfringeProfileSaveToolFactory(fakeApi, resolver)({ agentId: "telegram-1" }),
+    ).toBeNull();
+  });
+
+  it("creates a personal profile and reports the ID docs still needed", async () => {
+    mockPostForm.mockResolvedValue({ code: "success", id: 77, message: "保存成功" });
+    const res = parse(
+      await tool().execute("ps1", {
+        subjectType: "Personal",
+        name: "张三",
+        idNumber: "11010119900101xxxx",
+        contactEmail: "z@e.com",
+      }),
+    );
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(path).toBe("/infringe-complaint/save-profile");
+    expect(fields).toMatchObject({
+      subjectType: "Personal",
+      name: "张三",
+      idNumber: "11010119900101xxxx",
+      defaultInfringeType: "Reputation",
+    });
+    expect(res).toMatchObject({ success: true, profileId: 77 });
+    expect(res.missingDocs).toEqual(["身份证正面", "身份证反面"]);
+  });
+
+  it("reports enterprise docs and passes id when updating", async () => {
+    mockPostForm.mockResolvedValue({ code: "success", id: 90 });
+    const res = parse(
+      await tool().execute("ps2", {
+        profileId: 90,
+        subjectType: "Enterprise",
+        name: "某公司",
+        businessLicense: "oss/lic.jpg",
+      }),
+    );
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(fields).toMatchObject({
+      id: 90,
+      subjectType: "Enterprise",
+      businessLicense: "oss/lic.jpg",
+    });
+    // 已传营业执照，只差公章
+    expect(res.missingDocs).toEqual(["公章"]);
+  });
+
+  it("rejects an invalid subjectType without a backend call", async () => {
+    const res = parse(await tool().execute("ps3", { subjectType: "Robot", name: "x" }));
+    expect(res.success).toBe(false);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the backend error", async () => {
+    mockPostForm.mockResolvedValue({ code: "danger", message: "请填写主体名称" });
+    const res = parse(await tool().execute("ps4", { subjectType: "Personal", name: "占位" }));
+    expect(res).toMatchObject({ success: false, error: "请填写主体名称" });
   });
 });

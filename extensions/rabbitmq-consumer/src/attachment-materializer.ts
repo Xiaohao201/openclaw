@@ -15,14 +15,18 @@ import type { AttachmentRef } from "./types.js";
  * it under <workspace>/uploads/. No OSS SDK/credentials are needed on this side.
  */
 
-/** A spreadsheet now sitting in the agent workspace, ready for full-data reads. */
+/** A file now sitting in the agent workspace, ready for the agent to read. */
 export interface MaterializedAttachment {
+  /** What the file is: a data spreadsheet, or a 证件 image for 投诉建档. */
+  kind: "spreadsheet" | "image";
   /** Original filename, for the prompt. */
   filename: string;
   /** Path relative to the workspace root (what the agent reads), e.g. uploads/<id>-<name>. */
   workspacePath: string;
-  /** SheetJS-computed total data rows (excluding headers). */
-  totalDataRows: number;
+  /** SheetJS-computed total data rows (excluding headers); spreadsheet only. */
+  totalDataRows?: number;
+  /** OSS object key; image (证件) only — passed to infringe_profile_save after recognition. */
+  ossKey?: string;
 }
 
 /** Subdirectory under the workspace where uploads land. */
@@ -85,7 +89,9 @@ export async function materializeAttachments(
 
   const results: MaterializedAttachment[] = [];
   for (const att of attachments) {
-    if (att.kind !== "spreadsheet" || att.storage !== "oss") {
+    // Both spreadsheet (full-data reads) and image (证件 auto-recognition) land
+    // in the workspace; anything else / non-OSS is skipped.
+    if ((att.kind !== "spreadsheet" && att.kind !== "image") || att.storage !== "oss") {
       continue;
     }
     // Prefix with fileId to avoid collisions when two uploads share a name.
@@ -95,13 +101,15 @@ export async function materializeAttachments(
       const buf = await downloadToBuffer(att.ref);
       await writeFile(dest, buf);
       results.push({
+        kind: att.kind,
         filename: att.filename,
         workspacePath: `${UPLOADS_SUBDIR}/${destName}`,
         totalDataRows: att.totalDataRows,
+        ossKey: att.ossKey,
       });
       logger.info(
-        `[ATTACHMENT] Downloaded "${att.filename}" -> ${UPLOADS_SUBDIR}/${destName} ` +
-          `(agent ${agentId}, ${att.totalDataRows} rows, ${buf.byteLength} bytes)`,
+        `[ATTACHMENT] Downloaded ${att.kind} "${att.filename}" -> ${UPLOADS_SUBDIR}/${destName} ` +
+          `(agent ${agentId}, ${buf.byteLength} bytes)`,
       );
     } catch (err) {
       logger.warn(

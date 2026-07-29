@@ -1,3 +1,5 @@
+import type { SessionTurnUsage } from "../api.js";
+
 export interface HistoryDbConfig {
   host: string;
   port: number;
@@ -81,4 +83,10 @@ export interface GeneratedReport {
   title: string;
   content: string;
   summary: string;
+  /**
+   * Token/cost consumed by every model call this report made (planning run +
+   * writing run). Null when accounting was unavailable. Billed onto the
+   * originating chat history row by the plugin entry.
+   */
+  usage?: SessionTurnUsage | null;
 }

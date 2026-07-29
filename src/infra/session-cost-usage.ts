@@ -238,7 +238,14 @@ async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string
   }
 }
 
-async function scanTranscriptFile(params: {
+/**
+ * Stream one transcript file, yielding every parsed user/assistant entry with
+ * usage and cost resolved (falling back to configured model pricing when the
+ * provider did not report a cost breakdown). Exported so per-turn collectors
+ * (see `session-turn-usage.ts`) reuse the same parsing rather than duplicating
+ * the JSONL/usage/cost normalization.
+ */
+export async function scanSessionTranscriptEntries(params: {
   filePath: string;
   config?: OpenClawConfig;
   onEntry: (entry: ParsedTranscriptEntry) => void;
@@ -267,7 +274,7 @@ async function scanUsageFile(params: {
   config?: OpenClawConfig;
   onEntry: (entry: ParsedUsageEntry) => void;
 }): Promise<void> {
-  await scanTranscriptFile({
+  await scanSessionTranscriptEntries({
     filePath: params.filePath,
     config: params.config,
     onEntry: (entry) => {
@@ -578,7 +585,7 @@ export async function loadSessionCostSummary(params: {
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
 
-  await scanTranscriptFile({
+  await scanSessionTranscriptEntries({
     filePath: sessionFile,
     config: params.config,
     onEntry: (entry) => {

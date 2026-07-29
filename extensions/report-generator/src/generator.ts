@@ -1,3 +1,9 @@
+import {
+  collectSessionTurnUsage,
+  mergeSessionTurnUsage,
+  type OpenClawConfig,
+  type SessionTurnUsage,
+} from "../api.js";
 import type { PluginRuntime } from "../api.js";
 import type { PluginLogger } from "../api.js";
 import { buildStatsDigest, computeDailyAverage } from "./data-digest.js";
@@ -140,9 +146,35 @@ function extractMessageText(content: unknown): string {
 
 export class ReportGenerator {
   private readonly runtime: PluginRuntime;
+  /** Live config, so per-turn cost falls back to configured model pricing. */
+  private readonly config: OpenClawConfig | undefined;
 
-  constructor(runtime: PluginRuntime) {
+  constructor(runtime: PluginRuntime, config?: OpenClawConfig) {
     this.runtime = runtime;
+    this.config = config;
+  }
+
+  /**
+   * Token/cost accounting for one finished run. Best-effort: accounting must
+   * never fail a report that was generated successfully.
+   */
+  private async runUsage(params: {
+    sessionKey: string;
+    agentId?: string;
+    sinceMs: number;
+    logger: PluginLogger;
+  }): Promise<SessionTurnUsage | null> {
+    try {
+      return await collectSessionTurnUsage({
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        sinceMs: params.sinceMs,
+        config: this.config,
+      });
+    } catch (err) {
+      params.logger.warn(`[REPORT_GENERATOR] Usage accounting failed (non-fatal): ${String(err)}`);
+      return null;
+    }
   }
 
   /**
@@ -192,7 +224,7 @@ export class ReportGenerator {
     // (validated against whitelists; falls back to the default plan).
     onActivity?.("正在分析模板数据需求…");
     const endPlanStep = beginStep("正在分析模板数据需求", "read");
-    const plan = await this.planQueries(template, userId, logger);
+    const { plan, usage: planUsage } = await this.planQueries(template, userId, logger);
     endPlanStep("completed");
 
     // Step 2: code executes the plan — full-set SQL aggregation, real rows.
@@ -213,7 +245,13 @@ export class ReportGenerator {
       const title = `${periodLabel}舆情报告`;
       const content = `# ${title}\n\n该时段（${dateScope}）暂无舆情数据，无法生成${periodLabel}。`;
       logger.info(`[REPORT_GENERATOR] No feed data for ${dateScope}; returning empty-data report`);
-      return { title, content, summary: `该时段暂无舆情数据，无法生成${periodLabel}。` };
+      // No writing run happened, but the planning run already spent tokens.
+      return {
+        title,
+        content,
+        summary: `该时段暂无舆情数据，无法生成${periodLabel}。`,
+        usage: mergeSessionTurnUsage([planUsage]),
+      };
     }
 
     const dataDigest = buildStatsDigest(stats);
@@ -262,6 +300,9 @@ export class ReportGenerator {
 
     // Step 3: the LLM writes the report from the pre-queried digest.
     const endWriteStep = beginStep("正在撰写报告", "write");
+    // Accounting window for the writing run; opened before run() so every model
+    // call it makes (one per tool-loop iteration) lands inside it.
+    const writeSinceMs = Date.now();
     try {
       const reportPrompt = this.buildReportPrompt({
         period,
@@ -368,10 +409,17 @@ export class ReportGenerator {
       logger.info(`[REPORT_GENERATOR] Generated report: ${title}`);
 
       endWriteStep("completed");
+      const writeUsage = await this.runUsage({
+        sessionKey,
+        agentId,
+        sinceMs: writeSinceMs,
+        logger,
+      });
       return {
         title,
         content: generatedText,
         summary: this.extractSummary(generatedText),
+        usage: mergeSessionTurnUsage([planUsage, writeUsage]),
       };
     } catch (error) {
       logger.error(`[REPORT_GENERATOR] Generation failed: ${String(error)}`);
@@ -391,8 +439,13 @@ export class ReportGenerator {
     template: string,
     userId: string,
     logger: PluginLogger,
-  ): Promise<QueryPlan> {
+  ): Promise<{ plan: QueryPlan; usage: SessionTurnUsage | null }> {
     const sessionKey = `report-plan:${userId}:${Date.now()}`;
+    const sinceMs = Date.now();
+    // The planning run's own tokens count toward the report's cost, including
+    // when the plan is unusable and we fall back to the default — the call was
+    // still billed. Runs under the default agent (no agentId is passed).
+    let usage: SessionTurnUsage | null = null;
     try {
       const runResult = await this.runtime.subagent.run({
         sessionKey,
@@ -404,6 +457,7 @@ export class ReportGenerator {
         runId: runResult.runId,
         timeoutMs: 60_000,
       });
+      usage = await this.runUsage({ sessionKey, sinceMs, logger });
       if (waitResult.status !== "ok") {
         throw new Error(`plan run ended with status ${waitResult.status}`);
       }
@@ -419,13 +473,13 @@ export class ReportGenerator {
         const plan = extractQueryPlan(extractMessageText(m.content));
         if (plan) {
           logger.info(`[REPORT_GENERATOR] Query plan: ${JSON.stringify(plan)}`);
-          return plan;
+          return { plan, usage };
         }
       }
       throw new Error("no parseable query plan in assistant reply");
     } catch (error) {
       logger.warn(`[REPORT_GENERATOR] Query planning failed, using default plan: ${String(error)}`);
-      return DEFAULT_QUERY_PLAN;
+      return { plan: DEFAULT_QUERY_PLAN, usage };
     }
   }
 

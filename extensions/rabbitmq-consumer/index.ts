@@ -10,6 +10,7 @@ import { ReportTemplateLookup } from "./src/report-template-lookup.js";
 import { SkillLookup } from "./src/skill-lookup.js";
 import { TopicResolver } from "./src/topic-resolver.js";
 import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
+import { resolveUsageCurrencyPolicy } from "./src/usage-pricing.js";
 
 /**
  * Clamp the channel prefetch to a sane window. Default 6: with the pipeline's
@@ -124,6 +125,16 @@ export default definePluginEntry({
           return;
         }
 
+        // Per-turn token/cost accounting: providers quote their unit prices in
+        // different currencies, so this folds them into one before storage.
+        const usageCurrency = resolveUsageCurrencyPolicy(
+          api.pluginConfig as Record<string, unknown>,
+        );
+        ctx.logger.info(
+          `[RABBITMQ_CONSUMER] Usage accounting in ${usageCurrency.currency} ` +
+            `(rate=${usageCurrency.rate} for ${usageCurrency.foreignProviders.join(",")})`,
+        );
+
         // Shared HistoryManager across messages (pool reuse)
         const writerConfig = resolveWriterConfig(api.pluginConfig as Record<string, unknown>);
         historyRef = new HistoryManager(pluginConfig.historyDb, writerConfig);
@@ -166,6 +177,7 @@ export default definePluginEntry({
                 templateLookupRef,
                 skillLookupRef,
                 api.config,
+                usageCurrency,
               ),
           }),
         );

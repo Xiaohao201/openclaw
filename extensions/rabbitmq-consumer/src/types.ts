@@ -60,12 +60,24 @@ export interface AttachmentRef {
   fileId: string;
   filename: string;
   ext: string;
-  kind: "spreadsheet";
+  /**
+   * `spreadsheet` — oversized Excel materialized for full-data reads.
+   * `image` — 证件图片（投诉建档用）：身份证/营业执照/公章/委托书等。The agent reads
+   * the materialized file to auto-recognize the doc type, then stores its
+   * `ossKey` into the matching 主体档案 field via `infringe_profile_save`.
+   */
+  kind: "spreadsheet" | "image";
   storage: "oss";
   /** OSS public direct link the consumer downloads from. */
   ref: string;
-  /** SheetJS-computed total data rows (excluding headers); used in the prompt. */
-  totalDataRows: number;
+  /** SheetJS-computed total data rows (excluding headers); spreadsheet only. */
+  totalDataRows?: number;
+  /**
+   * OSS object key (e.g. `ibtai/upload/2026/07/…jpg`) for `image` attachments.
+   * This is the exact string 投诉后端 save-profile stores into idCardFront /
+   * businessLicense / sealImage / powerOfAttorney and the engine later fetches.
+   */
+  ossKey?: string;
 }
 
 /** Parsed RabbitMQ message body */
@@ -123,6 +135,35 @@ export interface Citation {
   title: string;
   url: string;
   snippet: string;
+}
+
+/**
+ * Token/cost accounting for one chat turn, persisted onto the turn's
+ * history_messages row. Costs are already normalized to `currency` (see
+ * usage-pricing.ts); token counts are raw provider numbers.
+ *
+ * `input` counts uncached prompt tokens only — cache reads/writes are reported
+ * separately by the provider and priced differently, so summing input +
+ * cacheRead + cacheWrite is what reconstructs the full prompt size.
+ */
+export interface TurnUsageRecord {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  inputCost: number;
+  outputCost: number;
+  cacheReadCost: number;
+  cacheWriteCost: number;
+  totalCost: number;
+  /** ISO-4217-ish label stored in cost_currency, e.g. "CNY". */
+  currency: string;
+  /** Provider/model that dominated the turn by cost. */
+  provider?: string;
+  model?: string;
+  /** Number of model calls (one per tool-loop iteration). */
+  calls: number;
 }
 
 /** History record from MySQL */

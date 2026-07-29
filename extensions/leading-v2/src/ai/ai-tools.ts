@@ -423,3 +423,475 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
     };
   };
 }
+
+/* ============================================================
+ * 侵权投诉（投诉方案）— 与「举报」(complaint_submit) 平级
+ * 后端 InfringeComplaintController → /infringe-complaint/*
+ * 举报走 legal_complaint + AutoComment；投诉走 legal_infringe_task/complaint
+ * + AutoComplaint，前置更重：需主体档案 profileId + 盖章投诉函 stampedComplaint。
+ * ============================================================ */
+
+const INFRINGE_PLATFORMS = "今日头条/知乎/B站/抖音/微博/百度/百家号/小红书/快手";
+
+/** 与后端 InfringeComplaintController::INFRINGE_TYPES 对齐。 */
+const INFRINGE_TYPES = ["Reputation", "Goodwill", "Portrait", "Privacy", "Name", "Other"] as const;
+
+const INFRINGE_TYPE_LABELS: Record<string, string> = {
+  Reputation: "名誉权",
+  Goodwill: "商誉",
+  Portrait: "肖像权",
+  Privacy: "隐私权",
+  Name: "姓名权/名称权",
+  Other: "其他",
+};
+
+const SUBJECT_TYPE_LABELS: Record<string, string> = {
+  Personal: "个人",
+  Enterprise: "企业",
+};
+
+const InfringeProfileListSchema = Type.Object(
+  {
+    q: Type.Optional(Type.String({ description: "按档案标签或主体名称关键字过滤。" })),
+  },
+  { additionalProperties: false },
+);
+
+const InfringeComplaintSubmitSchema = Type.Object(
+  {
+    profileId: Type.Optional(
+      Type.Number({
+        description:
+          "投诉主体档案 id（用 infringe_profile_list 获取）。省略时：账号仅 1 个档案则自动选用，多个档案则要求指定。",
+      }),
+    ),
+    stampedComplaint: Type.Optional(
+      Type.String({
+        description:
+          "盖章《投诉通知书》的 OSS object key（投诉前置，必需）。用户须先在网页端下载投诉函、盖章后上传取得该路径；缺失则无法提交。",
+      }),
+    ),
+    links: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "待投诉的侵权链接。省略则复用最近一次内容检测任务提交的原始链接。" +
+          `仅支持这些平台：${INFRINGE_PLATFORMS}；其他平台链接会被后端过滤。`,
+      }),
+    ),
+    infringeType: Type.Optional(
+      Type.Union(
+        [
+          Type.Literal("Reputation"),
+          Type.Literal("Goodwill"),
+          Type.Literal("Portrait"),
+          Type.Literal("Privacy"),
+          Type.Literal("Name"),
+          Type.Literal("Other"),
+        ],
+        {
+          description:
+            "侵权类型：Reputation=名誉权，Goodwill=商誉，Portrait=肖像权，Privacy=隐私权，Name=姓名权/名称权，Other=其他。默认 Reputation。",
+        },
+      ),
+    ),
+    rightsStatement: Type.Optional(
+      Type.String({ description: "权利声明（权利人身份与权属说明）。" }),
+    ),
+    demand: Type.Optional(Type.String({ description: "投诉诉求（如：删除/下架/断开链接）。" })),
+    factReason: Type.Optional(Type.String({ description: "事实与理由（侵权事实的具体陈述）。" })),
+    agentId: Type.Optional(
+      Type.Number({
+        description:
+          "代理人档案 id（代理投诉时用）。代理投诉要求该主体档案已上传授权委托书，否则后端会拒绝。",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+/** Map a raw 主体档案 row to a compact, content-safe summary for the agent. */
+function summarizeProfile(profile: Record<string, unknown>) {
+  const subjectType = asString(profile.subjectType) ?? "";
+  const infringeType = asString(profile.defaultInfringeType) ?? "";
+  return {
+    id: Number(profile.id) || null,
+    label: asString(profile.label) ?? null,
+    name: asString(profile.name) ?? null,
+    subjectType,
+    subjectTypeLabel: SUBJECT_TYPE_LABELS[subjectType] ?? subjectType,
+    defaultInfringeType: infringeType,
+    defaultInfringeTypeLabel: INFRINGE_TYPE_LABELS[infringeType] ?? infringeType,
+    // 是否已传授权委托书（代理投诉前置）。只回布尔，不外泄 OSS key。
+    hasPowerOfAttorney: Boolean(asString(profile.powerOfAttorney)),
+    contactName: asString(profile.contactName) ?? null,
+    contactEmail: asString(profile.contactEmail) ?? null,
+  };
+}
+
+/** Fetch this account's active 主体档案 rows (投诉主体资料库). */
+async function fetchInfringeProfiles(
+  config: BackendConfig,
+  apiKey: string,
+  q?: string,
+): Promise<Record<string, unknown>[]> {
+  const res = await getJson(config, "/infringe-complaint/fetch-profiles", { q }, apiKey);
+  return Array.isArray(res.list) ? (res.list as Record<string, unknown>[]) : [];
+}
+
+export function createInfringeProfileListToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
+  const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+    return {
+      name: "infringe_profile_list",
+      label: "投诉主体档案",
+      description:
+        "列出当前账号可用的「投诉主体资料库」档案（个人/企业资质档案），供 infringe_complaint_submit 选择 profileId。" +
+        "返回每个档案的 id、标签、主体名称、主体类型、默认侵权类型，以及是否已上传授权委托书（代理投诉前置）。只读。",
+      parameters: InfringeProfileListSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const keyed = await resolveKeyOrError(api, resolver, userId, "infringe_profile_list");
+        if ("error" in keyed) {
+          return keyed.error;
+        }
+        let profiles: Record<string, unknown>[];
+        try {
+          profiles = await fetchInfringeProfiles(config, keyed.apiKey, asString(rawParams.q));
+        } catch (error) {
+          return failure(api, "infringe_profile_list", userId, error);
+        }
+        return jsonResult({
+          success: true,
+          total: profiles.length,
+          list: profiles.map(summarizeProfile),
+        });
+      },
+    };
+  };
+}
+
+export function createInfringeComplaintSubmitToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
+  const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+    return {
+      name: "infringe_complaint_submit",
+      label: "一键投诉",
+      description:
+        "对最近一次内容检测任务发起「侵权投诉」（投诉方案，区别于举报 complaint_submit）：按平台把侵权链接提交到各平台投诉渠道并落库持续监测是否下架。" +
+        "两个前置：① 投诉主体档案 profileId（用 infringe_profile_list 获取；仅 1 个档案时自动选用）；② 盖章《投诉通知书》 stampedComplaint（OSS key，用户须先在网页端下载投诉函、盖章后上传）。缺任一前置会返回提示，请照提示引导用户补齐。" +
+        "默认复用检测任务提交的原始链接；如需投诉其他链接可传 links。" +
+        `仅支持 ${INFRINGE_PLATFORMS}，其他平台链接会被过滤。` +
+        "异步执行——提交成功后告知用户「投诉任务已提交」，无需再调用任何工具。",
+      parameters: InfringeComplaintSubmitSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const keyed = await resolveKeyOrError(api, resolver, userId, "infringe_complaint_submit");
+        if ("error" in keyed) {
+          return keyed.error;
+        }
+
+        // 前置①：主体档案。显式传入优先；否则自动解析（唯一则用，多个则请用户指定）。
+        let profileId = Number(rawParams.profileId);
+        if (!Number.isInteger(profileId) || profileId <= 0) {
+          let profiles: Record<string, unknown>[];
+          try {
+            profiles = await fetchInfringeProfiles(config, keyed.apiKey);
+          } catch (error) {
+            return failure(api, "infringe_complaint_submit", userId, error);
+          }
+          if (profiles.length === 0) {
+            return jsonResult({
+              success: false,
+              error:
+                "尚无投诉主体档案。请先用 infringe_profile_save 采集用户主体信息（个人/企业名称、证件号、联系方式等）创建档案；" +
+                "其中身份证/营业执照/公章/委托书等证件图片需用户在网页端上传（聊天附件无法生成所需 OSS objectKey）。建好档案后再发起投诉。",
+            });
+          }
+          if (profiles.length > 1) {
+            return jsonResult({
+              success: false,
+              error: "存在多个投诉主体档案，请指定 profileId 后重试。",
+              profiles: profiles.map(summarizeProfile),
+            });
+          }
+          profileId = Number(profiles[0].id);
+        }
+
+        // 前置②：盖章投诉函（后端硬门槛）。此处先行拦截，给出可操作提示，避免空跑后端。
+        const stampedComplaint = asString(rawParams.stampedComplaint);
+        if (!stampedComplaint) {
+          return jsonResult({
+            success: false,
+            error:
+              "缺少「盖章投诉函」。请引导用户在网页端下载《投诉通知书》、盖章后上传，取得其 OSS 路径后作为 stampedComplaint 传入再提交。",
+          });
+        }
+
+        // 复用最近检测任务的原始链接与 jobId（与举报一致；jobId 供引擎带出研判证据）。
+        let job: Record<string, unknown> | null;
+        try {
+          job = await resolveLatestJob(config, keyed.apiKey);
+        } catch (error) {
+          return failure(api, "infringe_complaint_submit", userId, error);
+        }
+        const provided = Array.isArray(rawParams.links)
+          ? (rawParams.links as unknown[]).map((v) => asString(v) ?? "").filter((v) => v.length > 0)
+          : [];
+        const jobLink = asString(job?.link);
+        const links = provided.length > 0 ? provided : jobLink ? [jobLink] : [];
+        if (links.length === 0) {
+          return jsonResult({
+            success: false,
+            error:
+              "未找到可投诉的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
+          });
+        }
+
+        const infringeType =
+          typeof rawParams.infringeType === "string" &&
+          (INFRINGE_TYPES as readonly string[]).includes(rawParams.infringeType)
+            ? rawParams.infringeType
+            : "Reputation";
+
+        const fields: Record<string, FieldValue> = {
+          profileId,
+          infringeType,
+          links: JSON.stringify(links),
+          stampedComplaint,
+          rightsStatement: asString(rawParams.rightsStatement),
+          demand: asString(rawParams.demand),
+          factReason: asString(rawParams.factReason),
+        };
+        const agentId = Number(rawParams.agentId);
+        if (Number.isInteger(agentId) && agentId > 0) {
+          fields.agentId = agentId;
+        }
+        const jobId = Number(job?.id);
+        if (Number.isInteger(jobId) && jobId > 0) {
+          fields.jobId = jobId;
+        }
+
+        let res: Record<string, unknown>;
+        try {
+          res = await postForm(
+            config,
+            "/infringe-complaint/save-complaint-job",
+            fields,
+            keyed.apiKey,
+          );
+        } catch (error) {
+          return failure(api, "infringe_complaint_submit", userId, error);
+        }
+        if (res.code !== "success") {
+          // 后端门槛（代理投诉缺委托书、平台不支持、档案无权限等）直接回传
+          return jsonResult({
+            success: false,
+            error: asString(res.message) ?? "后端拒绝了投诉请求。",
+          });
+        }
+        return jsonResult({
+          success: true,
+          submitted: true,
+          taskId: Number(res.taskId) || null,
+          count: Number(res.count) || 0,
+          message: asString(res.message) ?? "投诉任务已提交，请耐心等待",
+          agentInstruction:
+            "投诉任务已提交。请立刻告知用户投诉已在后台提交、系统会持续监测被投诉链接是否下架。不要再调用任何工具。",
+        });
+      },
+    };
+  };
+}
+
+const SUBJECT_TYPES = ["Personal", "Enterprise"] as const;
+
+/** 主体档案上的「证件单件」列（OSS object key）。聊天附件拿不到 objectKey，需网页端上传。 */
+const PROFILE_DOC_KEYS = [
+  "idCardFront",
+  "idCardBack",
+  "idCardHold",
+  "businessLicense",
+  "powerOfAttorney",
+  "sealImage",
+] as const;
+
+const InfringeProfileSaveSchema = Type.Object(
+  {
+    profileId: Type.Optional(
+      Type.Number({ description: "要更新的档案 id；省略则新建。更新须为本人/同组档案。" }),
+    ),
+    subjectType: Type.Union([Type.Literal("Personal"), Type.Literal("Enterprise")], {
+      description: "主体类型：Personal=个人，Enterprise=企业。必填。",
+    }),
+    name: Type.String({ description: "主体名称（个人姓名 / 企业全称）。必填。" }),
+    label: Type.Optional(Type.String({ description: "档案标签（便于识别）；省略则用 name。" })),
+    idType: Type.Optional(Type.String({ description: "证件类型，如 身份证 / 统一社会信用代码。" })),
+    idNumber: Type.Optional(Type.String({ description: "证件号码（身份证号 / 社会信用代码）。" })),
+    address: Type.Optional(Type.String({ description: "联系地址。" })),
+    contactName: Type.Optional(Type.String({ description: "联系人姓名。" })),
+    contactPhone: Type.Optional(Type.String({ description: "联系电话。" })),
+    contactEmail: Type.Optional(Type.String({ description: "联系邮箱（邮件渠道投诉会用到）。" })),
+    legalRepName: Type.Optional(Type.String({ description: "企业法定代表人姓名（企业主体填）。" })),
+    defaultInfringeType: Type.Optional(
+      Type.Union(
+        [
+          Type.Literal("Reputation"),
+          Type.Literal("Goodwill"),
+          Type.Literal("Portrait"),
+          Type.Literal("Privacy"),
+          Type.Literal("Name"),
+          Type.Literal("Other"),
+        ],
+        { description: "默认侵权类型，见 infringe_complaint_submit。默认 Reputation。" },
+      ),
+    ),
+    memo: Type.Optional(Type.String({ description: "备注。" })),
+    idCardFront: Type.Optional(
+      Type.String({ description: "身份证正面 OSS object key（网页端上传取得）。" }),
+    ),
+    idCardBack: Type.Optional(Type.String({ description: "身份证反面 OSS object key。" })),
+    idCardHold: Type.Optional(Type.String({ description: "手持身份证 OSS object key。" })),
+    businessLicense: Type.Optional(
+      Type.String({ description: "营业执照 OSS object key（企业主体）。" }),
+    ),
+    powerOfAttorney: Type.Optional(
+      Type.String({ description: "授权委托书 OSS object key（代理投诉前置）。" }),
+    ),
+    sealImage: Type.Optional(Type.String({ description: "公章 OSS object key（企业主体）。" })),
+  },
+  { additionalProperties: false },
+);
+
+/** 按主体类型列出「引擎实际投诉仍需补齐」的证件（当前档案为空的那些）。 */
+function profileMissingDocs(subjectType: string, fields: Record<string, FieldValue>): string[] {
+  const missing: string[] = [];
+  if (subjectType === "Enterprise") {
+    if (!fields.businessLicense) {
+      missing.push("营业执照");
+    }
+    if (!fields.sealImage) {
+      missing.push("公章");
+    }
+  } else {
+    if (!fields.idCardFront) {
+      missing.push("身份证正面");
+    }
+    if (!fields.idCardBack) {
+      missing.push("身份证反面");
+    }
+  }
+  return missing;
+}
+
+export function createInfringeProfileSaveToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
+  const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+    return {
+      name: "infringe_profile_save",
+      label: "建档投诉主体",
+      description:
+        "新建或更新「投诉主体资料库」档案（个人/企业资质），供 infringe_complaint_submit 使用。" +
+        "把用户口述的主体信息（名称、证件类型/号码、联系人/电话/邮箱、企业法定代表人等）落成一条档案并返回 profileId——" +
+        "无需再让用户去网页端从零建档。" +
+        "但身份证/营业执照/公章/委托书等「证件图片」需 OSS object key（网页端 /api/upload-oss 上传取得），聊天里的图片附件拿不到该 key；" +
+        "缺这些证件时仍会建档成功，并在 missingDocs 里列出引擎实际投诉前用户需在网页端补传的证件。",
+      parameters: InfringeProfileSaveSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const keyed = await resolveKeyOrError(api, resolver, userId, "infringe_profile_save");
+        if ("error" in keyed) {
+          return keyed.error;
+        }
+
+        const subjectType =
+          typeof rawParams.subjectType === "string" &&
+          (SUBJECT_TYPES as readonly string[]).includes(rawParams.subjectType)
+            ? rawParams.subjectType
+            : "";
+        if (!subjectType) {
+          return jsonResult({
+            success: false,
+            error: "请指定主体类型 subjectType（Personal/Enterprise）。",
+          });
+        }
+        const name = asString(rawParams.name);
+        if (!name) {
+          return jsonResult({ success: false, error: "请提供主体名称 name。" });
+        }
+
+        const infringeType =
+          typeof rawParams.defaultInfringeType === "string" &&
+          (INFRINGE_TYPES as readonly string[]).includes(rawParams.defaultInfringeType)
+            ? rawParams.defaultInfringeType
+            : "Reputation";
+
+        const fields: Record<string, FieldValue> = {
+          subjectType,
+          name,
+          label: asString(rawParams.label),
+          idType: asString(rawParams.idType),
+          idNumber: asString(rawParams.idNumber),
+          address: asString(rawParams.address),
+          contactName: asString(rawParams.contactName),
+          contactPhone: asString(rawParams.contactPhone),
+          contactEmail: asString(rawParams.contactEmail),
+          legalRepName: asString(rawParams.legalRepName),
+          defaultInfringeType: infringeType,
+          memo: asString(rawParams.memo),
+        };
+        for (const key of PROFILE_DOC_KEYS) {
+          fields[key] = asString(rawParams[key]);
+        }
+        const profileId = Number(rawParams.profileId);
+        if (Number.isInteger(profileId) && profileId > 0) {
+          fields.id = profileId;
+        }
+
+        let res: Record<string, unknown>;
+        try {
+          res = await postForm(config, "/infringe-complaint/save-profile", fields, keyed.apiKey);
+        } catch (error) {
+          return failure(api, "infringe_profile_save", userId, error);
+        }
+        if (res.code !== "success") {
+          return jsonResult({
+            success: false,
+            error: asString(res.message) ?? "后端拒绝了建档请求。",
+          });
+        }
+        const missingDocs = profileMissingDocs(subjectType, fields);
+        return jsonResult({
+          success: true,
+          profileId: Number(res.id) || profileId || null,
+          missingDocs,
+          message: asString(res.message) ?? "档案已保存",
+          agentInstruction:
+            missingDocs.length > 0
+              ? `档案已建好，可用于发起投诉。但引擎实际投诉前，用户还需在网页端上传：${missingDocs.join("、")}，以及提交时的盖章《投诉通知书》。请如实告知用户这几项需网页端补传（聊天附件无法生成所需 OSS objectKey）。`
+              : "档案已建好，可用于发起投诉。提交投诉时仍需盖章《投诉通知书》（网页端上传）。",
+        });
+      },
+    };
+  };
+}

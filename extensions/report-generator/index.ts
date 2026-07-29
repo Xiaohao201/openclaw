@@ -1,4 +1,9 @@
-import { definePluginEntry, type OpenClawPluginApi, type PluginLogger } from "./api.js";
+import {
+  definePluginEntry,
+  resolveSessionTurnCurrencyPolicy,
+  type OpenClawPluginApi,
+  type PluginLogger,
+} from "./api.js";
 import { EmailSender } from "./src/email-sender.js";
 import { FeedCollector } from "./src/feed-collector.js";
 import { ReportGenerator } from "./src/generator.js";
@@ -157,7 +162,14 @@ export default definePluginEntry({
         const feedCollector = new FeedCollector(config.historyDb);
         const mercurePusher = new MercurePusher(config.mercure, ctx.logger);
         const templateLoader = new TemplateLoader(config.historyDb);
-        const reportGenerator = new ReportGenerator(api.runtime);
+        // Same `usageCost` key the rabbitmq-consumer reads, so a report's cost
+        // lands on the chat row in the same currency the chat turn used.
+        const usageCurrency = resolveSessionTurnCurrencyPolicy(
+          (api.pluginConfig as Record<string, unknown>)?.usageCost as
+            | Record<string, unknown>
+            | undefined,
+        );
+        const reportGenerator = new ReportGenerator(api.runtime, api.config);
         const taskPoller = new TaskPoller(config.historyDb, config.pollIntervalMs);
         const reportHistoryWriter = new ReportHistoryWriter(config.historyDb);
 
@@ -341,6 +353,15 @@ export default definePluginEntry({
                 await reportHistoryWriter.writeReport(
                   reportHistoryId,
                   { title: report.title, content: report.content, steps: reportSteps },
+                  logger,
+                );
+                // Bill the report's tokens onto the same chat row, on top of
+                // what the conversational turn already cost, so the row carries
+                // the full cost of serving that user message.
+                await reportHistoryWriter.writeUsage(
+                  reportHistoryId,
+                  report.usage,
+                  usageCurrency,
                   logger,
                 );
               } catch (writeErr) {

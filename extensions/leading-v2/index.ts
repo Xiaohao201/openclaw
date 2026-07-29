@@ -2,6 +2,9 @@ import { join } from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   createComplaintSubmitToolFactory,
+  createInfringeComplaintSubmitToolFactory,
+  createInfringeProfileListToolFactory,
+  createInfringeProfileSaveToolFactory,
   createJobListToolFactory,
   createJobStopToolFactory,
   createLetterFetchToolFactory,
@@ -143,6 +146,17 @@ export default definePluginEntry({
     api.registerTool(createLetterGenerateToolFactory(api, resolver), { name: "letter_generate" });
     api.registerTool(createLetterFetchToolFactory(api, resolver), { name: "letter_fetch" });
     api.registerTool(createComplaintSubmitToolFactory(api, resolver), { name: "complaint_submit" });
+
+    // --- infringe-complaint (侵权投诉，投诉方案；与举报 complaint_submit 平级) ---
+    api.registerTool(createInfringeProfileListToolFactory(api, resolver), {
+      name: "infringe_profile_list",
+    });
+    api.registerTool(createInfringeProfileSaveToolFactory(api, resolver), {
+      name: "infringe_profile_save",
+    });
+    api.registerTool(createInfringeComplaintSubmitToolFactory(api, resolver), {
+      name: "infringe_complaint_submit",
+    });
 
     // --- link-data-crawler (互动量刷新，只读：重抓互动量但不写回主看板) ---
     const crawlRefreshes = new RecentTaskStore<RecentCrawlRefresh>();

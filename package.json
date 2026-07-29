@@ -1036,6 +1036,10 @@
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
+    "./plugin-sdk/session-usage-runtime": {
+      "types": "./dist/plugin-sdk/session-usage-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-usage-runtime.js"
+    },
     "./plugin-sdk/string-normalization-runtime": {
       "types": "./dist/plugin-sdk/string-normalization-runtime.d.ts",
       "default": "./dist/plugin-sdk/string-normalization-runtime.js"
