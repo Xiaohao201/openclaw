@@ -76,22 +76,39 @@ describe("letter_generate", () => {
   const tool = () =>
     createLetterGenerateToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
 
-  it("rejects short errors without any backend call", async () => {
-    const res = parse(await tool().execute("g0", { errors: "太短" }));
+  /** 两段 GET：先 /ai/fetch-jobs 定位任务，再 /ai/fetch-job 取检测结果。 */
+  function mockJob(job: Record<string, unknown>, detail?: Record<string, unknown>) {
+    mockGetJson.mockImplementation((_config: unknown, path: unknown) =>
+      Promise.resolve(path === "/ai/fetch-jobs" ? { jobs: [job] } : (detail ?? {})),
+    );
+  }
+
+  const DONE_JOB = { id: 6032, label: "某检测", status: "Done" };
+  const DETAIL = {
+    job: { id: 6032, rate: 4.5, summary: "整体评估：存在多处未经核实的财务数据。" },
+    tasks: [{ ruleTitle: "互联网新闻信息服务管理规定", result: "第3段虚构营收数据。" }],
+  };
+
+  it("refuses while the detection task is still running — no backend write", async () => {
+    mockJob({ id: 6032, label: "某检测", status: "Pending" });
+    const res = parse(await tool().execute("g0", {}));
     expect(res.success).toBe(false);
-    expect(mockGetJson).not.toHaveBeenCalled();
+    expect(String(res.error)).toContain("尚未完成");
     expect(mockPostForm).not.toHaveBeenCalled();
   });
 
-  it("resolves the latest jobId then posts generate-letter", async () => {
-    mockGetJson.mockResolvedValue({ jobs: [{ id: 6032 }] });
+  it("refuses when the finished task found no violations", async () => {
+    mockJob(DONE_JOB, { job: { id: 6032, rate: 0, summary: "未发现违规" }, tasks: [] });
+    const res = parse(await tool().execute("g1", {}));
+    expect(res.success).toBe(false);
+    expect(String(res.error)).toContain("未检测到违规事实");
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("takes the violations from the detection result, not from the model", async () => {
+    mockJob(DONE_JOB, DETAIL);
     mockPostForm.mockResolvedValue({ code: "success", message: "正在生成，请稍等！" });
-    const res = parse(
-      await tool().execute("g1", {
-        errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。",
-        all: true,
-      }),
-    );
+    const res = parse(await tool().execute("g2", { all: true }));
     const [, path, fields] = mockPostForm.mock.calls[0] as [
       unknown,
       string,
@@ -99,28 +116,30 @@ describe("letter_generate", () => {
     ];
     expect(path).toBe("/ai/generate-letter");
     expect(fields).toMatchObject({ jobId: 6032, siteId: "legal", all: 1 });
+    expect(fields.errors).toBe(
+      "整体评估：存在多处未经核实的财务数据。\n《互联网新闻信息服务管理规定》：第3段虚构营收数据。",
+    );
     expect(res).toMatchObject({ success: true, submitted: true });
-    expect(res).not.toHaveProperty("status");
+  });
+
+  it("appends the optional supplement after the detection result", async () => {
+    mockJob(DONE_JOB, DETAIL);
+    mockPostForm.mockResolvedValue({ code: "success" });
+    await tool().execute("g3", { supplement: "另引用《民法典》第1024条。" });
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(String(fields.errors)).toMatch(/第3段虚构营收数据。\n另引用《民法典》第1024条。$/);
   });
 
   it("surfaces the backend 'too minor' error", async () => {
-    mockGetJson.mockResolvedValue({ jobs: [{ id: 6032 }] });
+    mockJob(DONE_JOB, DETAIL);
     mockPostForm.mockResolvedValue({ code: "error", message: "文章违规程度较低，无法生成撤稿函" });
-    const res = parse(
-      await tool().execute("g2", {
-        errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。",
-      }),
-    );
+    const res = parse(await tool().execute("g4", {}));
     expect(res).toMatchObject({ success: false, error: "文章违规程度较低，无法生成撤稿函" });
   });
 
   it("errors when there is no recent job", async () => {
     mockGetJson.mockResolvedValue({ jobs: [] });
-    const res = parse(
-      await tool().execute("g3", {
-        errors: "这是一段足够长的违规内容描述，包含虚假事实与法规引用。",
-      }),
-    );
+    const res = parse(await tool().execute("g5", {}));
     expect(res.success).toBe(false);
     expect(mockPostForm).not.toHaveBeenCalled();
   });
@@ -151,6 +170,28 @@ describe("letter_fetch", () => {
       category: "Retraction",
       categoryLabel: "撤稿函",
       content: "撤稿函正文",
+    });
+  });
+
+  it("drops 公函 entries and letters that have no content yet", async () => {
+    const tool = createLetterFetchToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6052 }] });
+    mockPostForm.mockResolvedValue({
+      code: "success",
+      letterMap: {
+        // 公函 = 投诉/举报功能，不是文书
+        GovOfficial: { id: 3, category: "GovOfficial", content: "官方公函正文" },
+        GovPersonal: { id: 4, category: "GovPersonal", content: "个人公函正文" },
+        // 后端占位、正文尚未生成
+        Complaint: { id: 5, category: "Complaint", content: "" },
+        Retraction: { id: 6, category: "Retraction", content: "撤稿函正文" },
+      },
+    });
+    const res = parse(await tool.execute("lf3"));
+    expect(res.count).toBe(1);
+    expect((res.letters as Array<Record<string, unknown>>)[0]).toMatchObject({
+      category: "Retraction",
+      categoryLabel: "撤稿函",
     });
   });
 

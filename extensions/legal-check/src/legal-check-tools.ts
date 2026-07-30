@@ -387,7 +387,7 @@ function terminalInstruction(done: boolean, failed: boolean, stopped: boolean): 
     return (
       "检测已完成，请向用户展示检测结果。若发现侵权/违规内容，请主动询问用户是否需要进一步处理：" +
       "① 一键举报（complaint_submit）——把侵权链接按平台提交投诉，并持续监测链接是否下架；" +
-      "② 生成维权文书（letter_generate）——撤稿函/举报信/投诉信等。" +
+      "② 生成维权文书（letter_generate）——只有撤稿函/投诉通知/举报信三种，且必须等检测完成、确有违规事实才能生成。" +
       "用户明确同意后再调用对应工具，不要擅自提交。"
     );
   }

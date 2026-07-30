@@ -6,22 +6,14 @@ import { type FieldValue, getJson, postForm, resolveConfig } from "../client/htt
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
-
-const DEFAULT_WORKSPACE = "pr";
-
-const JOB_STATUS_LABELS: Record<string, string> = {
-  Pending: "处理中",
-  Done: "已完成",
-  Stop: "已停止",
-};
-
-const LETTER_LABELS: Record<string, string> = {
-  Retraction: "撤稿函",
-  Report: "举报信",
-  Complaint: "投诉信",
-  GovOfficial: "官方公函",
-  GovPersonal: "个人公函",
-};
+import {
+  DEFAULT_WORKSPACE,
+  JOB_STATUS_LABELS,
+  LETTER_LABELS,
+  resolveLatestJob,
+  resolveLatestJobId,
+  resolveLetterBasis,
+} from "./job-basis.js";
 
 const ListSchema = Type.Object(
   {
@@ -34,15 +26,18 @@ const ListSchema = Type.Object(
 
 const LetterGenerateSchema = Type.Object(
   {
-    errors: Type.String({
-      description:
-        "违规内容详细描述 (the specific false facts + cited laws), at least 20 chars. " +
-        "Targets the most recent 内容检测 task for this account.",
-    }),
+    supplement: Type.Optional(
+      Type.String({
+        description:
+          "可选补充说明（例如要额外引用的法条），会附在检测结果之后。" +
+          "违规事实一律取自该检测任务的检测结果，禁止在此自行编写违规事实。",
+      }),
+    ),
     all: Type.Optional(
       Type.Boolean({
         description:
-          "Generate every letter type (撤稿函/举报信/投诉信/官方公函/个人公函). Default lets the backend choose by task type.",
+          "生成全部三种文书（撤稿函/投诉通知/举报信）。默认由后端按任务类型选择。" +
+          "官方公函/个人公函不是文书，不在此列。",
       }),
     ),
   },
@@ -70,29 +65,6 @@ const ComplaintSubmitSchema = Type.Object(
 );
 
 const EmptySchema = Type.Object({}, { additionalProperties: false });
-
-/** Resolve the most recent pr-workspace job for this account (the one just created in chat). */
-async function resolveLatestJob(
-  config: BackendConfig,
-  apiKey: string,
-): Promise<Record<string, unknown> | null> {
-  const res = await getJson(
-    config,
-    "/ai/fetch-jobs",
-    { workspace: DEFAULT_WORKSPACE, page: 1, size: 1 },
-    apiKey,
-  );
-  const jobs = Array.isArray(res.jobs) ? (res.jobs as Record<string, unknown>[]) : [];
-  const job = jobs[0];
-  return job && typeof job === "object" ? job : null;
-}
-
-/** Resolve the most recent pr-workspace job id for this account (the one just created in chat). */
-async function resolveLatestJobId(config: BackendConfig, apiKey: string): Promise<number | null> {
-  const job = await resolveLatestJob(config, apiKey);
-  const id = Number(job?.id);
-  return Number.isInteger(id) && id > 0 ? id : null;
-}
 
 export function createJobListToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
@@ -208,37 +180,32 @@ export function createLetterGenerateToolFactory(api: OpenClawPluginApi, resolver
       name: "letter_generate",
       label: "Generate 维权文书",
       description:
-        "Generate 维权/举报/投诉/公函 letters for the most recent 内容检测 task, from a description of the violations (errors). " +
-        "Runs asynchronously — call letter_fetch to retrieve them once ready. " +
-        "The errors text must be at least 20 chars or the backend rejects it as too minor.",
+        "为最近一次内容检测任务生成「维权文书」——只有三种：撤稿函、投诉通知、举报信。" +
+        "违规事实自动取自该检测任务的检测结果（与网页端「一键生成所需函件」同源），不需要也不允许自行编写；" +
+        "检测任务尚未完成、或检测结果里没有违规事实时，本工具会直接拒绝——此时应告知用户等检测完成，不要编造违规事实。" +
+        "异步执行——生成完毕后用 letter_fetch 取回。" +
+        "注意：官方公函/个人公函不是文书，它们分别对应投诉(infringe_complaint_submit)与举报(complaint_submit)功能。",
       parameters: LetterGenerateSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         const keyed = await resolveKeyOrError(api, resolver, userId, "letter_generate");
         if ("error" in keyed) {
           return keyed.error;
         }
-        const errors = asString(rawParams.errors);
-        if (!errors || errors.length < 20) {
-          return jsonResult({
-            success: false,
-            error: "errors must be a description of the violations, at least 20 characters.",
-          });
-        }
-        let jobId: number | null;
+        // 前置闸门：检测必须已完成，且检测结果里确有违规事实（errors 由此而来）。
+        let basis: Awaited<ReturnType<typeof resolveLetterBasis>>;
         try {
-          jobId = await resolveLatestJobId(config, keyed.apiKey);
+          basis = await resolveLetterBasis(config, keyed.apiKey);
         } catch (error) {
           return failure(api, "letter_generate", userId, error);
         }
-        if (!jobId) {
-          return jsonResult({
-            success: false,
-            error: "No recent 内容检测 task to attach the letters to; run a check first.",
-          });
+        if (!basis.ok) {
+          return jsonResult({ success: false, error: basis.error });
         }
+        const supplement = asString(rawParams.supplement);
+        const errors = supplement ? `${basis.errors}\n${supplement}` : basis.errors;
         const fields: Record<string, FieldValue> = {
           errors,
-          jobId,
+          jobId: basis.jobId,
           siteId: config.siteId,
           all: rawParams.all ? 1 : undefined,
         };
@@ -279,7 +246,7 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
       name: "letter_fetch",
       label: "Fetch 维权文书",
       description:
-        "Fetch completed 维权/举报/投诉/公函 letters for the most recent 内容检测 task. Call with no arguments. " +
+        "取回最近一次内容检测任务已生成的「维权文书」（撤稿函/投诉通知/举报信三种，只返回已有正文的）。无需参数。" +
         "⚠️ SINGLE-USE PER TURN: call EXACTLY ONCE, then immediately reply to the user. " +
         "If count is 0, tell the user generation is still running and STOP — never call again in the same turn.",
       parameters: EmptySchema,
@@ -320,14 +287,19 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
           map && typeof map === "object" && !Array.isArray(map)
             ? Object.entries(map as Record<string, unknown>)
             : [];
-        const letters = entries.map(([category, value]) => {
-          const v = (value as Record<string, unknown>) ?? {};
-          return {
-            category,
-            categoryLabel: LETTER_LABELS[category] ?? category,
-            content: asString(v.content) ?? null,
-          };
-        });
+        // 只认三种文书；GovOfficial/GovPersonal 属于投诉/举报功能，不是文书。
+        // 正文为空的条目说明后端还在生成，等同于「未就绪」，不计入 count。
+        const letters = entries
+          .filter(([category]) => category in LETTER_LABELS)
+          .map(([category, value]) => {
+            const v = (value as Record<string, unknown>) ?? {};
+            return {
+              category,
+              categoryLabel: LETTER_LABELS[category],
+              content: asString(v.content) ?? null,
+            };
+          })
+          .filter((letter) => letter.content);
         return jsonResult({
           success: true,
           count: letters.length,
