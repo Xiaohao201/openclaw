@@ -1,4 +1,9 @@
-import type { PluginLogger, PluginRuntime } from "../../../api.js";
+import type {
+  OpenClawConfig,
+  PluginLogger,
+  PluginRuntime,
+  SessionTurnCurrencyPolicy,
+} from "../../../api.js";
 import type { ApiKeyResolver } from "../../client/key-resolver.js";
 import type { BackendConfig } from "../../client/types.js";
 import type { Notification, NotifyAddressing } from "../../notify/notification.js";
@@ -20,6 +25,14 @@ export interface ActionRunnerDeps {
   subagent?: PluginRuntime["subagent"];
   /** Fans a Notification out to all configured transports (Mercure / history / email). */
   deliver: (n: Notification, to: NotifyAddressing) => Promise<boolean>;
+  /**
+   * Currency policy for the token/cost accounting of actions that run an LLM
+   * (agent_prompt). Omitted outside a configured deployment; the action still
+   * runs, only the accounting is skipped.
+   */
+  usagePolicy?: SessionTurnCurrencyPolicy;
+  /** Live OpenClaw config, for unit-price lookup when a provider reports no cost. */
+  appConfig?: OpenClawConfig;
   logger: PluginLogger;
 }
 

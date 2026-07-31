@@ -1,4 +1,8 @@
+import { agentIdFromSessionKey } from "../../client/agent-id.js";
 import { asString } from "../../client/envelope.js";
+import { insertHistoryRow, sessionIdFromKey } from "../../notify/history-row.js";
+import { collectTurnUsage, formatUsage, markUsageOutcome } from "../../notify/usage.js";
+import type { TurnUsageRecord } from "../../notify/usage.js";
 import type { ScheduledTask } from "../types.js";
 import type { ScheduleActionType } from "./types.js";
 
@@ -57,7 +61,7 @@ export const agentPromptAction: ScheduleActionType = {
   },
   makeRunner(deps) {
     return async (task: ScheduledTask) => {
-      const { subagent, deliver, logger } = deps;
+      const { subagent, deliver, logger, usagePolicy, appConfig } = deps;
       if (!subagent) {
         return { ok: false, note: "subagent runtime unavailable" };
       }
@@ -68,6 +72,63 @@ export const agentPromptAction: ScheduleActionType = {
       // Derived session: keeps scheduled turns off the user's live chat session.
       const sessionKey = `${task.sessionKey}:sched`;
       const firedAt = Date.now();
+      // Token/cost accounting window. A scheduled run bills the same as a chat
+      // turn — it is a full agent turn with the full toolset — but no chat
+      // pipeline is watching it, so this action bills itself. Opened BEFORE the
+      // run so every assistant entry appended from here on belongs to this fire
+      // and the previous fire's entries (same session) stay out.
+      const billing = usagePolicy
+        ? {
+            sessionKey,
+            agentId: agentIdFromSessionKey(task.sessionKey, task.uid),
+            sinceMs: firedAt,
+            policy: usagePolicy,
+            config: appConfig,
+            logger,
+          }
+        : undefined;
+      /**
+       * A fire that spent tokens but produced nothing to deliver still has to
+       * be billed — the tokens are gone either way. It gets its own
+       * history_messages row carrying ONLY the accounting: empty `response`
+       * keeps it out of the user's chat (the history loader skips it), while
+       * the usage page still counts it under this user's scheduled spend, with
+       * `metadata.usage.outcome` recording why nothing came out.
+       *
+       * Best-effort throughout: the run already failed, and a billing write
+       * must not turn that into a second failure.
+       */
+      const billUnattended = async (
+        outcome: string,
+        collected?: TurnUsageRecord,
+      ): Promise<void> => {
+        const spent = collected ?? (billing ? await collectTurnUsage(billing) : undefined);
+        if (!spent) {
+          return;
+        }
+        logger.warn(
+          `[LEADING_V2_SCHED] task ${task.id} spent tokens without delivering ` +
+            `(${outcome}): ${formatUsage(spent)}`,
+        );
+        const sessionId = sessionIdFromKey(task.sessionKey);
+        if (!deps.config.db || !sessionId) {
+          return;
+        }
+        try {
+          await insertHistoryRow(
+            deps.config.db,
+            {
+              sessionId,
+              uid: task.uid,
+              response: "", // accounting-only: invisible in the chat history
+              usage: markUsageOutcome(spent, outcome),
+            },
+            logger,
+          );
+        } catch (error) {
+          logger.warn(`[LEADING_V2_SCHED] failed-run billing write failed: ${String(error)}`);
+        }
+      };
       try {
         const { runId } = await subagent.run({
           sessionKey,
@@ -76,11 +137,14 @@ export const agentPromptAction: ScheduleActionType = {
         });
         const wait = await subagent.waitForRun({ runId, timeoutMs: RUN_TIMEOUT_MS });
         if (wait.status !== "ok") {
+          await billUnattended(wait.status);
           return { ok: false, note: `subagent ${wait.status}: ${wait.error ?? ""}` };
         }
+        const usage = billing ? await collectTurnUsage(billing) : undefined;
         const { messages } = await subagent.getSessionMessages({ sessionKey, limit: 5 });
         const text = lastAssistantText(messages ?? []);
         if (!text) {
+          await billUnattended("empty-reply", usage);
           return { ok: false, note: "empty agent response" };
         }
         const ok = await deliver(
@@ -92,16 +156,28 @@ export const agentPromptAction: ScheduleActionType = {
             title: task.title || "定时任务",
             body: text,
             ts: firedAt,
+            // Rides along so the history row this notification creates is
+            // written WITH its token/cost columns (one INSERT, no follow-up
+            // UPDATE); non-DB transports drop it.
+            ...(usage ? { usage } : {}),
           },
           { mercureTopic: task.mercureTopic, sessionKey: task.sessionKey },
         );
         if (!ok) {
+          // Not re-billed here on purpose: the fanout may have partially
+          // succeeded, and a second insert could double-count. Log only.
           logger.warn(
-            `[LEADING_V2_SCHED] agent_prompt produced a reply but no transport accepted it (task ${task.id})`,
+            `[LEADING_V2_SCHED] agent_prompt produced a reply but no transport accepted it ` +
+              `(task ${task.id})${usage ? `; unbilled: ${formatUsage(usage)}` : ""}`,
           );
+        } else if (usage) {
+          logger.info(`[LEADING_V2_SCHED] task ${task.id} billed: ${formatUsage(usage)}`);
         }
         return { ok: true, note: text.slice(0, 80) };
       } catch (error) {
+        // The run may have burned tokens before throwing (a dropped connection
+        // mid-run, a gateway error): bill what the transcript shows.
+        await billUnattended("error");
         return { ok: false, note: String(error) };
       }
     };

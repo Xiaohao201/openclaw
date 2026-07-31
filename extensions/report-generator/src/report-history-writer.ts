@@ -192,7 +192,7 @@ export class ReportHistoryWriter {
       const code = (err as { code?: string }).code;
       const hint =
         code === "ER_BAD_FIELD_ERROR"
-          ? " (run extensions/rabbitmq-consumer/src/migrations/20260728-history-messages-usage.sql)"
+          ? " (history_messages is missing the token/cost columns)"
           : "";
       logger.warn(`[REPORT_HISTORY] Report usage writeback failed${hint}: ${String(err)}`);
       return;

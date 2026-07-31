@@ -1,4 +1,5 @@
 import type { PluginLogger } from "../../api.js";
+import type { TurnUsageRecord } from "./usage.js";
 
 /** A thing that happened and should be surfaced to a user. Transport-agnostic. */
 export interface Notification {
@@ -10,6 +11,13 @@ export interface Notification {
   body: string; // plain text / markdown
   link?: string; // optional fileLink / detail url
   ts: number;
+  /**
+   * Token/cost accounting for the LLM run that produced this notification, when
+   * one did (scheduled agent_prompt tasks). Persisted by the db-history
+   * transport onto the row it inserts; every other transport ignores it, so
+   * cost never reaches the user's screen or inbox.
+   */
+  usage?: TurnUsageRecord;
 }
 
 /** Where a notification can be delivered for a given user (captured at submit time). */
@@ -49,10 +57,14 @@ export class Notifier {
         if (result.ok) {
           anyOk = true;
         } else {
-          this.logger?.warn(`[LEADING_V2_NOTIFY] transport ${transport.id} skipped: ${result.note ?? "?"}`);
+          this.logger?.warn(
+            `[LEADING_V2_NOTIFY] transport ${transport.id} skipped: ${result.note ?? "?"}`,
+          );
         }
       } catch (error) {
-        this.logger?.error(`[LEADING_V2_NOTIFY] transport ${transport.id} failed: ${String(error)}`);
+        this.logger?.error(
+          `[LEADING_V2_NOTIFY] transport ${transport.id} failed: ${String(error)}`,
+        );
       }
     }
     return anyOk;

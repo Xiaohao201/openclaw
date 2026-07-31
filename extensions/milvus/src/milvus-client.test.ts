@@ -157,6 +157,33 @@ describe("MilvusClientWrapper.deleteEntries", () => {
   });
 });
 
+describe("MilvusClientWrapper connection handling", () => {
+  it("does not connect to the server until a call is made", async () => {
+    // No injected client and no calls: constructing the wrapper must not touch the network.
+    const wrapper = new MilvusClientWrapper({ address: "127.0.0.1:1" });
+    expect(wrapper).toBeInstanceOf(MilvusClientWrapper);
+  });
+
+  it("rethrows connection errors and re-checks the collection on the next call", async () => {
+    const deadline = Object.assign(new Error("4 DEADLINE_EXCEEDED: Deadline exceeded after 15s"), {
+      code: 4,
+      details: "Deadline exceeded after 15s",
+    });
+    const hasCollection = vi
+      .fn<() => Promise<{ value: boolean }>>()
+      .mockRejectedValueOnce(deadline)
+      .mockResolvedValue({ value: true });
+    const sdk = createFakeSdkClient({ hasCollection });
+    const wrapper = new MilvusClientWrapper(connection, sdk);
+
+    await expect(wrapper.ensureCollection("docs", 2)).rejects.toThrow("DEADLINE_EXCEEDED");
+    await wrapper.ensureCollection("docs", 2);
+
+    expect(hasCollection).toHaveBeenCalledTimes(2);
+    expect(sdk.loadCollection).toHaveBeenCalledWith({ collection_name: "docs" });
+  });
+});
+
 describe("MilvusClientWrapper.listCollections", () => {
   it("returns collection names", async () => {
     const sdk = createFakeSdkClient({

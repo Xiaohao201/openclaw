@@ -3,9 +3,9 @@ import type { HistoryDbConfig, WriterDbConfig, HistoryRecord, TurnUsageRecord } 
 
 /**
  * MySQL error code for a column that does not exist. The token/cost columns are
- * added by a separate migration (see src/migrations/20260728-history-messages-usage.sql);
- * until an operator runs it, usage writes must degrade to a warning instead of
- * erroring on every turn.
+ * added to history_messages by a one-off schema change (applied 2026-07); until
+ * a database has it, usage writes must degrade to a warning instead of erroring
+ * on every turn.
  */
 const ER_BAD_FIELD_ERROR = "ER_BAD_FIELD_ERROR";
 
@@ -193,8 +193,10 @@ export class HistoryManager {
       const code = (err as { code?: string }).code;
       if (code === ER_BAD_FIELD_ERROR) {
         throw new Error(
-          "history_messages is missing the token/cost columns; run " +
-            "extensions/rabbitmq-consumer/src/migrations/20260728-history-messages-usage.sql",
+          "history_messages is missing the token/cost columns (input_tokens, output_tokens, " +
+            "cache_read_tokens, cache_write_tokens, total_tokens, input_cost, output_cost, " +
+            "cache_read_cost, cache_write_cost, total_cost, cost_currency, llm_provider, " +
+            "llm_model, llm_calls); add them before usage can be recorded",
           { cause: err },
         );
       }

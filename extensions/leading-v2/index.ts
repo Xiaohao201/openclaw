@@ -41,6 +41,7 @@ import { DbHistoryTransport } from "./src/notify/transports/db-history.js";
 import { EmailNotificationTransport } from "./src/notify/transports/email.js";
 import { MercureNotificationTransport } from "./src/notify/transports/mercure-notification.js";
 import type { NotifyKind } from "./src/notify/types.js";
+import { resolveUsageCurrencyPolicy } from "./src/notify/usage.js";
 import {
   createFeedListToolFactory,
   createFeedReanalyzeToolFactory,
@@ -213,7 +214,7 @@ export default definePluginEntry({
           if (config.db) {
             // T2 durable: persist as an assistant-only history row so it shows
             // on next reload even if the user was offline (key for scheduled tasks).
-            transports.push(new DbHistoryTransport(config.db));
+            transports.push(new DbHistoryTransport(config.db, ctx.logger));
           }
           const smtpCfg = resolveSmtpConfig(api.pluginConfig ?? {});
           if (smtpCfg && config.db) {
@@ -319,12 +320,22 @@ export default definePluginEntry({
             ctx.logger,
             config.db,
           );
+          // Scheduled agent runs burn tokens like any chat turn, so they are
+          // billed onto the same history_messages columns. Providers quote unit
+          // prices in different currencies; this folds them into one.
+          const usagePolicy = resolveUsageCurrencyPolicy(api.pluginConfig ?? {});
+          ctx.logger.info(
+            `[LEADING_V2] Scheduled-run usage accounting in ${usagePolicy.currency} ` +
+              `(rate=${usagePolicy.rate} for ${usagePolicy.foreignProviders.join(",")})`,
+          );
           const runners = buildRunners({
             config,
             resolver,
             registry: pendingTasks,
             subagent: api.runtime?.subagent,
             deliver: (n, to) => fanout.notify(n, to),
+            usagePolicy,
+            appConfig: api.config,
             logger: ctx.logger,
           });
           scheduler = new Scheduler({ store: scheduleStore, runners, logger: ctx.logger });

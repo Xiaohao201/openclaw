@@ -176,6 +176,47 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
+    it("does not exit on transient gRPC errors", () => {
+      const grpcCases: unknown[] = [
+        // Milvus SDK connect timeout: the promise is created inside the SDK constructor,
+        // so it reaches the handler with no OpenClaw frame attached.
+        Object.assign(
+          new Error(
+            "4 DEADLINE_EXCEEDED: Deadline exceeded after 15.668s,name resolution: 0.004s,LB pick: 8.473s,remote_addr=192.168.3.124:19530",
+          ),
+          { code: 4, details: "Deadline exceeded after 15.668s" },
+        ),
+        Object.assign(new Error("14 UNAVAILABLE: No connection established"), {
+          code: 14,
+          details: "No connection established",
+        }),
+        Object.assign(new Error("failed to search"), {
+          cause: Object.assign(new Error("8 RESOURCE_EXHAUSTED: rate limit"), {
+            code: 8,
+            details: "rate limit",
+          }),
+        }),
+      ];
+
+      for (const grpcErr of grpcCases) {
+        expectExitCodeFromUnhandled(grpcErr, []);
+      }
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("DEADLINE_EXCEEDED"),
+      );
+    });
+
+    it("exits on non-transient gRPC errors", () => {
+      const invalidArgument = Object.assign(new Error("3 INVALID_ARGUMENT: bad collection name"), {
+        code: 3,
+        details: "bad collection name",
+      });
+
+      expectExitCodeFromUnhandled(invalidArgument, [1], "unhandled rejection");
+    });
+
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 

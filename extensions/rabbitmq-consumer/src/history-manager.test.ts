@@ -205,14 +205,12 @@ describe("HistoryManager.addUsage", () => {
     expect(params[13]).toBeNull();
   });
 
-  it("rewrites a missing-column failure into an actionable migration hint", async () => {
+  it("rewrites a missing-column failure into an actionable hint", async () => {
     mockExecute.mockRejectedValueOnce(
       Object.assign(new Error("Unknown column 'input_tokens'"), { code: "ER_BAD_FIELD_ERROR" }),
     );
 
-    await expect(manager.addUsage(42, USAGE)).rejects.toThrow(
-      /20260728-history-messages-usage\.sql/,
-    );
+    await expect(manager.addUsage(42, USAGE)).rejects.toThrow(/missing the token\/cost columns/);
   });
 
   it("propagates other DB errors unchanged", async () => {

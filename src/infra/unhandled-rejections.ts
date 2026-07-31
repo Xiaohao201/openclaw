@@ -53,6 +53,14 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
   "TimeoutError",
 ]);
 
+// gRPC status codes that mean the peer was unreachable/too slow/overloaded rather than
+// signalling a bug: 4 DEADLINE_EXCEEDED, 8 RESOURCE_EXHAUSTED, 14 UNAVAILABLE.
+const TRANSIENT_GRPC_STATUS_CODES = new Set([4, 8, 14]);
+
+// grpc-js formats errors as "<code> <STATUS>: <details>".
+const TRANSIENT_GRPC_MESSAGE_RE =
+  /^\s*(?:4 DEADLINE_EXCEEDED|8 RESOURCE_EXHAUSTED|14 UNAVAILABLE)\b/;
+
 const TRANSIENT_SQLITE_CODES = new Set([
   "SQLITE_BUSY",
   "SQLITE_CANTOPEN",
@@ -309,8 +317,41 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks for transient gRPC failures (e.g. a Milvus/vector-store node being unreachable).
+ * Numeric status codes are ambiguous on their own, so a code match must be corroborated by
+ * the grpc-js error shape (`details`) or by the canonical "<code> <STATUS>:" message.
+ */
+export function isTransientGrpcError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const message = (candidate as { message?: unknown }).message;
+    if (typeof message === "string" && TRANSIENT_GRPC_MESSAGE_RE.test(message)) {
+      return true;
+    }
+
+    const code = (candidate as { code?: unknown }).code;
+    if (
+      typeof code === "number" &&
+      TRANSIENT_GRPC_STATUS_CODES.has(code) &&
+      typeof (candidate as { details?: unknown }).details === "string"
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isTransientUnhandledRejectionError(err: unknown): boolean {
-  return isTransientNetworkError(err) || isTransientSqliteError(err);
+  return isTransientNetworkError(err) || isTransientSqliteError(err) || isTransientGrpcError(err);
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
