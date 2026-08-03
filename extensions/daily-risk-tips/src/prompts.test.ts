@@ -29,6 +29,19 @@ describe("buildStyleExtractionUserMessage", () => {
     expect(msg).toContain("topK: 10");
     expect(msg).toContain("每日风险提示案例");
   });
+
+  it("forbids fallback tool use so a failed retrieval goes straight to the JSON answer", () => {
+    const msg = buildStyleExtractionUserMessage({
+      query: "某政策发布",
+      collection: "DailyRiskTips",
+      embeddingProfile: "doubao",
+      topK: 10,
+    });
+    expect(msg).toContain("<检索失败兜底>");
+    expect(msg).toContain("只允许调用 milvus_search 这一个工具");
+    expect(msg).toContain("禁止重试 milvus_search");
+    expect(msg).toContain("禁止去读取本地文件");
+  });
 });
 
 describe("buildGenerationUserMessage", () => {
