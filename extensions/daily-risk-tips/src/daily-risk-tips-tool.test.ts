@@ -127,17 +127,65 @@ describe("daily_risk_tips tool", () => {
     expect(generateCall?.[0].extraSystemPrompt).toBe("写作规则：标题加粗动宾结构，正文150字以内");
   });
 
-  it("returns a failure and cleans up both sessions when turn A times out", async () => {
-    const subagent = buildFakeSubagent({ style: [], generate: [] });
+  it("still generates a tip when turn A times out, instead of failing the whole tool", async () => {
+    const subagent = buildFakeSubagent({
+      style: [],
+      generate: [{ role: "assistant", content: GENERATED_ANSWER }],
+    });
     subagent.waitForRun.mockResolvedValueOnce({ status: "timeout" });
     const api = buildFakeApi({}, subagent);
     const tool = createDailyRiskTipsToolFactory(api)({ agentId: "agent1", sessionId: "s1" });
 
     const result = await tool.execute("call-1", { message: "某政策发布" });
 
-    expect(result.details).toMatchObject({ success: false });
-    expect(subagent.run).toHaveBeenCalledTimes(1);
+    expect(result.details).toMatchObject({ success: true, daily_risk_tip: GENERATED_ANSWER });
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives turn A its own shorter budget and turn B the full timeout", async () => {
+    const subagent = buildFakeSubagent({
+      style: [{ role: "assistant", content: STYLE_ANSWER }],
+      generate: [{ role: "assistant", content: GENERATED_ANSWER }],
+    });
+    const api = buildFakeApi({ timeoutMs: 120_000, styleTimeoutMs: 30_000 }, subagent);
+    const tool = createDailyRiskTipsToolFactory(api)({ agentId: "agent1", sessionId: "s1" });
+
+    await tool.execute("call-1", { message: "某政策发布" });
+
+    expect(subagent.waitForRun.mock.calls[0][0].timeoutMs).toBe(30_000);
+    expect(subagent.waitForRun.mock.calls[1][0].timeoutMs).toBe(120_000);
+  });
+
+  it("skips the retrieval turn on later calls once it has failed (cooldown)", async () => {
+    const subagent = buildFakeSubagent({
+      style: [],
+      generate: [{ role: "assistant", content: GENERATED_ANSWER }],
+    });
+    const api = buildFakeApi({}, subagent);
+    const tool = createDailyRiskTipsToolFactory(api)({ agentId: "agent1", sessionId: "s1" });
+
+    await tool.execute("call-1", { message: "某政策发布" });
+    subagent.run.mockClear();
+    const second = await tool.execute("call-2", { message: "另一个政策" });
+
+    expect(second.details).toMatchObject({ success: true, daily_risk_tip: GENERATED_ANSWER });
+    expect(subagent.run).toHaveBeenCalledTimes(1);
+    expect(subagent.run.mock.calls[0][0].sessionKey.endsWith(":generate")).toBe(true);
+  });
+
+  it("keeps retrying the retrieval turn when the cooldown is disabled", async () => {
+    const subagent = buildFakeSubagent({
+      style: [],
+      generate: [{ role: "assistant", content: GENERATED_ANSWER }],
+    });
+    const api = buildFakeApi({ retrievalCooldownMs: 0 }, subagent);
+    const tool = createDailyRiskTipsToolFactory(api)({ agentId: "agent1", sessionId: "s1" });
+
+    await tool.execute("call-1", { message: "某政策发布" });
+    subagent.run.mockClear();
+    await tool.execute("call-2", { message: "另一个政策" });
+
+    expect(subagent.run).toHaveBeenCalledTimes(2);
   });
 
   it("returns a failure when turn B produces no assistant text", async () => {

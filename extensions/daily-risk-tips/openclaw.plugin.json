@@ -8,7 +8,17 @@
       "timeoutMs": {
         "type": "number",
         "default": 120000,
-        "description": "Max time to wait for each model turn before failing the tool."
+        "description": "Max time to wait for the generation turn before failing the tool."
+      },
+      "styleTimeoutMs": {
+        "type": "number",
+        "default": 45000,
+        "description": "Max time to wait for the optional retrieval/style-extraction turn. Kept well under the frontend's 90s no-event watchdog; on expiry the tool degrades to the generic style prompt instead of failing."
+      },
+      "retrievalCooldownMs": {
+        "type": "number",
+        "default": 600000,
+        "description": "After a failed or empty retrieval turn (e.g. Milvus unreachable or the embedding provider is overdue), skip that turn entirely for this long. Set 0 to always attempt retrieval."
       },
       "sourceCollection": {
         "type": "string",

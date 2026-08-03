@@ -11,6 +11,16 @@ import {
 } from "./prompts.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * The retrieval turn gets a much tighter budget than generation: it is OPTIONAL (its
+ * only product is a style prompt that has a usable fallback), and the frontend arms a
+ * 90s watchdog that is only rearmed by Mercure events. This tool is a single tool call
+ * that emits nothing between its start and end steps, so any silent stretch past 90s
+ * surfaces to the user as "处理超时：未收到响应" even though the backend is still working.
+ */
+const DEFAULT_STYLE_TIMEOUT_MS = 45_000;
+/** After a failed/empty retrieval turn, skip it entirely for this long (auto-recovers). */
+const DEFAULT_RETRIEVAL_COOLDOWN_MS = 600_000;
 const DEFAULT_SOURCE_COLLECTION = "DailyRiskTips";
 const DEFAULT_EMBEDDING_PROFILE = "doubao";
 const DEFAULT_TOP_K = 10;
@@ -49,6 +59,8 @@ function asString(value: unknown): string | undefined {
 
 interface DailyRiskTipsConfig {
   timeoutMs: number;
+  styleTimeoutMs: number;
+  retrievalCooldownMs: number;
   sourceCollection: string;
   embeddingProfile: string;
   topK: number;
@@ -57,12 +69,17 @@ interface DailyRiskTipsConfig {
 
 function resolveConfig(raw: Record<string, unknown>): DailyRiskTipsConfig {
   const t = raw.timeoutMs;
+  const styleT = raw.styleTimeoutMs;
+  const cooldown = raw.retrievalCooldownMs;
   const topK = raw.topK;
   const queryMaxChars = raw.queryMaxChars;
   const sourceCollection = raw.sourceCollection;
   const embeddingProfile = raw.embeddingProfile;
   return {
     timeoutMs: typeof t === "number" && t > 0 ? t : DEFAULT_TIMEOUT_MS,
+    styleTimeoutMs: typeof styleT === "number" && styleT > 0 ? styleT : DEFAULT_STYLE_TIMEOUT_MS,
+    retrievalCooldownMs:
+      typeof cooldown === "number" && cooldown >= 0 ? cooldown : DEFAULT_RETRIEVAL_COOLDOWN_MS,
     sourceCollection:
       typeof sourceCollection === "string" && sourceCollection.trim()
         ? sourceCollection.trim()
@@ -79,6 +96,50 @@ function resolveConfig(raw: Record<string, unknown>): DailyRiskTipsConfig {
   };
 }
 
+interface StyleExtractionArgs {
+  api: OpenClawPluginApi;
+  subagent: PluginRuntime["subagent"];
+  sessionKey: string;
+  query: string;
+  config: DailyRiskTipsConfig;
+}
+
+/**
+ * Run the OPTIONAL retrieval/style-distillation turn. Returns "" for every failure mode
+ * (turn error, timeout, no parsable answer) rather than throwing, so the caller can fall
+ * back to the generic style prompt and trip the cooldown — a dead embedding provider must
+ * not cost every later call a full styleTimeoutMs of silence.
+ */
+async function runStyleExtractionTurn(args: StyleExtractionArgs): Promise<string> {
+  const { api, subagent, sessionKey, query, config } = args;
+  const run = await subagent.run({
+    sessionKey,
+    message: buildStyleExtractionUserMessage({
+      query,
+      collection: config.sourceCollection,
+      embeddingProfile: config.embeddingProfile,
+      topK: config.topK,
+    }),
+    extraSystemPrompt: STYLE_EXTRACTION_SYSTEM_PROMPT,
+    deliver: false,
+  });
+  const wait = await subagent.waitForRun({ runId: run.runId, timeoutMs: config.styleTimeoutMs });
+  if (wait.status !== "ok") {
+    api.logger.warn(`[DAILY_RISK_TIPS] style-extraction turn ${wait.status}: ${wait.error ?? ""}`);
+    return "";
+  }
+  const session = await subagent.getSessionMessages({ sessionKey, limit: SESSION_MESSAGES_LIMIT });
+  const assistantTexts = collectAssistantTexts(session.messages);
+  // Prefer a message that strictly parses as the {"prompt": "..."} answer over any
+  // prose (e.g. a closing remark after the retrieval tool call) that merely happens
+  // to be non-empty once loosely extracted.
+  return (
+    assistantTexts.map((text) => tryExtractJsonStyleRules(text)).find((r) => r !== null) ??
+    assistantTexts.map((text) => extractStyleRules(text)).find((r) => r.trim()) ??
+    ""
+  );
+}
+
 /**
  * Factory for the `daily_risk_tips` tool. Runs two isolated, non-delivered subagent
  * turns: turn A retrieves similar finalized examples via the milvus_search tool and
@@ -87,6 +148,12 @@ function resolveConfig(raw: Record<string, unknown>): DailyRiskTipsConfig {
  */
 export function createDailyRiskTipsToolFactory(api: OpenClawPluginApi) {
   const config = resolveConfig(api.pluginConfig ?? {});
+  /**
+   * Circuit breaker for the retrieval turn. Deliberately process-wide rather than
+   * per-agent: Milvus reachability and the embedding provider's billing state are
+   * global facts, so one agent discovering the outage should spare all the others.
+   */
+  let retrievalDisabledUntil = 0;
 
   return (ctx: { agentId?: string; sessionId?: string }) => {
     return {
@@ -124,47 +191,33 @@ export function createDailyRiskTipsToolFactory(api: OpenClawPluginApi) {
         };
 
         try {
-          // Turn A: retrieve similar finalized examples (via milvus_search) and distill style rules.
-          const query = message.slice(0, config.queryMaxChars);
-          const runA = await subagent.run({
-            sessionKey: styleSessionKey,
-            message: buildStyleExtractionUserMessage({
-              query,
-              collection: config.sourceCollection,
-              embeddingProfile: config.embeddingProfile,
-              topK: config.topK,
-            }),
-            extraSystemPrompt: STYLE_EXTRACTION_SYSTEM_PROMPT,
-            deliver: false,
-          });
-          const waitA = await subagent.waitForRun({
-            runId: runA.runId,
-            timeoutMs: config.timeoutMs,
-          });
-          if (waitA.status !== "ok") {
-            api.logger.warn(
-              `[DAILY_RISK_TIPS] style-extraction turn ${waitA.status}: ${waitA.error ?? ""}`,
+          // Turn A (optional): retrieve similar finalized examples via milvus_search and
+          // distill style rules. Every failure degrades to FALLBACK_STYLE_PROMPT instead of
+          // failing the tool — a tip written from generic rules beats an error, and aborting
+          // here used to burn the caller's whole latency budget for nothing.
+          const startedAt = Date.now();
+          let styleRules = "";
+          if (startedAt < retrievalDisabledUntil) {
+            api.logger.info(
+              "[DAILY_RISK_TIPS] retrieval turn suppressed for another " +
+                `${Math.ceil((retrievalDisabledUntil - startedAt) / 1000)}s after an earlier failure`,
             );
-            return jsonResult({
-              success: false,
-              error:
-                waitA.status === "timeout"
-                  ? "检索/提炼写作规则超时，请稍后重试。"
-                  : "检索/提炼写作规则失败。",
+          } else {
+            styleRules = await runStyleExtractionTurn({
+              api,
+              subagent,
+              sessionKey: styleSessionKey,
+              query: message.slice(0, config.queryMaxChars),
+              config,
             });
+            if (!styleRules.trim()) {
+              retrievalDisabledUntil = Date.now() + config.retrievalCooldownMs;
+              api.logger.warn(
+                "[DAILY_RISK_TIPS] no style rules from the retrieval turn; falling back and " +
+                  `suppressing retrieval for ${Math.round(config.retrievalCooldownMs / 1000)}s`,
+              );
+            }
           }
-          const sessionA = await subagent.getSessionMessages({
-            sessionKey: styleSessionKey,
-            limit: SESSION_MESSAGES_LIMIT,
-          });
-          const assistantTextsA = collectAssistantTexts(sessionA.messages);
-          // Prefer a message that strictly parses as the {"prompt": "..."} answer over any
-          // prose (e.g. a closing remark after the retrieval tool call) that merely happens
-          // to be non-empty once loosely extracted.
-          const styleRules =
-            assistantTextsA.map((text) => tryExtractJsonStyleRules(text)).find((r) => r !== null) ??
-            assistantTextsA.map((text) => extractStyleRules(text)).find((r) => r.trim()) ??
-            "";
 
           // Turn B: write the new risk tip using the distilled (or fallback) style rules.
           const runB = await subagent.run({
