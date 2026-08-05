@@ -1,4 +1,5 @@
 import { CITATIONS_MARKER } from "./citations.js";
+import { mediaLinesToMarkdown, pendingMediaLineLen } from "./media-lines.js";
 import { stripInternalRefs } from "./sanitize-output.js";
 import type { ActivityStep } from "./tool-activity.js";
 import type { Citation, MercureConfig } from "./types.js";
@@ -260,11 +261,21 @@ export class StreamingMercurePusher {
         const lastTick = chunk.lastIndexOf("`");
         chunk = chunk.slice(0, lastTick);
       }
+      // Hold back a `MEDIA:` line that has not reached its newline yet. The
+      // directive can only be rewritten into markdown as a whole line, so
+      // pushing it half-open strands a literal "MEDIA:https" in the customer's
+      // view and the image never renders.
+      const pendingMedia = pendingMediaLineLen(chunk);
+      if (pendingMedia > 0) {
+        chunk = chunk.slice(0, chunk.length - pendingMedia);
+      }
     }
     // Advance by the RAW consumed length (not the sanitized length): stripped
     // internal refs were still part of the visible stream we've now consumed.
     this.pushedLen += chunk.length;
-    const safe = stripInternalRefs(chunk);
+    // Duplicate check runs against the whole reply so far, not just this chunk:
+    // the tool's `![](url)` and the model's `MEDIA:url` land in different windows.
+    const safe = mediaLinesToMarkdown(stripInternalRefs(chunk), this.fullText);
     this.pending = this.pending.then(async () => {
       if (safe) {
         await this.pusher.pushText(this.topic, safe, this.historyId);

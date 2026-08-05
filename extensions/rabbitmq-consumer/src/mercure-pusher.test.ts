@@ -112,6 +112,37 @@ describe("StreamingMercurePusher push ordering", () => {
     expect(calls).toContain("done");
   });
 
+  it("never streams a half-open MEDIA: line, and renders it as an image", async () => {
+    // Regression: a chart was rendered and uploaded, but the customer saw the
+    // literal text "MEDIA:https" and no image — the directive's URL arrived in
+    // the next flush window, and this channel has no attachment surface to
+    // deliver it. The whole line must be held back, then rewritten to markdown.
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 8, 80);
+    const drain = async () => {
+      while (resolvers.length) {
+        resolvers.shift()!();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    };
+    const url = "https://oss.ibtai.com/out/趋势图.png";
+
+    pusher.appendDelta("已生成趋势图。\nMEDIA:https");
+    await vi.advanceTimersByTimeAsync(80);
+    await drain(); // window 1: the directive line must not leak
+
+    expect(calls.join("|")).not.toContain("MEDIA:");
+
+    pusher.appendDelta(`${url.slice("https".length)}\n`);
+    const finishPromise = pusher.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await drain();
+    await finishPromise;
+
+    const streamed = calls.filter((c) => c.startsWith("text:")).join("");
+    expect(streamed).not.toContain("MEDIA:");
+    expect(streamed).toContain(`![趋势图](${url})`);
+  });
+
   it("pushError waits for in-flight text pushes before sending the error", async () => {
     const pusher = new StreamingMercurePusher(fakePusher, "user-1", 42, 80);
 

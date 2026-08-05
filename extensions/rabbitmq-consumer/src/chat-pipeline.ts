@@ -14,6 +14,7 @@ import {
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
+import { mediaLinesToMarkdown } from "./media-lines.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
@@ -1104,7 +1105,10 @@ export async function processChatMessage(
       // Hard backstop behind the workspace prompt rule: strip any internal file
       // paths / identifiers the model may have narrated before they are stored
       // or returned to the web client.
-      const safeResponse = sanitizeInternalRefs(visibleResponse);
+      // Then turn `MEDIA:<url>` attachment directives into inline markdown: this
+      // channel has no attachment surface, so an unconverted directive reaches
+      // the customer as literal text and the image is never delivered.
+      const safeResponse = mediaLinesToMarkdown(sanitizeInternalRefs(visibleResponse));
 
       // Step 7: Update history record
       await historyManager.updateResponse(chatMsg.historyId, safeResponse);
@@ -1200,8 +1204,8 @@ export async function processChatMessage(
           // Strip any half-written citations block from the interrupted stream,
           // plus inline [n] markers left dangling by the lost sources block.
           const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
-          const safePartial = sanitizeInternalRefs(
-            stripDanglingCitationMarkers(partialVisible, partialCites),
+          const safePartial = mediaLinesToMarkdown(
+            sanitizeInternalRefs(stripDanglingCitationMarkers(partialVisible, partialCites)),
           );
           await historyManager.updateResponse(chatMsg.historyId, safePartial);
           logger.info(
