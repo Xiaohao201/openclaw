@@ -1421,6 +1421,7 @@
     "croner": "^10.0.1",
     "discord-api-types": "^0.38.45",
     "dotenv": "^17.4.1",
+    "echarts": "^6.0.0",
     "express": "^5.2.1",
     "file-type": "22.0.1",
     "gaxios": "7.1.4",

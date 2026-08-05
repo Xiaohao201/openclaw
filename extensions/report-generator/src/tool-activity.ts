@@ -66,6 +66,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   edit: "正在修改内容",
   apply_patch: "正在修改内容",
   file_share: "正在生成可下载文件",
+  chart_render: "正在绘制图表",
   // Web search / fetch
   web_search: "正在检索网络信息",
   web_fetch: "正在读取网页内容",
@@ -139,6 +140,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   edit: "write",
   apply_patch: "write",
   file_share: "write",
+  chart_render: "write",
   web_search: "search",
   web_fetch: "search",
   browser: "search",

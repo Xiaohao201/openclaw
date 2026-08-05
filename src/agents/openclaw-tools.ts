@@ -15,6 +15,7 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
+import { createChartRenderTool } from "./tools/chart-render-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createFileShareTool } from "./tools/file-share-tool.js";
@@ -263,6 +264,10 @@ export function createOpenClawTools(
         workspaceDir,
       }),
     ]),
+    createChartRenderTool({
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+    }),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,

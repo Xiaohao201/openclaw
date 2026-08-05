@@ -302,6 +302,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "chart_render",
+    label: "chart_render",
+    description: "Render a data chart to a PNG image",
+    sectionId: "media",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "music_generate",
     label: "music_generate",
     description: "Music generation",

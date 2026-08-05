@@ -714,6 +714,13 @@
         "filename"
       ]
     },
+    "chart_render": {
+      "emoji": "📈",
+      "title": "Render chart",
+      "detailKeys": [
+        "filename"
+      ]
+    },
     "memory_search": {
       "emoji": "🧠",
       "title": "Memory Search",

@@ -476,6 +476,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Share file",
       detailKeys: ["filename"],
     },
+    chart_render: {
+      emoji: "📈",
+      title: "Render chart",
+      detailKeys: ["filename"],
+    },
     memory_search: {
       emoji: "🧠",
       title: "Memory Search",
