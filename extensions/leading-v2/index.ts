@@ -22,6 +22,7 @@ import {
 } from "./src/crawl/crawl-tools.js";
 import {
   createLinkBatchCreateToolFactory,
+  createLinkBatchListToolFactory,
   createLinkBatchStatusToolFactory,
   type RecentLinkBatch,
 } from "./src/link/link-tools.js";
@@ -91,7 +92,7 @@ export default definePluginEntry({
     const notify = resolveNotifyConfig(api.pluginConfig ?? {});
     const pendingTasks = getSharedPendingRegistry();
 
-    // --- link-data-crawler (失效链接强化检测，task_type=link_check) ---
+    // --- 失效链接检测 (LinkController → Queue::OfflineLinksChecker, link_status_job) ---
     const linkBatches = new RecentTaskStore<RecentLinkBatch>();
     api.registerTool(
       createLinkBatchCreateToolFactory(api, resolver, linkBatches, pendingTasks, notify),
@@ -99,6 +100,9 @@ export default definePluginEntry({
     );
     api.registerTool(createLinkBatchStatusToolFactory(api, resolver, linkBatches), {
       name: "link_batch_status",
+    });
+    api.registerTool(createLinkBatchListToolFactory(api, resolver), {
+      name: "link_batch_list",
     });
 
     // --- industry-report (行业/舆情报告 + 评论/回应生成) ---

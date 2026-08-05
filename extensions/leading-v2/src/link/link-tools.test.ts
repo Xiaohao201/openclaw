@@ -6,8 +6,18 @@ import type { PendingTaskRegistry } from "../notify/pending-store.js";
 import type { NotifyConfig } from "../notify/types.js";
 import type { RecentLinkBatch } from "./link-tools.js";
 
-const NOTIFY_OFF: NotifyConfig = { enabled: false, pollIntervalMs: 5000, ttlMs: 7_200_000, maxPerTick: 5 };
-const NOTIFY_ON: NotifyConfig = { enabled: true, pollIntervalMs: 5000, ttlMs: 7_200_000, maxPerTick: 5 };
+const NOTIFY_OFF: NotifyConfig = {
+  enabled: false,
+  pollIntervalMs: 5000,
+  ttlMs: 7_200_000,
+  maxPerTick: 5,
+};
+const NOTIFY_ON: NotifyConfig = {
+  enabled: true,
+  pollIntervalMs: 5000,
+  ttlMs: 7_200_000,
+  maxPerTick: 5,
+};
 const makeRegistry = () => ({ add: vi.fn() }) as unknown as PendingTaskRegistry;
 
 const { mockPostForm, mockGetJson } = vi.hoisted(() => ({
@@ -20,9 +30,11 @@ vi.mock("../client/http-client.js", async (importOriginal) => {
   return { ...actual, postForm: mockPostForm, getJson: mockGetJson };
 });
 
-const { createLinkBatchCreateToolFactory, createLinkBatchStatusToolFactory } = await import(
-  "./link-tools.js"
-);
+const {
+  createLinkBatchCreateToolFactory,
+  createLinkBatchListToolFactory,
+  createLinkBatchStatusToolFactory,
+} = await import("./link-tools.js");
 
 const fakeApi = {
   pluginConfig: { backend: { baseUrl: "https://v2.businesstimescn.com", siteId: "legal" } },
@@ -31,8 +43,15 @@ const fakeApi = {
 
 const resolver = new ApiKeyResolver({ "1749": "sk_test1749" }, undefined);
 const store = new RecentTaskStore<RecentLinkBatch>();
-const createFactory = createLinkBatchCreateToolFactory(fakeApi, resolver, store, makeRegistry(), NOTIFY_OFF);
+const createFactory = createLinkBatchCreateToolFactory(
+  fakeApi,
+  resolver,
+  store,
+  makeRegistry(),
+  NOTIFY_OFF,
+);
 const statusFactory = createLinkBatchStatusToolFactory(fakeApi, resolver, store);
+const listFactory = createLinkBatchListToolFactory(fakeApi, resolver);
 
 function parse(result: unknown): Record<string, unknown> {
   const r = result as { details?: unknown; content?: Array<{ text?: string }> };
@@ -49,19 +68,21 @@ describe("factory gating", () => {
   it("hides tools from non-rabbitmq agents", () => {
     expect(createFactory({ agentId: "telegram-1" })).toBeNull();
     expect(statusFactory({ agentId: undefined })).toBeNull();
+    expect(listFactory({ agentId: "telegram-1" })).toBeNull();
   });
 
   it("exposes the tools to rabbitmq-<userId> agents", () => {
     expect(createFactory({ agentId: "rabbitmq-1749" })?.name).toBe("link_batch_create");
     expect(statusFactory({ agentId: "rabbitmq-1749" })?.name).toBe("link_batch_status");
+    expect(listFactory({ agentId: "rabbitmq-1749" })?.name).toBe("link_batch_list");
   });
 });
 
 describe("link_batch_create", () => {
   const tool = () => createFactory({ agentId: "rabbitmq-1749" })!;
 
-  it("normalizes links and posts /link-data-crawler/add-check-task, hiding the uuid", async () => {
-    mockPostForm.mockResolvedValue({ uuid: "u-abc", taskId: 30, total: 2, message: "检测任务已提交" });
+  it("normalizes links and posts /link/submit-offline-check-links, hiding the job id", async () => {
+    mockPostForm.mockResolvedValue({ id: 30, message: "链接提交成功" });
     const res = parse(
       await tool().execute("c1", {
         links: ["https://a.com/1", " https://a.com/2 ", "https://a.com/1"],
@@ -75,26 +96,26 @@ describe("link_batch_create", () => {
       Record<string, unknown>,
       string,
     ];
-    expect(path).toBe("/link-data-crawler/add-check-task");
+    expect(path).toBe("/link/submit-offline-check-links");
     expect(apiKey).toBe("sk_test1749");
     expect(fields).toMatchObject({
-      name: "测试批次",
-      links: "https://a.com/1\nhttps://a.com/2",
-      siteId: "legal",
+      label: "测试批次",
+      data: ['{"link":"https://a.com/1"}', '{"link":"https://a.com/2"}'],
+      fileUrl: "",
     });
     expect(res).toMatchObject({ success: true, submitted: true, label: "测试批次", linkCount: 2 });
     expect(res).not.toHaveProperty("status");
-    expect(res).not.toHaveProperty("uuid");
+    expect(res).not.toHaveProperty("jobId");
   });
 
   it("accepts a newline-separated string and drops empty/invalid lines", async () => {
-    mockPostForm.mockResolvedValue({ uuid: "u-1" });
+    mockPostForm.mockResolvedValue({ id: 31 });
     await tool().execute("c2", {
       links: "https://a.com/1\n\n not-a-url \n https://a.com/2 \n",
       label: "x",
     });
     const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
-    expect(fields.links).toBe("https://a.com/1\nhttps://a.com/2");
+    expect(fields.data).toEqual(['{"link":"https://a.com/1"}', '{"link":"https://a.com/2"}']);
   });
 
   it("errors without backend call when links or label missing", async () => {
@@ -106,9 +127,15 @@ describe("link_batch_create", () => {
   });
 
   it("surfaces a backend danger envelope as an error", async () => {
-    mockPostForm.mockResolvedValue({ code: "danger", message: "请提供至少一个有效链接" });
+    mockPostForm.mockResolvedValue({ code: "danger", message: "请上传链接" });
     const res = parse(await tool().execute("c5", { links: "https://a.com/1", label: "x" }));
-    expect(res).toMatchObject({ success: false, error: "请提供至少一个有效链接" });
+    expect(res).toMatchObject({ success: false, error: "请上传链接" });
+  });
+
+  it("errors when the backend returns no job id", async () => {
+    mockPostForm.mockResolvedValue({ message: "ok" });
+    const res = parse(await tool().execute("c5b", { links: "https://a.com/1", label: "x" }));
+    expect(res.success).toBe(false);
   });
 
   it("errors (no backend call) when no key resolves for the account", async () => {
@@ -127,16 +154,16 @@ describe("link_batch_create", () => {
       registry,
       NOTIFY_ON,
     )({ agentId: "rabbitmq-1749", sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_1" })!;
-    mockPostForm.mockResolvedValue({ uuid: "u-xyz", total: 1 });
+    mockPostForm.mockResolvedValue({ id: 77 });
 
     await tool.execute("r1", { links: "https://a.com/1", label: "批次N" });
 
     expect(registry.add).toHaveBeenCalledTimes(1);
     expect((registry.add as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
-      id: "link_check:u-xyz",
+      id: "link_check:77",
       kind: "link_check",
       uid: "1749",
-      backendId: "u-xyz",
+      backendId: "77",
       title: "批次N",
       sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_1",
       notified: false,
@@ -152,7 +179,7 @@ describe("link_batch_create", () => {
       registry,
       NOTIFY_ON,
     )({ agentId: "rabbitmq-1749" })!;
-    mockPostForm.mockResolvedValue({ uuid: "u-2", total: 1 });
+    mockPostForm.mockResolvedValue({ id: 78 });
 
     await tool.execute("r2", { links: "https://a.com/1", label: "x" });
 
@@ -161,39 +188,53 @@ describe("link_batch_create", () => {
 });
 
 describe("link_batch_status", () => {
-  it("polls the most recent task by uuid and returns per-link verdicts when done", async () => {
+  it("polls the most recent job and derives per-link verdicts when done", async () => {
     const localStore = new RecentTaskStore<RecentLinkBatch>();
-    const create = createLinkBatchCreateToolFactory(fakeApi, resolver, localStore, makeRegistry(), NOTIFY_OFF)({
+    const create = createLinkBatchCreateToolFactory(
+      fakeApi,
+      resolver,
+      localStore,
+      makeRegistry(),
+      NOTIFY_OFF,
+    )({
       agentId: "rabbitmq-1749",
     })!;
-    const status = createLinkBatchStatusToolFactory(fakeApi, resolver, localStore)({
+    const status = createLinkBatchStatusToolFactory(
+      fakeApi,
+      resolver,
+      localStore,
+    )({
       agentId: "rabbitmq-1749",
     })!;
 
-    mockPostForm.mockResolvedValue({ uuid: "u-7001", taskId: 7001, total: 3 });
+    mockPostForm.mockResolvedValue({ id: 7001 });
     await create.execute("c1", { links: "https://a.com/1", label: "批次" });
 
     mockGetJson.mockImplementation(async (...args: unknown[]) => {
       const path = args[1] as string;
-      if (path === "/link-data-crawler/detail") {
-        return { task: { status: "done", total_links: 3, done_links: 3 }, code: "success" };
+      if (path === "/link/fetch-link-status-job/7001") {
+        return {
+          code: "success",
+          job: { status: "Done", linksTotal: 3, offlineTotal: "1", checkedTotal: "3" },
+        };
       }
-      // /link-data-crawler/fetch-check-results
+      // /link/fetch-link-status-results/7001
       return {
         code: "success",
         list: [
-          { url: "https://a.com/1", verdict: "invalid", status_type: "NOT_FOUND", http_status: 404, reason: "HTTP 404", checked_at: "2025-10-29 18:08:08" },
-          { url: "https://a.com/2", verdict: "valid", http_status: 200 },
-          { url: "https://a.com/3", verdict: "blocked", status_type: "CAPTCHA" },
+          { link: "https://a.com/2", offline: 0, memo: "", checked: 1 },
+          { link: "https://a.com/1", offline: 1, memo: null, checked: 1 },
+          { link: "https://a.com/3", offline: 0, memo: "页面无法打开", checked: 1 },
         ],
       };
     });
     const res = parse(await status.execute("s1", {}));
 
     const paths = mockGetJson.mock.calls.map((c) => (c as [unknown, string])[1]);
-    expect(paths).toEqual(["/link-data-crawler/detail", "/link-data-crawler/fetch-check-results"]);
-    const detailQuery = (mockGetJson.mock.calls[0] as [unknown, string, Record<string, unknown>])[2];
-    expect(detailQuery).toMatchObject({ uuid: "u-7001" });
+    expect(paths).toEqual([
+      "/link/fetch-link-status-job/7001",
+      "/link/fetch-link-status-results/7001",
+    ]);
 
     expect(res).toMatchObject({
       success: true,
@@ -204,47 +245,141 @@ describe("link_batch_status", () => {
       linksTotal: 3,
       checkedTotal: 3,
       offlineTotal: 1,
+      validTotal: 1,
+      unknownTotal: 1,
       total: 3,
     });
+    // Worst-first ordering so a truncated list never hides a dead link.
     const list = res.list as Array<Record<string, unknown>>;
     expect(list[0]).toMatchObject({
       url: "https://a.com/1",
       verdict: "invalid",
       verdictLabel: "失效",
-      statusType: "NOT_FOUND",
-      httpStatus: 404,
-      reason: "HTTP 404",
     });
-    expect(list[1]).toMatchObject({ verdict: "valid", verdictLabel: "正常" });
-    expect(list[2]).toMatchObject({ verdict: "blocked", verdictLabel: "被拦截" });
-    expect(res).not.toHaveProperty("uuid");
+    expect(list[1]).toMatchObject({
+      url: "https://a.com/3",
+      verdict: "unknown",
+      verdictLabel: "无法判定",
+      reason: "页面无法打开",
+    });
+    expect(list[2]).toMatchObject({ verdict: "valid", verdictLabel: "正常" });
+    expect(res).not.toHaveProperty("jobId");
   });
 
-  it("reports progress and skips the results fetch while still pending", async () => {
+  it("reports progress and skips the results fetch before anything is checked", async () => {
     const localStore = new RecentTaskStore<RecentLinkBatch>();
-    localStore.remember("1749", { uuid: "u-pending", label: "排队批次" });
-    const status = createLinkBatchStatusToolFactory(fakeApi, resolver, localStore)({
+    localStore.remember("1749", { jobId: 55, label: "排队批次" });
+    const status = createLinkBatchStatusToolFactory(
+      fakeApi,
+      resolver,
+      localStore,
+    )({
       agentId: "rabbitmq-1749",
     })!;
 
-    mockGetJson.mockResolvedValue({ task: { status: "pending", total_links: 5, done_links: 0 } });
+    mockGetJson.mockResolvedValue({
+      job: { status: "Pending", linksTotal: 5, offlineTotal: "0", checkedTotal: "0" },
+    });
     const res = parse(await status.execute("s2", {}));
 
     expect(mockGetJson).toHaveBeenCalledTimes(1);
-    expect((mockGetJson.mock.calls[0] as [unknown, string])[1]).toBe("/link-data-crawler/detail");
-    expect(res).toMatchObject({ success: true, status: "pending", statusLabel: "排队中", total: 0 });
+    expect((mockGetJson.mock.calls[0] as [unknown, string])[1]).toBe(
+      "/link/fetch-link-status-job/55",
+    );
+    expect(res).toMatchObject({
+      success: true,
+      status: "pending",
+      statusLabel: "排队中",
+      total: 0,
+    });
     expect(res.list).toEqual([]);
     expect(res).not.toHaveProperty("done");
   });
 
-  it("errors when there is no recent task and no uuid is given", async () => {
+  it("looks a task up by name when the user asks about an older batch", async () => {
     const status = createLinkBatchStatusToolFactory(
       fakeApi,
       resolver,
       new RecentTaskStore<RecentLinkBatch>(),
     )({ agentId: "rabbitmq-1749" })!;
-    const res = parse(await status.execute("s3", {}));
+
+    mockGetJson.mockImplementation(async (...args: unknown[]) => {
+      const path = args[1] as string;
+      if (path === "/link/fetch-link-status-jobs") {
+        return { code: "success", list: [{ id: 12, label: "十月批次" }], total: 1 };
+      }
+      return { code: "success", job: { status: "Stop", linksTotal: 2, checkedTotal: "0" } };
+    });
+    const res = parse(await status.execute("s3", { label: "十月批次" }));
+
+    const [, listPath, listQuery] = mockGetJson.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(listPath).toBe("/link/fetch-link-status-jobs");
+    expect(listQuery).toMatchObject({ q: "十月批次" });
+    expect((mockGetJson.mock.calls[1] as [unknown, string])[1]).toBe(
+      "/link/fetch-link-status-job/12",
+    );
+    expect(res).toMatchObject({ success: true, status: "stop", stopped: true, label: "十月批次" });
+  });
+
+  it("errors when there is no recent task and no name is given", async () => {
+    const status = createLinkBatchStatusToolFactory(
+      fakeApi,
+      resolver,
+      new RecentTaskStore<RecentLinkBatch>(),
+    )({ agentId: "rabbitmq-1749" })!;
+    const res = parse(await status.execute("s4", {}));
     expect(res.success).toBe(false);
     expect(mockGetJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("link_batch_list", () => {
+  const tool = () => listFactory({ agentId: "rabbitmq-1749" })!;
+
+  it("returns the account's task list without exposing ids", async () => {
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      total: 2,
+      list: [
+        {
+          id: 30,
+          label: "失效链接检测功能测试10-29",
+          status: "Done",
+          linksTotal: 7,
+          date: "2025-10-29 18:07:27",
+          updateDate: "2025-10-29 18:08:08",
+          file: "https://oss/report.xlsx",
+        },
+        { id: 29, label: "旧批次", status: "Stop", linksTotal: 0, date: "2025-10-28 10:00:00" },
+      ],
+    });
+    const res = parse(await tool().execute("l1", { page: 2, size: 5 }));
+
+    const [, path, query] = mockGetJson.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(path).toBe("/link/fetch-link-status-jobs");
+    expect(query).toMatchObject({ page: 2, size: 5 });
+    expect(res).toMatchObject({ success: true, total: 2, page: 2, size: 5 });
+    const list = res.list as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({
+      label: "失效链接检测功能测试10-29",
+      status: "done",
+      statusLabel: "已完成",
+      linksTotal: 7,
+      reportUrl: "https://oss/report.xlsx",
+    });
+    expect(list[1]).toMatchObject({ status: "stop", statusLabel: "已停止" });
+    expect(list[0]).not.toHaveProperty("id");
+  });
+
+  it("clamps paging and surfaces backend errors", async () => {
+    mockGetJson.mockResolvedValue({ code: "danger", message: "请登录" });
+    const res = parse(await tool().execute("l2", { page: 0, size: 500 }));
+    const [, , query] = mockGetJson.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(query).toMatchObject({ page: 1, size: 50 });
+    expect(res).toMatchObject({ success: false, error: "请登录" });
   });
 });

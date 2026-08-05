@@ -115,6 +115,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // 失效链接 / 互动量刷新
   link_batch_create: "正在发起失效链接检测",
   link_batch_status: "正在确认链接检测结果",
+  link_batch_list: "正在获取失效链接检测任务列表",
   crawl_refresh_create: "正在刷新互动数据",
   crawl_refresh_status: "正在确认刷新进度",
   crawl_refresh_list: "正在获取刷新列表",
@@ -183,6 +184,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   job_stop: "default",
   link_batch_create: "check",
   link_batch_status: "check",
+  link_batch_list: "check",
   crawl_refresh_create: "query",
   crawl_refresh_status: "query",
   crawl_refresh_list: "query",
