@@ -1,6 +1,6 @@
 /** leading-v2.0 PHP backend that the agent calls on behalf of the chat user. */
 export interface BackendConfig {
-  /** Base URL, e.g. https://v2.businesstimescn.com (a path like /link-data-crawler/add-check-task is appended). */
+  /** Base URL, e.g. https://v2.businesstimescn.com (a path like /link/submit-offline-check-links is appended). */
   baseUrl: string;
   /** Per-request timeout in ms. */
   timeoutMs: number;
