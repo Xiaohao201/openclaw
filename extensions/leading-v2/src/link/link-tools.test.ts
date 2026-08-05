@@ -118,6 +118,14 @@ describe("link_batch_create", () => {
     expect(fields.data).toEqual(['{"link":"https://a.com/1"}', '{"link":"https://a.com/2"}']);
   });
 
+  it("drops URLs longer than the backend's varchar(1000) link column", async () => {
+    mockPostForm.mockResolvedValue({ id: 32 });
+    const tooLong = `https://a.com/${"x".repeat(1000)}`;
+    await tool().execute("c2b", { links: [tooLong, "https://a.com/ok"], label: "x" });
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(fields.data).toEqual(['{"link":"https://a.com/ok"}']);
+  });
+
   it("errors without backend call when links or label missing", async () => {
     expect(parse(await tool().execute("c3", { links: "", label: "x" })).success).toBe(false);
     expect(parse(await tool().execute("c4", { links: "https://a.com/1", label: "" })).success).toBe(

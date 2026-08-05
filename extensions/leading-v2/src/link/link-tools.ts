@@ -68,13 +68,16 @@ const ListSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** `link_status.link` is varchar(1000); one over-long URL would fail the whole batch INSERT. */
+const MAX_LINK_LENGTH = 1000;
+
 function normalizeLinks(raw: unknown): string[] {
   const list = Array.isArray(raw)
     ? raw.map((x) => String(x).trim())
     : typeof raw === "string"
       ? raw.split(/\r?\n/).map((x) => x.trim())
       : [];
-  const valid = list.filter((u) => /^https?:\/\//i.test(u));
+  const valid = list.filter((u) => /^https?:\/\//i.test(u) && u.length <= MAX_LINK_LENGTH);
   return [...new Set(valid)];
 }
 
