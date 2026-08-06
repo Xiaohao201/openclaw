@@ -481,6 +481,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Render chart",
       detailKeys: ["filename"],
     },
+    video_understand: {
+      emoji: "🎬",
+      title: "Analyze video",
+      detailKeys: ["url"],
+    },
     memory_search: {
       emoji: "🧠",
       title: "Memory Search",

@@ -37,6 +37,7 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
+import { createVideoUnderstandTool } from "./tools/video-understand-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -267,6 +268,11 @@ export function createOpenClawTools(
     createChartRenderTool({
       agentSessionKey: options?.agentSessionKey,
       workspaceDir,
+    }),
+    createVideoUnderstandTool({
+      config: resolvedConfig,
+      agentDir: options?.agentDir,
+      agentSessionKey: options?.agentSessionKey,
     }),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,

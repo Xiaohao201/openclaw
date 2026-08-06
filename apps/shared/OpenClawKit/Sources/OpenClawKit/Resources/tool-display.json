@@ -721,6 +721,13 @@
         "filename"
       ]
     },
+    "video_understand": {
+      "emoji": "🎬",
+      "title": "Analyze video",
+      "detailKeys": [
+        "url"
+      ]
+    },
     "memory_search": {
       "emoji": "🧠",
       "title": "Memory Search",

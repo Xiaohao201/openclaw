@@ -310,6 +310,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "video_understand",
+    label: "video_understand",
+    description: "Analyze the video behind a URL",
+    sectionId: "media",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "music_generate",
     label: "music_generate",
     description: "Music generation",

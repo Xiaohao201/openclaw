@@ -35,6 +35,11 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import {
+  detectVideoCandidates,
+  summarizeVideoDetection,
+  type WebFetchVideoSummary,
+} from "./web-video-detect.js";
 
 export { extractReadableContent } from "./web-fetch-utils.js";
 
@@ -461,6 +466,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
+    // Readability drops <video>/<iframe>/og:video, so a page's video is invisible
+    // downstream. Scan the raw HTML first and report what was found; the agent
+    // decides whether it is worth a video_understand call.
+    let videos: WebFetchVideoSummary | undefined;
+    if (contentType.includes("text/html")) {
+      try {
+        videos = summarizeVideoDetection(
+          await detectVideoCandidates({ html: body, url: finalUrl }),
+        );
+      } catch {
+        // Video discovery is an enrichment; never fail the fetch over it.
+      }
+    }
     if (contentType.includes("text/markdown")) {
       // Cloudflare Markdown for Agents: server returned pre-rendered markdown
       extractor = "cf-markdown";
@@ -557,6 +575,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       tookMs: Date.now() - start,
       text: wrapped.text,
       warning: wrappedWarning,
+      ...(videos ? { videos } : {}),
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
