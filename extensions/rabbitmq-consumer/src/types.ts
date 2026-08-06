@@ -40,11 +40,27 @@ export interface MercureConfig {
   jwtSecret: string;
 }
 
+/** Chat turn execution limits */
+export interface ChatTurnConfig {
+  /**
+   * How long one chat turn may run before the pipeline gives up on the subagent
+   * (`waitForRun`). A turn that blows this ceiling persists no response at all,
+   * so the value must stay at or above the frontend's own request timeout —
+   * otherwise the frontend gives up first and the backend work is wasted.
+   *
+   * Raising it also raises the worst-case unacked time for a single user's
+   * queued burst (prefetch × timeout), which must remain under the broker's
+   * `consumer_timeout` (see clampPrefetch in index.ts).
+   */
+  turnTimeoutMs: number;
+}
+
 /** Combined plugin config */
 export interface RabbitMqPluginConfig {
   rabbitmq: RabbitMqConfig;
   historyDb: HistoryDbConfig;
   mercure: MercureConfig;
+  chat: ChatTurnConfig;
 }
 
 /**

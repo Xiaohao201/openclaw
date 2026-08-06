@@ -1,5 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
-import { processChatMessage, warmupAgent } from "./src/chat-pipeline.js";
+import { processChatMessage, resolveTurnTimeoutMs, warmupAgent } from "./src/chat-pipeline.js";
 import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
@@ -13,16 +13,44 @@ import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
 import { resolveUsageCurrencyPolicy } from "./src/usage-pricing.js";
 
 /**
- * Clamp the channel prefetch to a sane window. Default 6: with the pipeline's
- * 300s waitForRun ceiling, a single user's back-to-back burst keeps its last
- * unacked message under RabbitMQ's default 30min consumer_timeout (6 × 300s).
- * Raising it beyond 6 requires raising consumer_timeout on the broker first.
+ * Clamp the channel prefetch to a sane window. Default 6: at the default 300s
+ * turn timeout, a single user's back-to-back burst keeps its last unacked
+ * message under RabbitMQ's default 30min consumer_timeout (6 × 300s). Raising
+ * prefetch — or `chat.turnTimeoutSeconds` — requires raising consumer_timeout
+ * on the broker first (see assertAckBudget).
  */
 function clampPrefetch(value: number): number {
   if (!Number.isFinite(value)) {
     return 6;
   }
   return Math.min(32, Math.max(1, Math.floor(value)));
+}
+
+/** RabbitMQ's own default `consumer_timeout`, in seconds. */
+const BROKER_DEFAULT_CONSUMER_TIMEOUT_SECONDS = 1_800;
+
+/**
+ * Warn when prefetch × turn timeout exceeds the broker's default
+ * `consumer_timeout`. The broker closes the channel on a message left unacked
+ * past that window, so a generous turn timeout silently trades one failure mode
+ * (turn cut short) for a worse one (channel dropped mid-turn) unless the
+ * operator raised `consumer_timeout` too.
+ */
+function assertAckBudget(params: {
+  prefetch: number;
+  turnTimeoutSeconds: number;
+  logger: { warn: (message: string) => void };
+}): void {
+  const worstCaseSeconds = params.prefetch * params.turnTimeoutSeconds;
+  if (worstCaseSeconds <= BROKER_DEFAULT_CONSUMER_TIMEOUT_SECONDS) {
+    return;
+  }
+  params.logger.warn(
+    `[RABBITMQ_CONSUMER] prefetch=${params.prefetch} × turnTimeout=${params.turnTimeoutSeconds}s ` +
+      `= ${worstCaseSeconds}s worst-case unacked time, above RabbitMQ's default consumer_timeout ` +
+      `(${BROKER_DEFAULT_CONSUMER_TIMEOUT_SECONDS}s). Raise consumer_timeout on the broker or the ` +
+      `channel will be closed mid-turn.`,
+  );
 }
 
 /**
@@ -32,6 +60,7 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
   const rabbitmq = pluginConfig.rabbitmq as Record<string, unknown> | undefined;
   const historyDb = pluginConfig.historyDb as Record<string, unknown> | undefined;
   const mercure = pluginConfig.mercure as Record<string, unknown> | undefined;
+  const chat = pluginConfig.chat as Record<string, unknown> | undefined;
 
   return {
     rabbitmq: {
@@ -57,6 +86,13 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
     mercure: {
       hubUrl: (mercure?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "",
       jwtSecret: (mercure?.jwtSecret as string) ?? process.env.MERCURE_JWT_SECRET ?? "",
+    },
+    chat: {
+      // Configured in seconds for operator readability; the pipeline clamps the
+      // resulting millisecond value into its supported window.
+      turnTimeoutMs: resolveTurnTimeoutMs(
+        Number(chat?.turnTimeoutSeconds ?? process.env.CHAT_TURN_TIMEOUT_SECONDS ?? 0) * 1000,
+      ),
     },
   };
 }
@@ -125,6 +161,17 @@ export default definePluginEntry({
           return;
         }
 
+        const turnTimeoutSeconds = Math.round(pluginConfig.chat.turnTimeoutMs / 1000);
+        ctx.logger.info(
+          `[RABBITMQ_CONSUMER] Chat turn timeout ${turnTimeoutSeconds}s ` +
+            `(prefetch=${pluginConfig.rabbitmq.prefetch})`,
+        );
+        assertAckBudget({
+          prefetch: pluginConfig.rabbitmq.prefetch,
+          turnTimeoutSeconds,
+          logger: ctx.logger,
+        });
+
         // Per-turn token/cost accounting: providers quote their unit prices in
         // different currencies, so this folds them into one before storage.
         const usageCurrency = resolveUsageCurrencyPolicy(
@@ -178,6 +225,7 @@ export default definePluginEntry({
                 skillLookupRef,
                 api.config,
                 usageCurrency,
+                { turnTimeoutMs: pluginConfig.chat.turnTimeoutMs },
               ),
           }),
         );

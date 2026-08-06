@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginLogger, PluginRuntime } from "../api.js";
-import { processChatMessage } from "./chat-pipeline.js";
+import {
+  DEFAULT_TURN_TIMEOUT_MS,
+  processChatMessage,
+  resolveTurnTimeoutMs,
+} from "./chat-pipeline.js";
 import { buildCitationDirective } from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { HistoryManager } from "./history-manager.js";
@@ -73,6 +77,9 @@ function createRuntimeMock(options: {
   onWait?: (listener: AgentEventListener | undefined) => void;
   sessionMessages?: unknown[];
   onRunArgs?: (args: { message: string }) => void;
+  onWaitArgs?: (args: { runId: string; timeoutMs: number }) => void;
+  /** Override the run outcome to exercise the timeout/error exit paths. */
+  waitStatus?: "ok" | "timeout" | "error";
 }): PluginRuntime {
   let listener: AgentEventListener | undefined;
   return {
@@ -90,9 +97,10 @@ function createRuntimeMock(options: {
         options.onRun(listener);
         return { runId: "r1" };
       },
-      waitForRun: async () => {
+      waitForRun: async (args: { runId: string; timeoutMs: number }) => {
+        options.onWaitArgs?.(args);
         options.onWait?.(listener);
-        return { status: "ok" as const };
+        return { status: options.waitStatus ?? ("ok" as const) };
       },
       getSessionMessages: async () => ({ messages: options.sessionMessages ?? [] }),
     },
@@ -661,7 +669,9 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] hi there`);
+    expect(withoutCitation(capturedMessage)).toBe(
+      `[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] hi there`,
+    );
   });
 
   it("falls back to the plain userId prefix when topic resolution fails", async () => {
@@ -1293,5 +1303,102 @@ describe("processChatMessage", () => {
 
     expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] hi there`);
     expect(capturedMessage).not.toContain("启用了以下自定义技能");
+  });
+
+  describe("turn timeout", () => {
+    function runWithTimeout(turnTimeoutMs?: number) {
+      const seen: Array<{ runId: string; timeoutMs: number }> = [];
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onWaitArgs: (args) => seen.push(args),
+      });
+      const { historyManager } = createHistoryManagerMock();
+      return processChatMessage(
+        createChatMessage(),
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        turnTimeoutMs === undefined ? undefined : { turnTimeoutMs },
+      ).then(() => seen);
+    }
+
+    it("keeps the historical 5-minute ceiling when unconfigured", async () => {
+      const seen = await runWithTimeout();
+      expect(seen[0]?.timeoutMs).toBe(300_000);
+    });
+
+    it("applies a configured ceiling", async () => {
+      const seen = await runWithTimeout(900_000);
+      expect(seen[0]?.timeoutMs).toBe(900_000);
+    });
+
+    it("clamps a too-small ceiling up to the minimum", async () => {
+      const seen = await runWithTimeout(5_000);
+      expect(seen[0]?.timeoutMs).toBe(60_000);
+    });
+
+    it("clamps a too-large ceiling down to the maximum", async () => {
+      const seen = await runWithTimeout(7_200_000);
+      expect(seen[0]?.timeoutMs).toBe(3_600_000);
+    });
+
+    it("falls back to the default for a non-positive or non-finite value", async () => {
+      expect((await runWithTimeout(0))[0]?.timeoutMs).toBe(300_000);
+      expect((await runWithTimeout(Number.NaN))[0]?.timeoutMs).toBe(300_000);
+    });
+
+    it("persists a failed timeline but no response when the turn times out", async () => {
+      // Regression for history_messages rows whose response stayed NULL while
+      // tokens were still billed: the timeout path finalizes the timeline and
+      // usage, but never writes a response.
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        waitStatus: "timeout",
+      });
+      const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
+
+      const result = await processChatMessage(
+        createChatMessage(),
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+      );
+
+      expect(result).toBe("Error: Processing timed out");
+      expect(updateResponse).not.toHaveBeenCalled();
+      const metadataPatches = updateMetadata.mock.calls as unknown as Array<
+        [number, { steps?: Array<{ status: string }> }]
+      >;
+      const steps = metadataPatches.findLast(([, patch]) => Array.isArray(patch?.steps))?.[1]
+        ?.steps;
+      expect(steps?.some((step) => step.status === "failed")).toBe(true);
+    });
+  });
+});
+
+describe("resolveTurnTimeoutMs", () => {
+  it("passes through a value inside the supported window", () => {
+    expect(resolveTurnTimeoutMs(600_000)).toBe(600_000);
+  });
+
+  it("defaults when unset", () => {
+    expect(resolveTurnTimeoutMs(undefined)).toBe(DEFAULT_TURN_TIMEOUT_MS);
+  });
+
+  it("clamps both ends", () => {
+    expect(resolveTurnTimeoutMs(1_000)).toBe(60_000);
+    expect(resolveTurnTimeoutMs(99_999_999)).toBe(3_600_000);
   });
 });

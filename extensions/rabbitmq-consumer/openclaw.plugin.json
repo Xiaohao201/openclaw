@@ -53,6 +53,19 @@
         },
         "required": ["hubUrl", "jwtSecret"]
       },
+      "chat": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "turnTimeoutSeconds": {
+            "type": "number",
+            "default": 300,
+            "minimum": 60,
+            "maximum": 3600,
+            "description": "How long one chat turn may run before the pipeline gives up. A turn that exceeds it persists no response at all, so keep this at or above the frontend's own request timeout. Raising it also raises worst-case unacked time (prefetch x timeout), which must stay under the broker's consumer_timeout."
+          }
+        }
+      },
       "oss": {
         "type": "object",
         "additionalProperties": false,

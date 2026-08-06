@@ -406,6 +406,34 @@ export async function warmupAgent(
   }
 }
 
+/** Per-turn execution limits handed down from the plugin config. */
+export type ChatTurnOptions = {
+  /**
+   * Ceiling for the whole turn (`waitForRun`). Defaults to
+   * {@link DEFAULT_TURN_TIMEOUT_MS} when omitted or out of range, so existing
+   * callers and tests keep the historical 5-minute behavior.
+   */
+  turnTimeoutMs?: number;
+};
+
+/** Historical ceiling; kept as the default so an unset config changes nothing. */
+export const DEFAULT_TURN_TIMEOUT_MS = 300_000;
+/** Below a minute no realistic tool-using turn finishes; above an hour the broker complains. */
+const MIN_TURN_TIMEOUT_MS = 60_000;
+const MAX_TURN_TIMEOUT_MS = 3_600_000;
+
+/**
+ * Clamp a configured turn ceiling into the supported window. Exported so the
+ * plugin entry logs and ack-budget check use the exact value the pipeline will
+ * apply, rather than an unclamped copy that could disagree with it.
+ */
+export function resolveTurnTimeoutMs(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_TURN_TIMEOUT_MS;
+  }
+  return Math.min(MAX_TURN_TIMEOUT_MS, Math.max(MIN_TURN_TIMEOUT_MS, Math.floor(value)));
+}
+
 export async function processChatMessage(
   chatMsg: ChatMessage,
   historyManager: HistoryManager,
@@ -429,7 +457,13 @@ export async function processChatMessage(
    * omitted the turn still runs; only the token/cost writeback is skipped.
    */
   usageCurrency?: SessionTurnCurrencyPolicy,
+  /**
+   * Per-turn execution limits. Bundled into an options object so future knobs
+   * do not keep extending this already long positional signature.
+   */
+  options?: ChatTurnOptions,
 ): Promise<string> {
+  const turnTimeoutMs = resolveTurnTimeoutMs(options?.turnTimeoutMs);
   const mercure = new MercurePusher(mercureConfig);
 
   // Declare streamPusherCtx early so it's available in catch block
@@ -1041,10 +1075,12 @@ export async function processChatMessage(
       // assistant events fire during waitForRun below, after this assignment.
       currentRunId = runResult.runId;
 
-      // Step 5: Wait for completion (5 minute timeout)
+      // Step 5: Wait for completion. The ceiling is operator-tunable because a
+      // turn that exceeds it persists no response at all — it must sit at or
+      // above the frontend's own request timeout (see ChatTurnConfig).
       const waitResult = await runtime.subagent.waitForRun({
         runId: runResult.runId,
-        timeoutMs: 300_000,
+        timeoutMs: turnTimeoutMs,
       });
 
       if (waitResult.status === "error") {
@@ -1059,7 +1095,10 @@ export async function processChatMessage(
       }
 
       if (waitResult.status === "timeout") {
-        logger.warn(`[CHAT_PIPELINE] Subagent timed out for runId=${runResult.runId}`);
+        logger.warn(
+          `[CHAT_PIPELINE] Subagent timed out after ${Math.round(turnTimeoutMs / 1000)}s ` +
+            `for runId=${runResult.runId}, historyId=${chatMsg.historyId}`,
+        );
         await streamPusherCtx.streamPusher.pushError("Processing timed out");
         await persistTimeline("failed");
         await persistUsage();
