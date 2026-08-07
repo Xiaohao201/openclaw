@@ -17,6 +17,7 @@ import type { HistoryManager } from "./history-manager.js";
 import { mediaLinesToMarkdown } from "./media-lines.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
+import { classifyReportIntent } from "./report-intent-llm.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
@@ -656,9 +657,40 @@ export async function processChatMessage(
     // and the keyword (日报/月报/…) in the prompt must not divert the turn to the
     // internal 智脑 feed tables (which would ignore the attachment and report
     // "暂无数据"). The attachment content is already in `userMessage`.
+    //
+    // The detector is layered: an unmistakable ask ("出个周报") is acted on
+    // directly, a keyword that only appears as a citation inside pasted source
+    // material ("…时代周报、深圳新闻网等媒体…") is dropped outright, and the
+    // genuinely unclear middle is settled by a short, tool-less LLM
+    // classification. Anything the classifier cannot settle degrades to an
+    // ordinary chat turn — the user's actual question must survive.
     const triggerResult = detectReportRequest(userMessage, logger);
-    if (triggerResult.isReportRequest && downloadManager && !chatMsg.hasAttachment) {
-      logger.info(`[CHAT_PIPELINE] Report request detected: ${triggerResult.period}`);
+    let reportRequested = triggerResult.isReportRequest;
+    let reportPeriod = triggerResult.period;
+    const reportPathOpen = Boolean(downloadManager) && !chatMsg.hasAttachment;
+
+    if (triggerResult.verdict === "ambiguous" && reportPathOpen && runtime) {
+      const verdict = await classifyReportIntent({
+        instruction: triggerResult.instruction,
+        hintedPeriod: triggerResult.period,
+        subagent: runtime.subagent,
+        userId,
+        token: chatMsg.historyId,
+        logger,
+      });
+      if (verdict.isReport && verdict.period) {
+        reportRequested = true;
+        reportPeriod = verdict.period;
+      } else {
+        logger.info(
+          `[CHAT_PIPELINE] Ambiguous report keyword resolved as normal chat ` +
+            `(reason=${triggerResult.reason})`,
+        );
+      }
+    }
+
+    if (reportRequested && reportPeriod && reportPathOpen && downloadManager) {
+      logger.info(`[CHAT_PIPELINE] Report request detected: ${reportPeriod}`);
 
       const topic = await resolveReportTopic({
         userId,
@@ -670,9 +702,11 @@ export async function processChatMessage(
       });
 
       return await createReportTaskAndRespond({
-        period: triggerResult.period!,
+        period: reportPeriod,
         requirement: triggerResult.requirement,
-        dateScope: triggerResult.dateScope!,
+        // Recomputed rather than reused: the LLM arbiter may have corrected the
+        // period the deterministic layer guessed.
+        dateScope: computeDateScope(reportPeriod),
         topicId: topic.topicId,
         useSlaveTopic: topic.useSlaveTopic,
         masterId: topic.masterId,
@@ -1028,7 +1062,12 @@ export async function processChatMessage(
       // — a plain question should still get a plain answer.
       const wantsReport =
         !!selectedTemplate ||
-        triggerResult.isReportRequest ||
+        // `verdict !== "none"` (not `isReportRequest`): on an attachment turn the
+        // report path is closed, so the detector never gets upgraded past
+        // "ambiguous" — but a period keyword still means the user wants a report
+        // shaped answer. Citations inside pasted material score "none" and are
+        // correctly ignored here too.
+        triggerResult.verdict !== "none" ||
         /报告|简报|研判|通报/.test(userMessage);
 
       // Report turns: force the COMPLETE report inline. This path streams the
