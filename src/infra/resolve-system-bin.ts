@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-install-roots.js";
+import {
+  getWindowsInstallRoots,
+  getWindowsProgramFilesRoots,
+  normalizeWindowsInstallRoot,
+} from "./windows-install-roots.js";
 
 /**
  * Trust level for system binary resolution.
  * - "strict": Only fixed OS-managed directories. Use for security-critical
  *   binaries like openssl where a compromised binary has high impact.
  * - "standard": Strict dirs plus common local-admin/package-manager
- *   directories appended after system dirs. Use for tool binaries like
+ *   directories appended after system dirs, plus any directory the operator
+ *   opted into via `OPENCLAW_SYSTEM_BIN_DIRS`. Use for tool binaries like
  *   ffmpeg that are rarely available via the OS itself.
  */
 export type SystemBinTrust = "strict" | "standard";
@@ -27,6 +32,11 @@ const LINUX_STANDARD_DIRS = ["/usr/local/bin"] as const;
 
 // Windows extensions to probe when searching for executables.
 const WIN_PATHEXT = [".exe", ".cmd", ".bat", ".com"] as const;
+
+// Operator opt-in for tool binaries installed outside the OS-managed dirs
+// (a portable ffmpeg build on D:\, a pip-installed yt-dlp, ...). PATH is never
+// read: trust must be declared deliberately, and only "standard" honors this.
+export const SYSTEM_BIN_DIRS_ENV = "OPENCLAW_SYSTEM_BIN_DIRS";
 
 const resolvedCacheStrict = new Map<string, string>();
 const resolvedCacheStandard = new Map<string, string>();
@@ -101,21 +111,66 @@ function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
   return dirs;
 }
 
+/**
+ * Normalize one `OPENCLAW_SYSTEM_BIN_DIRS` entry, rejecting anything that is not
+ * a plain local absolute directory (drive-relative paths, UNC shares, injected
+ * newlines) so a malformed entry cannot widen trust in unexpected ways.
+ */
+function normalizeExtraStandardDir(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.includes("\0") || trimmed.includes("\r") || trimmed.includes("\n")) {
+    return null;
+  }
+  if (process.platform === "win32") {
+    return normalizeWindowsInstallRoot(trimmed);
+  }
+  const normalized = path.posix.normalize(trimmed);
+  if (!path.posix.isAbsolute(normalized) || normalized === "/") {
+    return null;
+  }
+  return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * Directories an operator explicitly added via `OPENCLAW_SYSTEM_BIN_DIRS`
+ * (delimiter-separated, `;` on Windows and `:` elsewhere). Appended after the
+ * built-in dirs so OS-managed binaries always take priority.
+ */
+function getExtraStandardDirs(): readonly string[] {
+  const raw = process.env[SYSTEM_BIN_DIRS_ENV];
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const entry of raw.split(path.delimiter)) {
+    const normalized = normalizeExtraStandardDir(entry);
+    if (!normalized) {
+      continue;
+    }
+    const key = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    dirs.push(normalized);
+  }
+  return dirs;
+}
+
+function buildBaseTrustedDirs(trust: SystemBinTrust): readonly string[] {
+  return process.platform === "win32" ? buildWindowsTrustedDirs() : buildUnixTrustedDirs(trust);
+}
+
 let trustedDirsStrict: readonly string[] | null = null;
 let trustedDirsStandard: readonly string[] | null = null;
 
 function getTrustedDirs(trust: SystemBinTrust): readonly string[] {
-  if (process.platform === "win32") {
-    // Windows does not currently widen "standard" beyond the registry-backed
-    // system roots; both trust levels intentionally share the same set today.
-    trustedDirsStrict ??= buildWindowsTrustedDirs();
-    return trustedDirsStrict;
-  }
   if (trust === "standard") {
-    trustedDirsStandard ??= buildUnixTrustedDirs("standard");
+    trustedDirsStandard ??= [...buildBaseTrustedDirs("standard"), ...getExtraStandardDirs()];
     return trustedDirsStandard;
   }
-  trustedDirsStrict ??= buildUnixTrustedDirs("strict");
+  trustedDirsStrict ??= buildBaseTrustedDirs("strict");
   return trustedDirsStrict;
 }
 

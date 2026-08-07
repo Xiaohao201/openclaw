@@ -151,7 +151,8 @@ async function downloadWithYtDlp(params: {
   if (!binary) {
     throw new VideoAcquisitionError(
       "该链接是平台视频页，需要 yt-dlp 才能取回视频。",
-      "在部署机安装 yt-dlp（pip install -U yt-dlp）后重试。",
+      "在部署机安装 yt-dlp（pip install -U yt-dlp）。装完若仍提示缺失，说明它不在可信目录里（OpenClaw 不读 PATH），" +
+        "把它所在目录加到环境变量 OPENCLAW_SYSTEM_BIN_DIRS 后重启网关。",
     );
   }
   const outputTemplate = path.join(params.workDir, "source.%(ext)s");

@@ -429,7 +429,9 @@ export async function runVideoUnderstand(params: {
   const deps: VideoUnderstandToolDeps = { ...DEFAULT_DEPS, ...params.deps };
   if (!deps.ffmpegAvailable()) {
     throw new ToolInputError(
-      "视频分析需要 ffmpeg，但当前主机未安装。请先安装 ffmpeg（含 ffprobe）后重试。",
+      "视频分析需要 ffmpeg（含 ffprobe），但没在可信目录里找到——出于防 PATH 劫持的考虑，OpenClaw 不读取 PATH。" +
+        "请把 ffmpeg 装到系统目录（Windows：<Program Files>\\ffmpeg\\bin），" +
+        "或设置环境变量 OPENCLAW_SYSTEM_BIN_DIRS 指向 ffmpeg 所在目录后重启网关。",
     );
   }
   const warnings: string[] = [];

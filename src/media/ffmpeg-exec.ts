@@ -1,6 +1,6 @@
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import { resolveSystemBin, SYSTEM_BIN_DIRS_ENV } from "../infra/resolve-system-bin.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
@@ -31,10 +31,13 @@ function requireSystemBin(name: string): string {
     const hint =
       process.platform === "darwin"
         ? "e.g. brew install ffmpeg"
-        : "e.g. apt install ffmpeg / dnf install ffmpeg";
+        : process.platform === "win32"
+          ? "e.g. install into <Program Files>\\ffmpeg\\bin"
+          : "e.g. apt install ffmpeg / dnf install ffmpeg";
     throw new Error(
-      `${name} not found in trusted system directories. ` +
-        `Install it via your system package manager (${hint}).`,
+      `${name} not found in trusted system directories (PATH is intentionally ignored). ` +
+        `Install it via your system package manager (${hint}), ` +
+        `or set ${SYSTEM_BIN_DIRS_ENV} to the directory holding it.`,
     );
   }
   return resolved;

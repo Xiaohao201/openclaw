@@ -1,6 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { _getTrustedDirs, _resetResolveSystemBin, resolveSystemBin } from "./resolve-system-bin.js";
+import {
+  _getTrustedDirs,
+  _resetResolveSystemBin,
+  resolveSystemBin,
+  SYSTEM_BIN_DIRS_ENV,
+} from "./resolve-system-bin.js";
 import {
   _resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
@@ -8,6 +13,17 @@ import {
 } from "./windows-install-roots.js";
 
 let executables: Set<string>;
+let savedSystemBinDirsEnv: string | undefined;
+
+function setSystemBinDirsEnv(value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[SYSTEM_BIN_DIRS_ENV];
+  } else {
+    process.env[SYSTEM_BIN_DIRS_ENV] = value;
+  }
+  // The trusted-dir list is cached; rebuild it against the new env value.
+  _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
+}
 
 function addExecutables(...paths: string[]): void {
   for (const candidate of paths) {
@@ -29,10 +45,18 @@ function expectDirsExcludeAll(dirs: readonly string[], excluded: readonly string
 
 beforeEach(() => {
   executables = new Set<string>();
+  savedSystemBinDirsEnv = process.env[SYSTEM_BIN_DIRS_ENV];
+  // Keep the built-in trusted dirs deterministic even if the dev machine opted in.
+  delete process.env[SYSTEM_BIN_DIRS_ENV];
   _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
 });
 
 afterEach(() => {
+  if (savedSystemBinDirsEnv === undefined) {
+    delete process.env[SYSTEM_BIN_DIRS_ENV];
+  } else {
+    process.env[SYSTEM_BIN_DIRS_ENV] = savedSystemBinDirsEnv;
+  }
   _resetResolveSystemBin();
   _resetWindowsInstallRootsForTests();
 });
@@ -148,6 +172,60 @@ describe("resolveSystemBin", () => {
       expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/usr/bin/ffmpeg");
     });
   }
+});
+
+describe("OPENCLAW_SYSTEM_BIN_DIRS opt-in", () => {
+  const isWin = process.platform === "win32";
+  const optedInDir = isWin ? "E:\\ffmpeg-8.1-full_build\\bin" : "/opt/ffmpeg/bin";
+  const secondDir = isWin ? "C:\\tools\\yt-dlp" : "/opt/yt-dlp";
+  const systemDir = isWin
+    ? path.win32.join(getWindowsInstallRoots().systemRoot, "System32")
+    : "/usr/bin";
+  const binName = isWin ? "ffmpeg.exe" : "ffmpeg";
+
+  it("resolves a binary from an opted-in directory with standard trust", () => {
+    addExecutables(path.join(optedInDir, binName));
+    setSystemBinDirsEnv(optedInDir);
+    expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(path.join(optedInDir, binName));
+  });
+
+  it("does NOT honor opted-in directories with strict trust", () => {
+    addExecutables(path.join(optedInDir, isWin ? "openssl.exe" : "openssl"));
+    setSystemBinDirsEnv(optedInDir);
+    expect(resolveSystemBin("openssl")).toBeNull();
+  });
+
+  it("keeps system directories ahead of opted-in directories", () => {
+    addExecutables(path.join(systemDir, binName), path.join(optedInDir, binName));
+    setSystemBinDirsEnv(optedInDir);
+    expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(path.join(systemDir, binName));
+  });
+
+  it("accepts multiple delimiter-separated directories", () => {
+    addExecutables(path.join(secondDir, isWin ? "yt-dlp.exe" : "yt-dlp"));
+    setSystemBinDirsEnv([optedInDir, secondDir].join(path.delimiter));
+    expect(resolveSystemBin("yt-dlp", { trust: "standard" })).toBe(
+      path.join(secondDir, isWin ? "yt-dlp.exe" : "yt-dlp"),
+    );
+  });
+
+  it.each([
+    { name: "relative paths", value: isWin ? "ffmpeg\\bin" : "opt/ffmpeg/bin" },
+    { name: "UNC or root-only paths", value: isWin ? "\\\\share\\ffmpeg\\bin" : "/" },
+    { name: "newline-injected entries", value: `${optedInDir}\nrogue` },
+    { name: "blank entries", value: "   " },
+  ])("ignores $name", ({ value }) => {
+    setSystemBinDirsEnv(undefined);
+    const baseline = [..._getTrustedDirs("standard")];
+    setSystemBinDirsEnv(value);
+    expect([..._getTrustedDirs("standard")]).toEqual(baseline);
+  });
+
+  it("does not widen trust when the env var is unset", () => {
+    setSystemBinDirsEnv(undefined);
+    addExecutables(path.join(optedInDir, binName));
+    expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBeNull();
+  });
 });
 
 describe("trusted directory list", () => {
