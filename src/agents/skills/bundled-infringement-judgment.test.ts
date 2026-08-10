@@ -24,5 +24,8 @@ describe("bundled infringement judgment skill", () => {
     expect(content).toContain("逐句判定，禁止整篇定性");
     expect(content).toContain("事实主张 / 意见评价 / 情绪宣泄");
     expect(content).toContain("投诉通知模板");
+    expect(content).toContain("[举报](#lobster-report)");
+    expect(content).toContain("[投诉](#lobster-complaint)");
+    expect(content).toContain("[暂不处理](#lobster-dismiss)");
   });
 });
