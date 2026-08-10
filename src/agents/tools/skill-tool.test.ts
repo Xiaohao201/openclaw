@@ -20,7 +20,8 @@ vi.mock("../../infra/skills-mysql.js", async (importActual) => {
 
 const { bumpSkillsSnapshotVersion } = await import("../skills/refresh-state.js");
 const skillsMysql = await import("../../infra/skills-mysql.js");
-const { createSkillSaveTool, createSkillListTool } = await import("./skill-tool.js");
+const { createSkillSaveTool, createSkillGetTool, createSkillListTool } =
+  await import("./skill-tool.js");
 
 const getSkillByName = vi.mocked(skillsMysql.getSkillByName);
 const createSkill = vi.mocked(skillsMysql.createSkill);
@@ -120,11 +121,27 @@ describe("skill_save", () => {
     expect(createSkill).toHaveBeenCalledWith(expect.anything(), 2024);
   });
 
-  it("returns a sanitized error (no raw DB detail) when the write fails", async () => {
+  it("returns a sanitized error (no raw DB detail) when the lookup fails", async () => {
     getSkillByName.mockRejectedValue(new Error("Access denied for user 'btclaw'@'10.0.0.5'"));
     await expect(
       saveTool().execute?.("id", { name: "flow", description: "d", content: "c" }),
+    ).rejects.toThrow(/Could not reach the skill library/);
+  });
+
+  it("returns a sanitized error (no raw DB detail) when the write fails", async () => {
+    getSkillByName.mockResolvedValue(null);
+    createSkill.mockRejectedValue(new Error("Access denied for user 'btclaw'@'10.0.0.5'"));
+    await expect(
+      saveTool().execute?.("id", { name: "flow", description: "d", content: "c" }),
     ).rejects.toThrow(/Could not save the skill/);
+  });
+
+  it("requires description and content when creating a brand-new skill", async () => {
+    getSkillByName.mockResolvedValue(null);
+    await expect(saveTool().execute?.("id", { name: "flow", content: "c" })).rejects.toThrow(
+      /both description and content are required/,
+    );
+    expect(createSkill).not.toHaveBeenCalled();
   });
 
   it("creates a new skill when none exists, tagging source=workspace", async () => {
@@ -177,6 +194,18 @@ describe("skill_save", () => {
     expect(parse(result)).toMatchObject({ action: "updated", id: 7 });
   });
 
+  it("edits only the supplied fields on an existing skill", async () => {
+    getSkillByName.mockResolvedValue(row({ id: 7, description: "old desc", content: "old body" }));
+    updateSkill.mockResolvedValue(row({ id: 7 }));
+
+    await saveTool().execute?.("id", { name: "flow", description: "new desc" });
+
+    const [, patch] = updateSkill.mock.calls[0] ?? [];
+    expect(patch).toMatchObject({ name: "flow", description: "new desc", is_enable: 1 });
+    expect(patch).not.toHaveProperty("content");
+    expect(patch).not.toHaveProperty("category");
+  });
+
   it("refreshes visibility: invalidate + materialize + bump version", async () => {
     getSkillByName.mockResolvedValue(null);
     createSkill.mockResolvedValue(row({ id: 1 }));
@@ -202,6 +231,40 @@ describe("skill_save", () => {
     });
     expect(parse(result)).toMatchObject({ ok: true, action: "created" });
     expect(bump).toHaveBeenCalledOnce();
+  });
+});
+
+describe("skill_get", () => {
+  it("returns the stored body so an edit round-trips through the catalog", async () => {
+    getSkillByName.mockResolvedValue(
+      row({ id: 9, name: "flow", description: "d", content: "# stored body" }),
+    );
+    const result = await createSkillGetTool({ agentSessionKey: SESSION_KEY }).execute?.("id", {
+      name: "flow",
+    });
+    expect(parse(result)).toMatchObject({
+      ok: true,
+      found: true,
+      id: 9,
+      name: "flow",
+      content: "# stored body",
+    });
+    expect(getSkillByName).toHaveBeenCalledWith("flow", 1749);
+  });
+
+  it("reports a miss instead of inventing content", async () => {
+    getSkillByName.mockResolvedValue(null);
+    const result = await createSkillGetTool({ agentSessionKey: SESSION_KEY }).execute?.("id", {
+      name: "nope",
+    });
+    expect(parse(result)).toMatchObject({ ok: true, found: false, name: "nope" });
+  });
+
+  it("returns a sanitized error when the lookup fails", async () => {
+    getSkillByName.mockRejectedValue(new Error("ETIMEDOUT 10.0.0.5:3306"));
+    await expect(
+      createSkillGetTool({ agentSessionKey: SESSION_KEY }).execute?.("id", { name: "flow" }),
+    ).rejects.toThrow(/Could not reach the skill library/);
   });
 });
 

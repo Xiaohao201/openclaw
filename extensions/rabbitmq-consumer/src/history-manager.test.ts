@@ -33,7 +33,7 @@ function metaRow(raw: unknown): [unknown[], unknown] {
 function lastWrittenMetadata(): Record<string, unknown> {
   const updateCall = mockExecute.mock.calls
     .toReversed()
-    .find((c) => typeof c[0] === "string" && (c[0] as string).startsWith("UPDATE"));
+    .find((c) => typeof c[0] === "string" && c[0].startsWith("UPDATE"));
   if (!updateCall) {
     throw new Error("no UPDATE executed");
   }
@@ -122,9 +122,7 @@ describe("HistoryManager.addUsage", () => {
   function lastUpdate(): { sql: string; params: unknown[] } {
     const call = mockExecute.mock.calls
       .toReversed()
-      .find(
-        (c) => typeof c[0] === "string" && (c[0] as string).includes("UPDATE history_messages"),
-      );
+      .find((c) => typeof c[0] === "string" && c[0].includes("UPDATE history_messages"));
     if (!call) {
       throw new Error("no UPDATE executed");
     }

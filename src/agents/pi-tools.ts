@@ -47,6 +47,7 @@ import {
   wrapToolParamValidation,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import { wrapToolWithSkillWriteSync } from "./pi-tools.skill-sync.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import {
@@ -242,6 +243,8 @@ export const __testing = {
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
+
+const SKILL_SYNCED_FILE_TOOL_NAMES = new Set(["write", "edit"]);
 
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
@@ -601,9 +604,35 @@ export function createOpenClawCodingTools(options?: {
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),
   ];
+  // DB-backed skills: `<workspace>/skills/<name>/SKILL.md` is materialized from
+  // the user's skill library, so a plain write/edit there is discarded on the
+  // next materialize pass. Write those back to the library instead of letting
+  // "modify this skill" silently no-op. Memory-flush runs are excluded — they
+  // may only touch their own append-only path.
+  const toolsWithSkillSync = isMemoryFlushRun
+    ? tools
+    : tools.map((tool) =>
+        SKILL_SYNCED_FILE_TOOL_NAMES.has(tool.name)
+          ? wrapToolWithSkillWriteSync(tool, {
+              workspaceDir: sandboxRoot ?? workspaceRoot,
+              agentSessionKey: options?.sessionKey,
+              agentId,
+              containerWorkdir: sandbox?.containerWorkdir,
+              readFile: sandboxRoot
+                ? async (absolutePath) =>
+                    (
+                      await sandboxFsBridge!.readFile({
+                        filePath: absolutePath,
+                        cwd: sandboxRoot,
+                      })
+                    ).toString("utf-8")
+                : undefined,
+            })
+          : tool,
+      );
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
-      ? tools.flatMap((tool) => {
+      ? toolsWithSkillSync.flatMap((tool) => {
           if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
             return [];
           }
@@ -622,7 +651,7 @@ export function createOpenClawCodingTools(options?: {
           }
           return [tool];
         })
-      : tools;
+      : toolsWithSkillSync;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,

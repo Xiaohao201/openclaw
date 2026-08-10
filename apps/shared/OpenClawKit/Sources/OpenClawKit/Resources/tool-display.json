@@ -702,6 +702,13 @@
         "name"
       ]
     },
+    "skill_get": {
+      "emoji": "📋",
+      "title": "Read skill",
+      "detailKeys": [
+        "name"
+      ]
+    },
     "skill_list": {
       "emoji": "📋",
       "title": "List skills",

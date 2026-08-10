@@ -26,7 +26,7 @@ export function isTransientDbError(error: unknown): boolean {
   if (typeof e.errno === "number" && TRANSIENT_ERRNOS.has(e.errno)) {
     return true;
   }
-  const msg = String(e.message ?? "");
+  const msg = typeof e.message === "string" ? e.message : "";
   return /shutdown in progress|closed the connection|connection lost|ECONNRESET/i.test(msg);
 }
 

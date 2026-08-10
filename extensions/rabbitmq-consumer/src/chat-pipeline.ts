@@ -814,8 +814,12 @@ export async function processChatMessage(
       if (step.phase === "end") {
         if (existing) {
           existing.status = step.status ?? "completed";
-          if (step.durationMs != null) existing.durationMs = step.durationMs;
-          if (step.detail) existing.detail = step.detail;
+          if (step.durationMs != null) {
+            existing.durationMs = step.durationMs;
+          }
+          if (step.detail) {
+            existing.detail = step.detail;
+          }
         } else {
           storedSteps.push({
             id: step.stepId,

@@ -267,8 +267,7 @@ export function detectReportRequest(message: string, logger: PluginLogger): Repo
   const confident = hits.find((hit) => standalone || hasNearbyVerb(scanned, hit));
   if (confident) {
     logger.info(
-      `[REPORT_TRIGGER] Detected ${confident.period} report request: ` +
-        `${JSON.stringify(instruction.slice(0, 120))}`,
+      `[REPORT_TRIGGER] Detected ${confident.period} report request: ${JSON.stringify(instruction.slice(0, 120))}`,
     );
     return build("confident", confident.period, requirement, instruction, "keyword+intent");
   }

@@ -128,7 +128,7 @@ function enqueueProactiveNotify(input: ProactiveNotifyInput): boolean {
     return false;
   }
   try {
-    return fn(input) === true;
+    return fn(input);
   } catch {
     return false;
   }

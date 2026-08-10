@@ -466,6 +466,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Save skill",
       detailKeys: ["name"],
     },
+    skill_get: {
+      emoji: "📋",
+      title: "Read skill",
+      detailKeys: ["name"],
+    },
     skill_list: {
       emoji: "📋",
       title: "List skills",

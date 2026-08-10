@@ -32,7 +32,11 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
-import { createSkillListTool, createSkillSaveTool } from "./tools/skill-tool.js";
+import {
+  createSkillGetTool,
+  createSkillListTool,
+  createSkillSaveTool,
+} from "./tools/skill-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -248,6 +252,12 @@ export function createOpenClawTools(
       config: options?.config,
     }),
     createSkillSaveTool({
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      agentId: sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createSkillGetTool({
       agentSessionKey: options?.agentSessionKey,
       workspaceDir,
       agentId: sessionAgentId,

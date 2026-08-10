@@ -108,7 +108,7 @@ describe("insertHistoryRow", () => {
     mockExecute.mockClear();
     await insertHistoryRow(db, { ...row, usage }, logger);
     expect(mockExecute).toHaveBeenCalledTimes(1);
-    expect(String((mockExecute.mock.calls[0] as unknown[])[1])).not.toContain("total_tokens");
+    expect(String(mockExecute.mock.calls[0][1])).not.toContain("total_tokens");
     expect(warn).toHaveBeenCalledTimes(1);
   });
 

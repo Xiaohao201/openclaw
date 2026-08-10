@@ -130,6 +130,10 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   wiki_apply: "正在更新知识库",
   // X 平台检索
   x_search: "正在检索 X 平台",
+  // 技能库（数据库正本，非工作区文件）
+  skill_list: "正在查看技能库",
+  skill_get: "正在查阅技能内容",
+  skill_save: "正在更新技能库",
 };
 
 /** Tool name → sanitized category (icon hint only; never echoes content). */
@@ -196,6 +200,9 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   wiki_lint: "memory",
   wiki_apply: "memory",
   x_search: "search",
+  skill_list: "read",
+  skill_get: "read",
+  skill_save: "write",
 };
 
 const DEFAULT_LABEL = "正在执行处理步骤";

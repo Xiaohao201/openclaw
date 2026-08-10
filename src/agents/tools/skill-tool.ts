@@ -8,6 +8,7 @@ import {
   listSkills,
   materializeSkillsForUser,
   resolveSkillUserId,
+  type SkillRow,
   updateSkill,
 } from "../../infra/skills-mysql.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,16 +77,25 @@ function validateSkillName(name: string): string {
 const SkillSaveToolSchema = Type.Object({
   name: Type.String({
     description:
-      "Skill slug (letters/digits/.-_ only). Reusing an existing name overwrites that skill.",
+      "Skill slug (letters/digits/.-_ only). Reusing an existing name edits that skill in place.",
   }),
-  description: Type.String({
-    description: "One-line summary used to decide when this skill applies. Keep it specific.",
-  }),
-  content: Type.String({
-    description:
-      "Full SKILL.md body (markdown). Capture the reusable workflow: what it does, when to use it, and the concrete steps/commands.",
-  }),
+  description: Type.Optional(
+    Type.String({
+      description:
+        "One-line summary used to decide when this skill applies. Keep it specific. Required when creating a new skill; omit when editing to keep the current one.",
+    }),
+  ),
+  content: Type.Optional(
+    Type.String({
+      description:
+        "Full SKILL.md body (markdown). Capture the reusable workflow: what it does, when to use it, and the concrete steps/commands. Required when creating a new skill; omit when editing to keep the current body.",
+    }),
+  ),
   category: Type.Optional(Type.String({ description: "Optional grouping label." })),
+});
+
+const SkillGetToolSchema = Type.Object({
+  name: Type.String({ description: "Skill slug to fetch (as shown by skill_list)." }),
 });
 
 const SkillListToolSchema = Type.Object({
@@ -93,30 +103,61 @@ const SkillListToolSchema = Type.Object({
 });
 
 /**
- * skill_save — persist the current conversation's flow as a reusable skill in
- * the user's DB-backed catalog. Upserts by name (create or overwrite), then
- * materializes it to disk and bumps the skills snapshot version so it becomes
- * available from the user's next message — no gateway restart required.
+ * Editing a skill means rewriting its row in the user's skill library. The
+ * `<workspace>/skills/<name>/SKILL.md` file is only a projection of that row —
+ * it is rewritten from the DB on every materialize pass — so a `write`/`edit`
+ * against it is discarded. Say so on every skill tool that the model might
+ * otherwise route around with the generic file tools.
+ */
+const DB_IS_SOURCE_OF_TRUTH_NOTE =
+  "The skill library (database) is the source of truth: `workspace/skills/<name>/SKILL.md` is a read-only projection that gets overwritten from it, so editing that file with `write`/`edit` changes nothing.";
+
+async function loadExistingSkill(name: string, userId: number): Promise<SkillRow | null> {
+  try {
+    return await getSkillByName(name, userId);
+  } catch (err) {
+    // Never surface raw DB/SQL errors (host, query fragments) to the model
+    // output — keep the failure generic and log details internally.
+    log.warn(`skill lookup for "${name}" failed: ${formatErrorMessage(err)}`);
+    throw new ToolInputError("Could not reach the skill library right now. Please try again.");
+  }
+}
+
+/**
+ * skill_save — create or edit a reusable skill in the user's DB-backed catalog.
+ * Upserts by name, then materializes it to disk and bumps the skills snapshot
+ * version so it becomes available from the user's next message — no gateway
+ * restart required.
+ *
+ * When the skill already exists, `description`/`content` are optional: whatever
+ * is omitted keeps its current value, so a targeted edit (e.g. "tighten the
+ * description") does not force the model to restate the whole SKILL.md body.
  */
 export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
   return {
     label: "Save skill",
     name: "skill_save",
-    description:
-      "Save the current workflow as a reusable skill for this user (DB-backed). Provide a slug name, a specific one-line description, and the full SKILL.md body in `content`. Reusing an existing name overwrites it. The skill becomes available as a skill from the user's next message (no restart).",
+    description: `Create or edit a skill in this user's skill library (DB-backed). This is the ONLY way to change a skill. ${DB_IS_SOURCE_OF_TRUTH_NOTE} When the user asks to modify an existing skill, call skill_get for its current body, then call skill_save with the same \`name\` — fields you omit keep their current value. \`description\` and \`content\` are required only when creating a new skill. The change takes effect from the user's next message (no restart).`,
     parameters: SkillSaveToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const userId = resolveTrustedUserId(opts);
 
       const name = validateSkillName(readStringParam(params, "name", { required: true }));
-      const description = readStringParam(params, "description", { required: true });
-      if (description.length > MAX_DESCRIPTION_LEN) {
+      const existing = await loadExistingSkill(name, userId);
+
+      const description = readStringParam(params, "description");
+      if (description && description.length > MAX_DESCRIPTION_LEN) {
         throw new ToolInputError(`description too long (max ${MAX_DESCRIPTION_LEN} characters)`);
       }
-      const content = readStringParam(params, "content", { required: true });
-      if (Buffer.byteLength(content, "utf8") > MAX_CONTENT_BYTES) {
+      const content = readStringParam(params, "content");
+      if (content && Buffer.byteLength(content, "utf8") > MAX_CONTENT_BYTES) {
         throw new ToolInputError(`content too large (max ${MAX_CONTENT_BYTES} bytes)`);
+      }
+      if (!existing && (!description || !content)) {
+        throw new ToolInputError(
+          `no skill named "${name}" exists yet, so this creates a new one: both description and content are required.`,
+        );
       }
       const category = readStringParam(params, "category");
       if (category && category.length > MAX_CATEGORY_LEN) {
@@ -126,11 +167,19 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
       let action: "created" | "updated";
       let id: number;
       try {
-        const existing = await getSkillByName(name, userId);
         if (existing) {
           await updateSkill(
             existing.id,
-            { name, description, content, source: SKILL_SOURCE, category, is_enable: 1 },
+            {
+              name,
+              // Omitted fields keep their stored value: only pass through what
+              // the caller actually supplied.
+              ...(description ? { description } : {}),
+              ...(content ? { content } : {}),
+              source: SKILL_SOURCE,
+              ...(category ? { category } : {}),
+              is_enable: 1,
+            },
             userId,
           );
           action = "updated";
@@ -174,7 +223,46 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
         action,
         id,
         name,
-        note: "Skill saved. It will be available as a skill from your next message in this conversation (no restart needed).",
+        note: `Skill ${action} in the user's skill library. It takes effect from your next message in this conversation (no restart needed).`,
+      });
+    },
+  };
+}
+
+/**
+ * skill_get — read one skill's stored body straight from the user's catalog, so
+ * an edit round-trips through the DB (read row -> revise -> skill_save) instead
+ * of through the disposable `<workspace>/skills/<name>/SKILL.md` projection.
+ */
+export function createSkillGetTool(opts?: SkillToolOptions): AnyAgentTool {
+  return {
+    label: "Read skill",
+    name: "skill_get",
+    description: `Read one of this user's saved skills — its description and full SKILL.md body — from the skill library. Use this before editing a skill, then pass the revised body to skill_save under the same name. ${DB_IS_SOURCE_OF_TRUTH_NOTE}`,
+    parameters: SkillGetToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const userId = resolveTrustedUserId(opts);
+      const name = validateSkillName(readStringParam(params, "name", { required: true }));
+
+      const row = await loadExistingSkill(name, userId);
+      if (!row) {
+        return jsonResult({
+          ok: true,
+          found: false,
+          name,
+          note: "No skill with that name in this user's library. Use skill_list to see the exact names.",
+        });
+      }
+      return jsonResult({
+        ok: true,
+        found: true,
+        id: row.id,
+        name: row.name,
+        description: row.description ?? "",
+        category: row.category ?? undefined,
+        enabled: row.is_enable === 1,
+        content: row.content ?? "",
       });
     },
   };
@@ -188,8 +276,7 @@ export function createSkillListTool(opts?: SkillToolOptions): AnyAgentTool {
   return {
     label: "List skills",
     name: "skill_list",
-    description:
-      "List this user's saved (DB-backed) skills with their names and descriptions. Use before skill_save to see existing names you might overwrite.",
+    description: `List this user's saved skills with their names and descriptions. Use it to resolve the exact name the user means before skill_get / skill_save. ${DB_IS_SOURCE_OF_TRUTH_NOTE}`,
     parameters: SkillListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
