@@ -253,6 +253,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/duckduckgo/**"
+"extensions: full-text-search":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/full-text-search/**"
+          - "docs/tools/full-text-search.md"
 "extensions: acpx":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,0 +1,41 @@
+{
+  "id": "full-text-search",
+  "name": "Full Text Search",
+  "description": "Search indexed cross-platform posts and articles with date, platform, and sentiment filters.",
+  "uiHints": {
+    "endpoint": {
+      "label": "Full Text Search Endpoint",
+      "help": "Trusted full_text_search API endpoint. Defaults to the bundled service URL."
+    },
+    "timeoutSeconds": {
+      "label": "Request Timeout",
+      "help": "Maximum request duration in seconds. Defaults to 90."
+    },
+    "maxContentChars": {
+      "label": "Maximum Content Characters",
+      "help": "Maximum full-text characters returned per result. Defaults to 4000."
+    }
+  },
+  "contracts": {
+    "tools": ["full_text_search"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 120
+      },
+      "maxContentChars": {
+        "type": "number",
+        "minimum": 500,
+        "maximum": 12000
+      }
+    }
+  }
+}

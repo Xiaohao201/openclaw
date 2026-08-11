@@ -18,6 +18,11 @@ OpenClaw also includes `x_search` for X (formerly Twitter) posts and
 `web_fetch` for lightweight URL fetching. In this phase, `web_fetch` stays
 local while `web_search` and `x_search` can use xAI Responses under the hood.
 
+For indexed cross-platform posts and articles with date, platform, sentiment,
+and originality filters, enable the separate
+[`full_text_search`](/tools/full-text-search) plugin tool. Use `web_fetch` on a
+returned URL when you need to verify the current live page.
+
 <Info>
   `web_search` is a lightweight HTTP tool, not browser automation. For
   JS-heavy sites or logins, use the [Web Browser](/tools/browser). For

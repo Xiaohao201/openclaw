@@ -1193,6 +1193,7 @@
                       "tools/duckduckgo-search",
                       "tools/exa-search",
                       "tools/firecrawl",
+                      "tools/full-text-search",
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
