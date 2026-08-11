@@ -1,7 +1,7 @@
 {
   "id": "legal-check",
   "name": "Legal Check",
-  "description": "Create 图文/视频违规·不实信息检测 jobs and query their status, by calling the leading-v2.0 PHP API (/legal/save-job, /ai/fetch-job) as the chat user via X-Auth-Token.",
+  "description": "Legacy legal-check compatibility service. Agent-facing system-detection tools are disabled.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

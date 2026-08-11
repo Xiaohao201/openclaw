@@ -20,6 +20,7 @@ import {
   createCrawlRefreshStatusToolFactory,
   type RecentCrawlRefresh,
 } from "./src/crawl/crawl-tools.js";
+import { createHotRankToolFactory } from "./src/hot-rank/hot-rank-tool.js";
 import {
   createLinkBatchCreateToolFactory,
   createLinkBatchListToolFactory,
@@ -144,6 +145,7 @@ export default definePluginEntry({
     api.registerTool(createTopicListToolFactory(api, resolver), { name: "topic_list" });
     api.registerTool(createFeedReanalyzeToolFactory(api, resolver), { name: "feed_reanalyze" });
     api.registerTool(createMonthlyStatsToolFactory(api, resolver), { name: "monthly_stats" });
+    api.registerTool(createHotRankToolFactory(api), { name: "hot_rank" });
 
     // --- ai (任务管理 + 维权文书) ---
     api.registerTool(createJobListToolFactory(api, resolver), { name: "job_list" });

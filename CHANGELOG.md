@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Agents/skills: add the bundled institution violation judgment workflow for non-enterprise reporting subjects, including structured content review and follow-up reporting; complaints remain available only through the enterprise infringement workflow.
+- Leading v2/tools: add a read-only multi-platform hot-ranking tool for hot lists, trending searches, popular topics, browser rankings, and local-city rankings.
 
 ### Fixes
 
@@ -18,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/webhooks: enforce synchronous plugin registration with full rollback of failed plugin side effects, and cache SecretRef-backed webhook auth per route so plugin startup and inbound webhook auth stay deterministic. (#67941) Thanks @obviyus.
 - RabbitMQ/violation judgments: keep default monitoring-project context out of institution and general violation-review requests so enterprise project names are not mistaken for the reporting subject.
 - Leading v2/judgment actions: submit confirmed reports and enterprise complaints directly from Suheng's judgment without creating or resolving an intermediate content-detection task.
+- Legal check/tools: hide the legacy system content-detection create and status tools from agents so judgment skills cannot fall back to asynchronous detection tasks.
 
 ## 2026.4.15
 
