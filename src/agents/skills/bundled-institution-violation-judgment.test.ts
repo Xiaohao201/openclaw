@@ -7,7 +7,7 @@ import { loadSkillsFromDirSafe } from "./local-loader.js";
 const skillDir = path.resolve("skills/institution-violation-judgment");
 
 describe("bundled institution violation judgment skill", () => {
-  it("is discoverable and connects judgment to report and complaint actions", async () => {
+  it("is discoverable and connects non-enterprise judgments only to reporting", async () => {
     const bundledSkillsDir = resolveBundledSkillsDir();
     const { skills } = loadSkillsFromDirSafe({
       dir: bundledSkillsDir!,
@@ -26,7 +26,12 @@ describe("bundled institution violation judgment skill", () => {
     expect(content).toContain("平台举报函");
     expect(content).toContain("300 字以内");
     expect(content).toContain("[举报](#lobster-report)");
-    expect(content).toContain("[投诉](#lobster-complaint)");
     expect(content).toContain("[暂不处理](#lobster-dismiss)");
+    expect(content).not.toContain("[投诉](#lobster-complaint)");
+    expect(content).toContain("非企业主体只能举报，不能投诉");
+    expect(content).toContain("涉企网络侵权研判与投诉通知");
+    expect(content).toContain("`complaint_submit`");
+    expect(content).toContain("basisSource=AgentJudgment");
+    expect(content).toContain("不得调用 `legal_check_create`");
   });
 });

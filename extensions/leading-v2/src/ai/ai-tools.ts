@@ -45,9 +45,73 @@ const LetterGenerateSchema = Type.Object(
 );
 
 const COMPLAINT_PLATFORMS = "抖音/小红书/今日头条/百家号/B站/微博/知乎/快手";
+const AGENT_JUDGMENT_SOURCE = "AgentJudgment";
+const AGENT_JUDGMENT_MIN_LENGTH = 20;
+const AGENT_JUDGMENT_MAX_LENGTH = 6000;
+
+const DirectJudgmentProperties = {
+  basisSource: Type.Optional(Type.Literal(AGENT_JUDGMENT_SOURCE)),
+  confirmed: Type.Optional(
+    Type.Boolean({ description: "仅在用户明确点击或选择举报/投诉后传 true。" }),
+  ),
+  subjectScope: Type.Optional(
+    Type.Union([Type.Literal("Institution"), Type.Literal("Enterprise")], {
+      description: "研判主体范围：Institution=非企业机构，Enterprise=企业或企业家。",
+    }),
+  ),
+  judgment: Type.Optional(
+    Type.String({
+      description: "夙衡本轮研判形成的事实、规则与结论摘要，20至6000字。",
+    }),
+  ),
+};
+
+type DirectJudgment = {
+  source: typeof AGENT_JUDGMENT_SOURCE;
+  subjectScope: "Institution" | "Enterprise";
+  judgment: string;
+};
+
+type DirectJudgmentResult =
+  | { code: "legacy" }
+  | { code: "valid"; basis: DirectJudgment }
+  | { code: "invalid"; error: string };
+
+function resolveDirectJudgment(
+  params: Record<string, unknown>,
+  operation: "report" | "complaint",
+): DirectJudgmentResult {
+  if (params.basisSource === undefined) {
+    return { code: "legacy" };
+  }
+  if (params.basisSource !== AGENT_JUDGMENT_SOURCE) {
+    return { code: "invalid", error: "不支持的研判依据来源。" };
+  }
+  if (params.confirmed !== true) {
+    return { code: "invalid", error: "请先让用户明确确认举报或投诉操作。" };
+  }
+  if (params.subjectScope !== "Institution" && params.subjectScope !== "Enterprise") {
+    return { code: "invalid", error: "请提供正确的研判主体范围。" };
+  }
+  if (operation === "complaint" && params.subjectScope !== "Enterprise") {
+    return { code: "invalid", error: "非企业主体不能投诉，请改用举报。" };
+  }
+  const judgment = asString(params.judgment)?.trim() ?? "";
+  if (judgment.length < AGENT_JUDGMENT_MIN_LENGTH) {
+    return { code: "invalid", error: "请提供完整的夙衡研判依据。" };
+  }
+  if (judgment.length > AGENT_JUDGMENT_MAX_LENGTH) {
+    return { code: "invalid", error: "夙衡研判依据过长，请控制在6000字以内。" };
+  }
+  return {
+    code: "valid",
+    basis: { source: AGENT_JUDGMENT_SOURCE, subjectScope: params.subjectScope, judgment },
+  };
+}
 
 const ComplaintSubmitSchema = Type.Object(
   {
+    ...DirectJudgmentProperties,
     links: Type.Optional(
       Type.Array(Type.String(), {
         description:
@@ -326,8 +390,8 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
       name: "complaint_submit",
       label: "一键举报",
       description:
-        "对最近一次内容检测任务一键举报：把侵权链接按平台提交投诉，并落库 legal_complaint 持续监测链接是否下架。" +
-        "举报理由由后端依据检测结果自动生成，无需手写。" +
+        "一键举报：可直接使用夙衡本轮研判，或兼容复用最近一次内容检测任务。" +
+        "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
         `仅支持 ${COMPLAINT_PLATFORMS}，其他平台链接会被过滤。` +
         "异步执行——提交成功后告知用户「举报任务已提交」，无需再调用任何工具。",
@@ -337,18 +401,25 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         if ("error" in keyed) {
           return keyed.error;
         }
-        let job: Record<string, unknown> | null;
-        try {
-          job = await resolveLatestJob(config, keyed.apiKey);
-        } catch (error) {
-          return failure(api, "complaint_submit", userId, error);
+        const direct = resolveDirectJudgment(rawParams, "report");
+        if (direct.code === "invalid") {
+          return jsonResult({ success: false, error: direct.error });
         }
-        const jobId = Number(job?.id);
-        if (!Number.isInteger(jobId) || jobId <= 0) {
-          return jsonResult({
-            success: false,
-            error: "没有可举报的内容检测任务；请先完成一次侵权检测。",
-          });
+        let job: Record<string, unknown> | null = null;
+        let jobId = 0;
+        if (direct.code === "legacy") {
+          try {
+            job = await resolveLatestJob(config, keyed.apiKey);
+          } catch (error) {
+            return failure(api, "complaint_submit", userId, error);
+          }
+          jobId = Number(job?.id);
+          if (!Number.isInteger(jobId) || jobId <= 0) {
+            return jsonResult({
+              success: false,
+              error: "没有可举报的内容检测任务；请先完成一次侵权检测。",
+            });
+          }
         }
 
         // Reuse the detection task's own link unless the caller overrides with explicit links.
@@ -361,16 +432,31 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           return jsonResult({
             success: false,
             error:
-              "未找到可举报的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
+              direct.code === "valid"
+                ? "直接使用夙衡研判举报时必须提供 links。"
+                : "未找到可举报的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
           });
         }
 
-        const role = rawParams.role === "Enterprise" ? "Enterprise" : "Personal";
+        const role =
+          direct.code === "valid"
+            ? direct.basis.subjectScope === "Enterprise"
+              ? "Enterprise"
+              : "Personal"
+            : rawParams.role === "Enterprise"
+              ? "Enterprise"
+              : "Personal";
         const fields: Record<string, FieldValue> = {
           id: jobId,
           links: JSON.stringify(links),
           role,
         };
+        if (direct.code === "valid") {
+          fields.basisSource = direct.basis.source;
+          fields.confirmed = 1;
+          fields.subjectScope = direct.basis.subjectScope;
+          fields.judgment = direct.basis.judgment;
+        }
         let res: Record<string, unknown>;
         try {
           res = await postForm(config, "/legal/save-complaint-job", fields, keyed.apiKey);
@@ -431,6 +517,7 @@ const InfringeProfileListSchema = Type.Object(
 
 const InfringeComplaintSubmitSchema = Type.Object(
   {
+    ...DirectJudgmentProperties,
     profileId: Type.Optional(
       Type.Number({
         description:
@@ -564,7 +651,8 @@ export function createInfringeComplaintSubmitToolFactory(
       name: "infringe_complaint_submit",
       label: "一键投诉",
       description:
-        "对最近一次内容检测任务发起「侵权投诉」（投诉方案，区别于举报 complaint_submit）：按平台把侵权链接提交到各平台投诉渠道并落库持续监测是否下架。" +
+        "发起涉企侵权投诉：可直接使用夙衡本轮研判，或兼容复用最近一次内容检测任务。" +
+        "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope=Enterprise、judgment 和 links，不要创建或查询内容检测任务。" +
         "两个前置：① 投诉主体档案 profileId（用 infringe_profile_list 获取；仅 1 个档案时自动选用）；② 盖章《投诉通知书》 stampedComplaint（OSS key，用户须先在网页端下载投诉函、盖章后上传）。缺任一前置会返回提示，请照提示引导用户补齐。" +
         "默认复用检测任务提交的原始链接；如需投诉其他链接可传 links。" +
         `仅支持 ${INFRINGE_PLATFORMS}，其他平台链接会被过滤。` +
@@ -574,6 +662,10 @@ export function createInfringeComplaintSubmitToolFactory(
         const keyed = await resolveKeyOrError(api, resolver, userId, "infringe_complaint_submit");
         if ("error" in keyed) {
           return keyed.error;
+        }
+        const direct = resolveDirectJudgment(rawParams, "complaint");
+        if (direct.code === "invalid") {
+          return jsonResult({ success: false, error: direct.error });
         }
 
         // 前置①：主体档案。显式传入优先；否则自动解析（唯一则用，多个则请用户指定）。
@@ -614,11 +706,13 @@ export function createInfringeComplaintSubmitToolFactory(
         }
 
         // 复用最近检测任务的原始链接与 jobId（与举报一致；jobId 供引擎带出研判证据）。
-        let job: Record<string, unknown> | null;
-        try {
-          job = await resolveLatestJob(config, keyed.apiKey);
-        } catch (error) {
-          return failure(api, "infringe_complaint_submit", userId, error);
+        let job: Record<string, unknown> | null = null;
+        if (direct.code === "legacy") {
+          try {
+            job = await resolveLatestJob(config, keyed.apiKey);
+          } catch (error) {
+            return failure(api, "infringe_complaint_submit", userId, error);
+          }
         }
         const provided = Array.isArray(rawParams.links)
           ? (rawParams.links as unknown[]).map((v) => asString(v) ?? "").filter((v) => v.length > 0)
@@ -629,7 +723,9 @@ export function createInfringeComplaintSubmitToolFactory(
           return jsonResult({
             success: false,
             error:
-              "未找到可投诉的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
+              direct.code === "valid"
+                ? "直接使用夙衡研判投诉时必须提供 links。"
+                : "未找到可投诉的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
           });
         }
 
@@ -655,6 +751,15 @@ export function createInfringeComplaintSubmitToolFactory(
         const jobId = Number(job?.id);
         if (Number.isInteger(jobId) && jobId > 0) {
           fields.jobId = jobId;
+        } else {
+          fields.jobId = 0;
+        }
+        if (direct.code === "valid") {
+          fields.basisSource = direct.basis.source;
+          fields.confirmed = 1;
+          fields.subjectScope = direct.basis.subjectScope;
+          fields.judgment = direct.basis.judgment;
+          fields.factReason = direct.basis.judgment;
         }
 
         let res: Record<string, unknown>;

@@ -10,6 +10,8 @@ metadata: { "openclaw": { "emoji": "⚖️" } }
 
 当用户要求判断文章、帖子、评论、图文、视频文案或公开链接是否侵害企业或企业家权益，或要求给出投诉建议、生成投诉通知时，使用本技能。
 
+企业或企业家可以选择举报或投诉；非企业主体的违规内容研判应使用“机构违规研判及举报”，只能举报，不能投诉。
+
 本技能直接完成研判与通知生成，不依赖旧的异步“内容违规检测”流程，也不要调用 `legal_check_create` 或 `legal_check_status` 代替本技能的逐句分析。
 
 ## 输入处理
@@ -111,4 +113,6 @@ metadata: { "openclaw": { "emoji": "⚖️" } }
 - **投诉**：进入正式侵权投诉流程，可能需要投诉主体档案、证明材料和盖章通知书。
 - **暂不处理**：本轮不执行后续操作。
 - 不得在展示选择时自行提交。只有用户点击或明确选择“举报”或“投诉”后，才能调用对应工具。
+- 用户确认“举报”后，直接调用 `complaint_submit`，传入原始 `links`、`basisSource=AgentJudgment`、`confirmed=true`、`subjectScope=Enterprise`，并把本轮逐句研判确认的事实、规则依据和结论压缩为 `judgment`。不得调用 `legal_check_create` 或 `legal_check_status`。
+- 用户确认“投诉”后，在主体档案和盖章《投诉通知书》等材料齐备时直接调用 `infringe_complaint_submit`，传入原始 `links`、`basisSource=AgentJudgment`、`confirmed=true`、`subjectScope=Enterprise`、`judgment` 及投诉所需材料。不得创建或复用内容检测任务；材料不齐时只引导补齐，不得假称已经提交。
 - 即使当前结论为“不建议投诉举报”或“建议先补充证据”，仍展示选择；但要明确提示用户，继续操作前可能需要补充材料或再次确认风险。

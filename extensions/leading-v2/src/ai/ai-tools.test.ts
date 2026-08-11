@@ -264,6 +264,52 @@ describe("complaint_submit", () => {
     });
   });
 
+  it("submits a confirmed agent judgment without resolving a detection job", async () => {
+    mockPostForm.mockResolvedValue({ code: "success", message: "举报任务已提交，请耐心等待" });
+    const judgment = "夙衡逐项研判确认该内容包含虚构事实，并对应现行规则，建议立即举报。";
+
+    await tool().execute("c-direct", {
+      basisSource: "AgentJudgment",
+      confirmed: true,
+      subjectScope: "Institution",
+      judgment,
+      links: ["https://www.xiaohongshu.com/a"],
+    });
+
+    expect(mockGetJson).not.toHaveBeenCalled();
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(path).toBe("/legal/save-complaint-job");
+    expect(fields).toMatchObject({
+      id: 0,
+      basisSource: "AgentJudgment",
+      confirmed: 1,
+      subjectScope: "Institution",
+      judgment,
+      role: "Personal",
+      links: JSON.stringify(["https://www.xiaohongshu.com/a"]),
+    });
+  });
+
+  it("rejects an agent judgment report without explicit confirmation", async () => {
+    const res = parse(
+      await tool().execute("c-unconfirmed", {
+        basisSource: "AgentJudgment",
+        subjectScope: "Institution",
+        judgment: "夙衡逐项研判确认该内容包含虚构事实，并对应现行规则，建议立即举报。",
+        links: ["https://www.xiaohongshu.com/a"],
+      }),
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("明确确认");
+    expect(mockGetJson).not.toHaveBeenCalled();
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
   it("errors without a backend call when there is no recent job", async () => {
     mockGetJson.mockResolvedValue({ jobs: [] });
     const res = parse(await tool().execute("c3", {}));
@@ -378,6 +424,55 @@ describe("infringe_complaint_submit", () => {
     await tool().execute("i2", { stampedComplaint: "oss/s.pdf", infringeType: "Goodwill" });
     const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
     expect(fields).toMatchObject({ profileId: 9, infringeType: "Goodwill" });
+  });
+
+  it("submits a confirmed enterprise judgment without attaching a stale detection job", async () => {
+    mockPostForm.mockResolvedValue({ code: "success", taskId: 56, count: 1, message: "ok" });
+    const judgment = "夙衡逐句研判确认相关事实主张缺乏依据，已构成企业商誉侵权。";
+
+    await tool().execute("i-direct", {
+      profileId: 12,
+      stampedComplaint: "oss/s.pdf",
+      basisSource: "AgentJudgment",
+      confirmed: true,
+      subjectScope: "Enterprise",
+      judgment,
+      links: ["https://weibo.com/x"],
+      factReason: judgment,
+    });
+
+    expect(mockGetJson).not.toHaveBeenCalled();
+    const [, path, fields] = mockPostForm.mock.calls[0] as [
+      unknown,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(path).toBe("/infringe-complaint/save-complaint-job");
+    expect(fields).toMatchObject({
+      jobId: 0,
+      basisSource: "AgentJudgment",
+      confirmed: 1,
+      subjectScope: "Enterprise",
+      judgment,
+      links: JSON.stringify(["https://weibo.com/x"]),
+    });
+  });
+
+  it("rejects a direct complaint for a non-enterprise subject", async () => {
+    const res = parse(
+      await tool().execute("i-institution", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment: "夙衡逐项研判确认该机构相关内容存在违规事实，但不属于企业侵权投诉范围。",
+        links: ["https://weibo.com/x"],
+      }),
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("非企业主体不能投诉");
+    expect(mockGetJson).not.toHaveBeenCalled();
+    expect(mockPostForm).not.toHaveBeenCalled();
   });
 
   it("asks for a profileId when the account has multiple profiles", async () => {
