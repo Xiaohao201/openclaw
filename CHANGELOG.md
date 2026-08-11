@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Models/config: preserve an existing `models.json` provider `baseUrl` during merge-mode regeneration so custom endpoints do not get reset on restart. (#67893) Thanks @lawrence3699.
 - Plugins/discovery: reuse bundled and global plugin discovery results across workspace cache misses so Windows multi-workspace startup stops redoing the shared synchronous scan. (#67940) Thanks @obviyus.
 - Plugins/webhooks: enforce synchronous plugin registration with full rollback of failed plugin side effects, and cache SecretRef-backed webhook auth per route so plugin startup and inbound webhook auth stay deterministic. (#67941) Thanks @obviyus.
+- RabbitMQ/violation judgments: keep default monitoring-project context out of institution and general violation-review requests so enterprise project names are not mistaken for the reporting subject.
 
 ## 2026.4.15
 

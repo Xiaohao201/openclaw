@@ -38,6 +38,19 @@ const SKILL_BODY_MAX = 4000;
 const SKILL_CONTEXT_TOTAL_MAX = 12000;
 
 /**
+ * These capabilities judge the supplied public content on its own merits. A
+ * user's default monitoring project is authorization metadata, not the target
+ * of the judgment. Injecting an enterprise topic here can make the model invent
+ * that enterprise as the complainant (history_messages #2271).
+ */
+const SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY =
+  /(?:机构违规研判(?:及举报)?|通用违规研判(?:和举报函|及举报)?)/;
+
+function shouldInjectTopicContext(message: string): boolean {
+  return !SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY.test(message);
+}
+
+/**
  * Build the context block injected into the chat agent for the user's active
  * custom skills (the "我的Skills" panel). Each skill's instruction body is
  * treated as an authoritative directive the agent should follow this turn. The
@@ -727,7 +740,7 @@ export async function processChatMessage(
     // has to guess which feed_topic belongs to this user. Resolution failure
     // degrades to the plain [userId:...] prefix instead of failing the chat.
     let topicContext = "";
-    if (topicResolver) {
+    if (topicResolver && shouldInjectTopicContext(userMessage)) {
       try {
         const resolution = await topicResolver.getTopicIdsByUser(userId);
         if (resolution.topicId && resolution.topicId > 0) {

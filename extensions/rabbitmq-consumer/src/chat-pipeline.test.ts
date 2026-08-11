@@ -561,6 +561,52 @@ describe("processChatMessage", () => {
     );
   });
 
+  it.each(["机构违规研判及举报", "通用违规研判和举报函"])(
+    "omits enterprise topic context for %s",
+    async (capabilityName) => {
+      let capturedMessage = "";
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onRunArgs: (args) => {
+          capturedMessage = args.message;
+        },
+        sessionMessages: [{ role: "assistant", content: "ok" }],
+      });
+      const { historyManager } = createHistoryManagerMock();
+      const topicResolver = {
+        getTopicIdsByUser: async () => ({
+          topicId: 89,
+          useSlaveTopic: false,
+          masterId: 89,
+          topicName: "华泰联合证券舆情监测",
+          topics: [
+            {
+              topicId: 89,
+              useSlaveTopic: false,
+              masterId: 89,
+              topicName: "华泰联合证券舆情监测",
+            },
+          ],
+        }),
+      } as unknown as TopicResolver;
+      const message = `请使用“${capabilityName}”能力，对以下网络内容逐项研判：https://example.com/a`;
+
+      await processChatMessage(
+        { ...createChatMessage(), message },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        topicResolver,
+      );
+
+      expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] ${message}`);
+      expect(capturedMessage).not.toContain("华泰联合证券");
+    },
+  );
+
   it("lists every owned topic when the user has more than one", async () => {
     let capturedMessage = "";
     const runtime = createRuntimeMock({
