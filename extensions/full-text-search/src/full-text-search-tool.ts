@@ -90,7 +90,7 @@ export function createFullTextSearchTool(api: OpenClawPluginApi) {
     name: "full_text_search",
     label: "Full Text Search",
     description:
-      "Search an indexed cross-platform content corpus (social posts, news, forums, and web pages) with date, platform, sentiment, and originality filters. Use web_search for general open-web discovery and web_fetch to verify or refresh a returned URL.",
+      "Cost-controlled search of an indexed cross-platform corpus (social posts, news, forums, and web pages). Call this tool only when the current user explicitly invokes the Chinese codeword 观象台 with a search/query intent; do not call it when 观象台 is merely discussed, negated, or absent. Use web_search for ordinary open-web discovery and web_fetch to verify or refresh a returned URL.",
     parameters: FullTextSearchToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) =>
       jsonResult(

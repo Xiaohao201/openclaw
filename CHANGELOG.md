@@ -8,7 +8,8 @@ Docs: https://docs.openclaw.ai
 
 - Agents/skills: add the bundled institution violation judgment workflow for non-enterprise reporting subjects, including structured content review and follow-up reporting; complaints remain available only through the enterprise infringement workflow.
 - Leading v2/tools: add a read-only multi-platform hot-ranking tool for hot lists, trending searches, popular topics, browser rankings, and local-city rankings.
-- Web tools: add a bounded `full_text_search` plugin tool for indexed cross-platform content with date, platform, sentiment, and originality filters, while keeping open-web discovery and live URL fetching on `web_search` and `web_fetch`.
+- Web tools: add a bounded `full_text_search` plugin tool for indexed cross-platform content with date, platform, sentiment, and originality filters; explicit Chinese “观象台” requests route to full-text search, while ordinary discovery and live URL fetching stay on `web_search` and `web_fetch`.
+- Report generator/email: send completed daily, weekly, and monthly reports to matching MySQL subscribers over SMTP, using the topic sender signature or `观舆卫士` when unset.
 
 ### Fixes
 

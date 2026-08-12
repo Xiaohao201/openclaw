@@ -16,15 +16,37 @@ describe("full_text_search tool", () => {
 
   it("registers as a dedicated tool so managed web_search remains available", () => {
     const tools: Array<{ tool: unknown; options?: { name?: string } }> = [];
+    const hooks: Array<{ name: string; handler: (event: { prompt: string }) => unknown }> = [];
     plugin.register({
       registerTool(tool: unknown, options?: { name?: string }) {
         tools.push({ tool, options });
+      },
+      on(name: string, handler: (event: { prompt: string }) => unknown) {
+        hooks.push({ name, handler });
       },
     } as never);
 
     expect(plugin.id).toBe("full-text-search");
     expect(tools).toHaveLength(1);
     expect(tools[0]?.options?.name).toBe("full_text_search");
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0]?.name).toBe("before_prompt_build");
+  });
+
+  it("injects the extracted query only for an explicit 观象台 invocation", () => {
+    const hooks: Array<(event: { prompt: string }) => unknown> = [];
+    plugin.register({
+      registerTool() {},
+      on(_name: string, handler: (event: { prompt: string }) => unknown) {
+        hooks.push(handler);
+      },
+    } as never);
+
+    expect(hooks[0]?.({ prompt: "帮我使用观象台，搜索“今天吃饭了嘛？”" })).toEqual({
+      prependContext: expect.stringContaining("今天吃饭了嘛？"),
+    });
+    expect(hooks[0]?.({ prompt: "观象台这个名字怎么样？" })).toBeUndefined();
+    expect(hooks[0]?.({ prompt: "不要使用观象台，搜索今天的新闻" })).toBeUndefined();
   });
 
   it("maps rich search filters into the client without replacing web_fetch", async () => {

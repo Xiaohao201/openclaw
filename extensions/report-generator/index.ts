@@ -9,6 +9,7 @@ import { FeedCollector } from "./src/feed-collector.js";
 import { ReportGenerator } from "./src/generator.js";
 import { MercurePusher, StreamingMercurePusher } from "./src/mercure-pusher.js";
 import { ReportHistoryWriter, type ReportStep } from "./src/report-history-writer.js";
+import { resolveSmtpConfig } from "./src/smtp-config.js";
 import { TaskListener } from "./src/task-listener.js";
 import { TaskPoller } from "./src/task-poller.js";
 import { TemplateLoader } from "./src/template-loader.js";
@@ -37,15 +38,7 @@ function resolveConfig(pluginConfig: Record<string, unknown>): ReportGeneratorCo
       hubUrl: (mercure?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "",
       jwtSecret: (mercure?.jwtSecret as string) ?? process.env.MERCURE_JWT_SECRET ?? "",
     },
-    smtp: smtp
-      ? {
-          host: (smtp.host as string) ?? "",
-          port: Number(smtp.port ?? 587),
-          user: (smtp.user as string) ?? "",
-          password: (smtp.password as string) ?? "",
-          from: (smtp.from as string) ?? "",
-        }
-      : undefined,
+    smtp: resolveSmtpConfig(smtp),
     // RabbitMQ listener is optional: enabled when connection details resolve
     // (plugin config or RABBITMQ_* env shared with the rabbitmq-consumer plugin).
     rabbitmq:
@@ -178,8 +171,10 @@ export default definePluginEntry({
         templateLoaderRef = templateLoader;
 
         // Create email sender if SMTP config is available
-        if (config.smtp) {
-          emailSenderRef = new EmailSender(config.smtp);
+        const smtpConfig = config.smtp;
+        const defaultEmailSender = smtpConfig?.defaultSender ?? "观舆卫士";
+        if (smtpConfig) {
+          emailSenderRef = new EmailSender(smtpConfig);
           ctx.logger.info("[REPORT_GENERATOR] Email sender initialized");
         } else {
           ctx.logger.info("[REPORT_GENERATOR] No SMTP config, email sending disabled");
@@ -394,22 +389,27 @@ export default definePluginEntry({
             });
             await mercurePusher.pushReportDone(streamTopic, task.id);
 
-            // Send email if configured and user email is available
-            if (emailSenderRef && task.userEmail) {
+            // Resolve at delivery time so subscription and sender changes take
+            // effect without restarting the report worker.
+            if (emailSenderRef) {
               try {
-                const htmlContent = emailSenderRef.markdownToHtml(report.content, report.title);
-                await emailSenderRef.sendEmail(
-                  {
-                    to: task.userEmail,
-                    subject: report.title,
-                    body: report.content,
-                    bodyHtml: htmlContent,
-                  },
-                  logger,
-                );
-                logger.info(`[REPORT_GENERATOR] Email sent to ${task.userEmail}`);
+                const recipient = await taskPoller.resolveEmailRecipient(task);
+                if (recipient) {
+                  const htmlContent = emailSenderRef.markdownToHtml(report.content, report.title);
+                  await emailSenderRef.sendEmail(
+                    {
+                      to: recipient.email,
+                      subject: report.title,
+                      body: report.content,
+                      bodyHtml: htmlContent,
+                      senderName: recipient.sender || defaultEmailSender,
+                    },
+                    logger,
+                  );
+                  logger.info("[REPORT_GENERATOR] Subscriber email sent");
+                }
               } catch (emailError) {
-                logger.error(`[REPORT_GENERATOR] Email send failed: ${String(emailError)}`);
+                logger.error("[REPORT_GENERATOR] Email delivery failed");
                 // Don't fail the task if email fails - report was already generated
               }
             }

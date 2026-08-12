@@ -14,11 +14,16 @@ export interface MercureConfig {
 }
 
 export interface SmtpConfig {
+  /** Defaults to http for compatibility with the existing /api/send-email proxy. */
+  transport: "http" | "smtp";
+  /** HTTP proxy protocol; prefer https outside a trusted local network. */
+  proxyProtocol: "http" | "https";
   host: string;
   port: number;
   user: string;
   password: string;
   from: string;
+  defaultSender: string;
 }
 
 /** RabbitMQ listener config for instant task notifications. */
@@ -54,7 +59,6 @@ export interface ReportTask {
   title: string;
   content: string;
   dateScope?: { start: string; end: string };
-  userEmail?: string; // User's email for sending reports
 }
 
 export interface FeedRecord {

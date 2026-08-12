@@ -1,6 +1,10 @@
 import mysql from "mysql2/promise";
 import type { PluginLogger } from "../api.js";
-import { createHistoryPool, execWithRetry } from "./db-pool.js";
+import { createHistoryPool, execWithRetry, withDbRetry } from "./db-pool.js";
+import {
+  resolveReportEmailRecipient,
+  type ReportEmailRecipient,
+} from "./email-recipient-resolver.js";
 import type { HistoryDbConfig, ReportTask } from "./types.js";
 
 export class TaskPoller {
@@ -27,19 +31,6 @@ export class TaskPoller {
     return { logger: this.logger ?? undefined, label };
   }
 
-  /**
-   * Subquery resolving the recipient email from feed_report_subscriber
-   * (uid + topic match, active subscriptions only). The topic mapping table
-   * (entity_auth) has no email column — using it here used to break every poll.
-   */
-  private static readonly EMAIL_SUBQUERY = `(
-        SELECT s.email FROM feed_report_subscriber s
-        WHERE s.uid = d.uid AND s.active = 1
-          AND s.email IS NOT NULL AND s.email != ''
-          AND (s.topicId = d.topicId OR (d.slaveTopicId > 0 AND s.topicId = d.slaveTopicId))
-        LIMIT 1
-      ) AS userEmail`;
-
   async fetchPendingTasks(limit = 10): Promise<ReportTask[]> {
     const pool = await this.getPool();
     // LIMIT is inlined (sanitized integer): MySQL 8.0.22+ rejects prepared
@@ -50,8 +41,7 @@ export class TaskPoller {
     // (period IS NULL), which are consumed by the legacy report service.
     const sql = `
       SELECT d.id, d.uid, d.topicId, d.slaveTopicId, d.category, d.period, d.status,
-             d.params, d.requirement, d.title, d.content,
-             ${TaskPoller.EMAIL_SUBQUERY}
+             d.params, d.requirement, d.title, d.content
       FROM download d
       WHERE d.category = 'Report' AND d.status = 'Pending'
         AND d.period IN ('Daily', 'Weekly', 'Monthly')
@@ -64,10 +54,7 @@ export class TaskPoller {
       undefined,
       this.retryOpts("fetchPendingTasks"),
     );
-    return rows.map((row) => ({
-      ...(row as ReportTask),
-      userEmail: row.userEmail ?? undefined,
-    }));
+    return rows.map((row) => row as ReportTask);
   }
 
   /** Fetch a single report task by id (any status). Returns null if not found. */
@@ -75,8 +62,7 @@ export class TaskPoller {
     const pool = await this.getPool();
     const sql = `
       SELECT d.id, d.uid, d.topicId, d.slaveTopicId, d.category, d.period, d.status,
-             d.params, d.requirement, d.title, d.content,
-             ${TaskPoller.EMAIL_SUBQUERY}
+             d.params, d.requirement, d.title, d.content
       FROM download d
       WHERE d.id = ? AND d.category = 'Report'
         AND d.period IN ('Daily', 'Weekly', 'Monthly')
@@ -91,11 +77,14 @@ export class TaskPoller {
     if (rows.length === 0) {
       return null;
     }
-    const row = rows[0];
-    return {
-      ...(row as ReportTask),
-      userEmail: row.userEmail ?? undefined,
-    };
+    return rows[0] as ReportTask;
+  }
+
+  async resolveEmailRecipient(task: ReportTask): Promise<ReportEmailRecipient | null> {
+    const pool = await this.getPool();
+    return withDbRetry(() => resolveReportEmailRecipient(pool, task), {
+      ...this.retryOpts("resolveEmailRecipient"),
+    });
   }
 
   /**
