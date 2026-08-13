@@ -1,0 +1,4 @@
+interface:
+  display_name: "深圳观舆--政务舆情分析报告"
+  short_description: "面向市级政府领导审阅的政务舆情研判与决策参考报告能力"
+  default_prompt: "使用 $gov-public-opinion-analysis-agent 分析该事件并生成正式政务舆情分析报告。"
