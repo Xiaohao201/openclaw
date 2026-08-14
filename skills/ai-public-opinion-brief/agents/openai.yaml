@@ -1,0 +1,4 @@
+interface:
+  display_name: "舆情速报"
+  short_description: "自动搜索核验事实、研判热度并生成四段式政务舆情速报"
+  default_prompt: "使用 $ai-public-opinion-brief 根据事件线索自动搜索并生成舆情速报。"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI协作力诊断"
+  short_description: "基于指定时间段对话诊断使用频度、协作关系与高价值互动"
+  default_prompt: "使用 $ai-collaboration-diagnostic 分析我在指定时间段内与夙衡的对话，生成 AI 协作力诊断。"
