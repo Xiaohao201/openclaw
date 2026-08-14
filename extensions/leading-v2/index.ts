@@ -62,7 +62,6 @@ import {
 } from "./src/opinion/opinion-task-tools.js";
 import {
   createOpinionContentToolFactory,
-  createReportCreateToolFactory,
   createReportStatusToolFactory,
   createReportStopToolFactory,
   type RecentReport,
@@ -107,11 +106,8 @@ export default definePluginEntry({
       name: "link_batch_list",
     });
 
-    // --- industry-report (行业/舆情报告 + 评论/回应生成) ---
+    // --- industry-report (评论/回应生成) ---
     const reports = new RecentTaskStore<RecentReport>();
-    api.registerTool(createReportCreateToolFactory(api, resolver, reports), {
-      name: "report_create",
-    });
     api.registerTool(createOpinionContentToolFactory(api, resolver, reports), {
       name: "opinion_content_create",
     });

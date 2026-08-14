@@ -41,7 +41,7 @@ function lastAssistantText(messages: unknown[]): string {
  * is delivered through the same Notifier transports (Mercure / history / email).
  *
  * This covers reminders, greetings, scheduled pushes, and any "智脑"-style task — the
- * scheduled agent has the full chat toolset, so it can call report_create / opinion_*
+ * scheduled agent has the full chat toolset, so it can call opinion_* and other task tools
  * etc. and report the result itself, with no per-action runner needed.
  */
 export const agentPromptAction: ScheduleActionType = {
