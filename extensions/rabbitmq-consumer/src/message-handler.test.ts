@@ -95,6 +95,37 @@ describe("parseMessage", () => {
     expect(msg?.skillIds).toEqual([4]);
   });
 
+  it("parses a selected bundled skill from flat and nested messages", () => {
+    const flat = parseMessage(
+      buf({
+        id: 5,
+        message: "诊断",
+        user_id: 42,
+        builtin_skill_name: "ai-collaboration-diagnostic",
+      }),
+    );
+    const nested = parseMessage(
+      buf({
+        id: 9,
+        body: {
+          message: "速报",
+          user_id: 42,
+          builtin_skill_name: "ai-public-opinion-brief",
+        },
+      }),
+    );
+    expect(flat?.builtinSkillName).toBe("ai-collaboration-diagnostic");
+    expect(nested?.builtinSkillName).toBe("ai-public-opinion-brief");
+  });
+
+  it("drops an unknown bundled skill name without dropping the turn", () => {
+    const msg = parseMessage(
+      buf({ id: 5, message: "hello", user_id: 42, builtin_skill_name: "unknown-skill" }),
+    );
+    expect(msg).not.toBeNull();
+    expect(msg?.builtinSkillName).toBeUndefined();
+  });
+
   it("defaults hasAttachment to false when absent", () => {
     const msg = parseMessage(buf({ id: 5, message: "hello", user_id: 42 }));
     expect(msg?.hasAttachment).toBe(false);

@@ -24,6 +24,7 @@ type AgentEventListener = (evt: {
   data: Record<string, unknown>;
   sessionKey?: string;
 }) => void;
+type SubagentRunParams = Parameters<PluginRuntime["subagent"]["run"]>[0];
 
 const USER_ID = "42";
 const SESSION_ID = "s1";
@@ -76,7 +77,7 @@ function createRuntimeMock(options: {
    */
   onWait?: (listener: AgentEventListener | undefined) => void;
   sessionMessages?: unknown[];
-  onRunArgs?: (args: { message: string }) => void;
+  onRunArgs?: (args: SubagentRunParams) => void;
   onWaitArgs?: (args: { runId: string; timeoutMs: number }) => void;
   /** Override the run outcome to exercise the timeout/error exit paths. */
   waitStatus?: "ok" | "timeout" | "error";
@@ -92,7 +93,7 @@ function createRuntimeMock(options: {
       },
     },
     subagent: {
-      run: async (args: { message: string }) => {
+      run: async (args: SubagentRunParams) => {
         options.onRunArgs?.(args);
         options.onRun(listener);
         return { runId: "r1" };
@@ -1315,6 +1316,48 @@ describe("processChatMessage", () => {
     const skillIdx = capturedMessage.indexOf("启用了以下自定义技能");
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(skillIdx).toBeGreaterThan(userIdx);
+  });
+
+  it("runs with only the selected bundled skill and ignores custom skill ids", async () => {
+    let capturedSkillFilter: string[] | undefined;
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedSkillFilter = args.skillFilter;
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const resolveMany = vi.fn(async () => [
+      { id: 3, name: "不应加载", content: "不应注入", description: null },
+    ]);
+    const skillLookup = { resolveMany } as unknown as SkillLookup;
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        skillIds: [3],
+        builtinSkillName: "ai-collaboration-diagnostic",
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      skillLookup,
+    );
+
+    expect(capturedSkillFilter).toEqual(["ai-collaboration-diagnostic"]);
+    expect(resolveMany).not.toHaveBeenCalled();
+    expect(capturedMessage).not.toContain("启用了以下自定义技能");
+    expect(capturedMessage).not.toContain("不应注入");
   });
 
   it("does not inject a skill block when no skill id resolves", async () => {

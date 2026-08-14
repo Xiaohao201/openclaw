@@ -655,7 +655,7 @@ export async function processChatMessage(
     // message. Ownership + is_enable are enforced in the lookup; unresolved ids
     // are simply dropped. Failure degrades to an ordinary turn (no skills).
     let selectedSkills: ResolvedSkill[] = [];
-    if (chatMsg.skillIds?.length && skillLookup) {
+    if (!chatMsg.builtinSkillName && chatMsg.skillIds?.length && skillLookup) {
       selectedSkills = await skillLookup.resolveMany(chatMsg.skillIds, userId, logger);
       if (selectedSkills.length) {
         logger.info(
@@ -1124,6 +1124,7 @@ export async function processChatMessage(
       const runResult = await runtime.subagent.run({
         sessionKey,
         message: `${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        ...(chatMsg.builtinSkillName ? { skillFilter: [chatMsg.builtinSkillName] } : {}),
         deliver: false,
       });
 

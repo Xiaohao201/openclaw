@@ -43,6 +43,19 @@ const skillIdsSchema = z
     return ids.length ? ids.slice(0, SKILL_IDS_MAX) : undefined;
   });
 
+const BUILTIN_SKILL_NAMES = new Set([
+  "infringement-judgment",
+  "institution-violation-judgment",
+  "gov-public-opinion-analysis-agent",
+  "ai-public-opinion-brief",
+  "ai-collaboration-diagnostic",
+]);
+const builtinSkillNameSchema = z
+  .string()
+  .optional()
+  .transform((value) => (value && BUILTIN_SKILL_NAMES.has(value) ? value : undefined))
+  .catch(undefined);
+
 // Attachment reference (see types.AttachmentRef). Additive and optional:
 // ordinary chat and old producers omit it. Validated per-element by
 // parseAttachments (NOT inline in the message schema) so a malformed/old-format
@@ -97,6 +110,7 @@ const rabbitMqMessageSchema = z.object({
       topic: z.string().optional(),
       template_id: templateIdSchema,
       skill_ids: skillIdsSchema,
+      builtin_skill_name: builtinSkillNameSchema,
       has_attachment: z.boolean().optional(),
       // Lenient on purpose: validated/filtered by parseAttachments so a bad
       // entry never fails the whole message. See attachmentRefSchema note.
@@ -114,6 +128,7 @@ const rabbitMqMessageSchema = z.object({
   topic: z.string().optional(),
   template_id: templateIdSchema,
   skill_ids: skillIdsSchema,
+  builtin_skill_name: builtinSkillNameSchema,
   has_attachment: z.boolean().optional(),
   // Lenient on purpose (validated by parseAttachments, see above).
   attachments: z.unknown().optional(),
@@ -196,6 +211,7 @@ export function parseMessage(
       // producer can put it wherever the rest of its fields live.
       templateId: msg.body.template_id ?? msg.template_id,
       skillIds: msg.body.skill_ids ?? msg.skill_ids,
+      builtinSkillName: msg.body.builtin_skill_name ?? msg.builtin_skill_name,
       hasAttachment: msg.body.has_attachment ?? msg.has_attachment ?? false,
       attachments: parseAttachments(msg.body.attachments ?? msg.attachments),
     };
@@ -215,6 +231,7 @@ export function parseMessage(
     topic: msg.topic,
     templateId: msg.template_id,
     skillIds: msg.skill_ids,
+    builtinSkillName: msg.builtin_skill_name,
     hasAttachment: msg.has_attachment ?? false,
     attachments: parseAttachments(msg.attachments),
   };

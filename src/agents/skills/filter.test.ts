@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   matchesSkillFilter,
+  mergeSkillFilters,
   normalizeSkillFilter,
   normalizeSkillFilterForComparison,
 } from "./filter.js";
@@ -31,5 +32,12 @@ describe("skills/filter", () => {
     );
     expect(matchesSkillFilter(undefined, undefined)).toBe(true);
     expect(matchesSkillFilter([], undefined)).toBe(false);
+  });
+
+  it("intersects a per-run filter with the configured agent filter", () => {
+    expect(mergeSkillFilters(["weather", "github"], ["github", "docs"])).toEqual(["github"]);
+    expect(mergeSkillFilters(["weather"], undefined)).toEqual(["weather"]);
+    expect(mergeSkillFilters(undefined, ["docs"])).toEqual(["docs"]);
+    expect(mergeSkillFilters([], ["docs"])).toEqual([]);
   });
 });

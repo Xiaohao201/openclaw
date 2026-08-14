@@ -138,6 +138,12 @@ export interface ChatMessage {
    * context — never spliced into the visible message. Absent for ordinary chat.
    */
   skillIds?: number[];
+  /**
+   * One bundled OpenClaw skill selected from a first-party frontend card.
+   * When present, the agent run exposes only this skill and ignores custom
+   * skill ids for the turn.
+   */
+  builtinSkillName?: string;
 }
 
 /**

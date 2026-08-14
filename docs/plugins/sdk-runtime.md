@@ -97,6 +97,7 @@ const { runId } = await api.runtime.subagent.run({
   message: "Expand this query into focused follow-up searches.",
   provider: "openai", // optional override
   model: "gpt-4.1-mini", // optional override
+  skillFilter: ["github"], // optional per-run skill allowlist
   deliver: false,
 });
 
@@ -120,6 +121,10 @@ await api.runtime.subagent.deleteSession({
   `plugins.entries.<id>.subagent.allowModelOverride: true` in config.
   Untrusted plugins can still run subagents, but override requests are rejected.
 </Warning>
+
+`skillFilter` limits the run's available skills to the named entries. OpenClaw
+intersects this list with the target agent's configured skill filter, so a
+plugin cannot use it to widen the agent's existing access.
 
 ### `api.runtime.taskFlow`
 

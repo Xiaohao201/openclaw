@@ -11,6 +11,8 @@ export type SubagentRunParams = {
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  /** Optional per-run skill allowlist, intersected with the target agent's configured filter. */
+  skillFilter?: string[];
   lane?: string;
   deliver?: boolean;
   idempotencyKey?: string;

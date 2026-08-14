@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/violation judgments: keep default monitoring-project context out of institution and general violation-review requests so enterprise project names are not mistaken for the reporting subject.
 - Leading v2/judgment actions: submit confirmed reports and enterprise complaints directly from Suheng's judgment without creating or resolving an intermediate content-detection task.
 - Legal check/tools: hide the legacy system content-detection create and status tools from agents so judgment skills cannot fall back to asynchronous detection tasks.
+- RabbitMQ/skills: honor a frontend-selected bundled skill as an exclusive per-run skill filter, including existing sessions with cached skill snapshots.
 
 ## 2026.4.15
 
