@@ -1,7 +1,7 @@
 {
   "id": "leading-v2",
   "name": "Leading V2 Backend",
-  "description": "Submit tasks and poll their status across leading-v2.0 backend modules (失效链接检测, 行业/舆情报告, 舆情监测, AI 文书) by calling the PHP HTTP API as the chat user via Authorization: Bearer <per-uid apiKey>. Tools are scoped to rabbitmq-<userId> agents; per-uid keys are resolved (and auto-provisioned) from the api_key table.",
+  "description": "Submit tasks and poll their status across leading-v2.0 backend modules (失效链接检测, 行业/舆情报告, 舆情监测, AI 文书), and send explicitly confirmed SMTP email. Tools are scoped to rabbitmq-<userId> agents; per-uid keys are resolved (and auto-provisioned) from the api_key table.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -44,10 +44,26 @@
         "additionalProperties": false,
         "description": "Proactive completion notifications: poll submitted async tasks and report results when done.",
         "properties": {
-          "enabled": { "type": "boolean", "default": true, "description": "Master switch (default on)." },
-          "pollIntervalMs": { "type": "number", "default": 30000, "description": "Backend status poll interval." },
-          "ttlMs": { "type": "number", "default": 7200000, "description": "Give up notifying after this long (default 2h)." },
-          "maxPerTick": { "type": "number", "default": 5, "description": "Max tasks polled per tick." }
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Master switch (default on)."
+          },
+          "pollIntervalMs": {
+            "type": "number",
+            "default": 30000,
+            "description": "Backend status poll interval."
+          },
+          "ttlMs": {
+            "type": "number",
+            "default": 7200000,
+            "description": "Give up notifying after this long (default 2h)."
+          },
+          "maxPerTick": {
+            "type": "number",
+            "default": 5,
+            "description": "Max tasks polled per tick."
+          }
         }
       },
       "mercure": {
@@ -62,11 +78,14 @@
       "smtp": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Direct SMTP (SSL/465 or STARTTLS/587) for offline notification email to report subscribers. Falls back to SMTP_* env. Recipient resolved from feed_report_subscriber.",
+        "description": "Direct SMTP (SSL/465 or STARTTLS/587) for confirmed send_email calls and offline notification email to report subscribers. Falls back to SMTP_* env; notification recipients are resolved from feed_report_subscriber.",
         "properties": {
           "host": { "type": "string", "description": "SMTP server, e.g. smtp.exmail.qq.com" },
           "port": { "type": "number", "description": "465 (SSL) | 587 (STARTTLS) | 25" },
-          "user": { "type": "string", "description": "Login account = sender, e.g. zhoufeng@ibtai.com" },
+          "user": {
+            "type": "string",
+            "description": "Login account = sender, e.g. zhoufeng@ibtai.com"
+          },
           "password": { "type": "string", "description": "授权码 (client auth code)" },
           "from": { "type": "string", "description": "From header; defaults to user" }
         },

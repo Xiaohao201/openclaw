@@ -13,7 +13,6 @@ export interface EmailMessage {
   to: string;
   subject: string;
   text: string;
-  html?: string;
 }
 
 let cachedTransport: nodemailer.Transporter | null = null;
@@ -40,7 +39,6 @@ export async function sendEmail(cfg: SmtpConfig, msg: EmailMessage): Promise<voi
     to: msg.to,
     subject: msg.subject,
     text: msg.text,
-    html: msg.html ?? `<pre style="font-family:inherit;white-space:pre-wrap">${msg.text}</pre>`,
   });
 }
 
@@ -54,5 +52,11 @@ export function resolveSmtpConfig(pluginConfig: Record<string, unknown>): SmtpCo
   if (!host || !Number.isFinite(port) || port <= 0 || !user || !password) {
     return undefined;
   }
-  return { host, port, user, password, from: (block?.from as string) ?? process.env.SMTP_FROM ?? user };
+  return {
+    host,
+    port,
+    user,
+    password,
+    from: (block?.from as string) ?? process.env.SMTP_FROM ?? user,
+  };
 }

@@ -20,7 +20,13 @@ const smtp: SmtpConfig = {
   user: "zhoufeng@ibtai.com",
   password: "authcode",
 };
-const db = { host: "h", port: 3306, user: "u", password: "p", database: "superworker" } as MySqlConfig;
+const db = {
+  host: "h",
+  port: 3306,
+  user: "u",
+  password: "p",
+  database: "superworker",
+} as MySqlConfig;
 const note: Notification = {
   id: "crawl_refresh:U1",
   uid: "1749",
@@ -50,6 +56,7 @@ describe("EmailNotificationTransport", () => {
       to: "user@ex.com",
       subject: "互动量刷新完成",
     });
+    expect(mail).not.toHaveProperty("html");
     expect(String(mail.text)).toContain("转10 评5 赞100");
   });
 

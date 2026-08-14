@@ -32,6 +32,7 @@ import { resolveNotifyConfig } from "./src/notify/config.js";
 import { pollCrawlRefresh } from "./src/notify/crawl-adapter.js";
 import { debugLog } from "./src/notify/debug.js";
 import { resolveSmtpConfig } from "./src/notify/email-client.js";
+import { createEmailSendToolFactory } from "./src/notify/email-tool.js";
 import { clearNotifyEnqueue, setNotifyEnqueue } from "./src/notify/enqueue-bridge.js";
 import { pollLegalCheck } from "./src/notify/legal-check-adapter.js";
 import { pollLinkCheck } from "./src/notify/link-check-adapter.js";
@@ -80,9 +81,9 @@ export default definePluginEntry({
   id: "leading-v2",
   name: "Leading V2 Backend",
   description:
-    "Submit tasks and poll their status across leading-v2.0 backend modules by calling the PHP HTTP API " +
-    "as the chat user (Authorization: Bearer <per-uid apiKey>). Tools are scoped to rabbitmq-<userId> " +
-    "agents; per-uid keys are resolved (and auto-provisioned) from the api_key table.",
+    "Submit tasks and poll their status across leading-v2.0 backend modules, and send explicitly " +
+    "confirmed SMTP email. Tools are scoped to rabbitmq-<userId> agents; per-uid keys are resolved " +
+    "(and auto-provisioned) from the api_key table.",
   register(api: OpenClawPluginApi) {
     const config = resolveConfig(api.pluginConfig ?? {});
     // One shared resolver for the whole backend: each uid is minted/cached once.
@@ -146,6 +147,11 @@ export default definePluginEntry({
     api.registerTool(createFeedReanalyzeToolFactory(api, resolver), { name: "feed_reanalyze" });
     api.registerTool(createMonthlyStatsToolFactory(api, resolver), { name: "monthly_stats" });
     api.registerTool(createHotRankToolFactory(api), { name: "hot_rank" });
+
+    // --- Explicitly confirmed outbound email ---
+    api.registerTool(createEmailSendToolFactory(api, resolveSmtpConfig(api.pluginConfig ?? {})), {
+      name: "send_email",
+    });
 
     // --- ai (任务管理 + 维权文书) ---
     api.registerTool(createJobListToolFactory(api, resolver), { name: "job_list" });
