@@ -575,27 +575,50 @@ function loadSkillEntriesFromFilesystem(
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
     .sort((a, b) => a.name.localeCompare(b.name, "en"))
-    .map((skill) => {
-      const frontmatter =
-        readSkillFrontmatterSafe({
-          rootDir: skill.baseDir,
-          filePath: skill.filePath,
-          maxBytes: limits.maxSkillFileBytes,
-        }) ?? ({} as ParsedSkillFrontmatter);
-      const invocation = resolveSkillInvocationPolicy(frontmatter);
-      return {
-        skill,
-        frontmatter,
-        metadata: resolveOpenClawMetadata(frontmatter),
-        invocation,
-        exposure: {
-          includeInRuntimeRegistry: true,
-          includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
-          userInvocable: invocation.userInvocable !== false,
-        },
-      };
-    });
+    .map((skill) => createSkillEntry(skill, limits.maxSkillFileBytes));
   return skillEntries;
+}
+
+function createSkillEntry(skill: Skill, maxSkillFileBytes: number): SkillEntry {
+  const frontmatter =
+    readSkillFrontmatterSafe({
+      rootDir: skill.baseDir,
+      filePath: skill.filePath,
+      maxBytes: maxSkillFileBytes,
+    }) ?? ({} as ParsedSkillFrontmatter);
+  const invocation = resolveSkillInvocationPolicy(frontmatter);
+  return {
+    skill,
+    frontmatter,
+    metadata: resolveOpenClawMetadata(frontmatter),
+    invocation,
+    exposure: {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+      userInvocable: invocation.userInvocable !== false,
+    },
+  };
+}
+
+function loadBundledSkillEntries(opts?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  bundledSkillsDir?: string;
+}): SkillEntry[] {
+  const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  if (!bundledSkillsDir) {
+    return [];
+  }
+  const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
+  const loaded = loadSkillsFromDirSafe({
+    dir: bundledSkillsDir,
+    source: "openclaw-bundled",
+    maxBytes: limits.maxSkillFileBytes,
+  });
+  return unwrapLoadedSkills(loaded)
+    .sort((a, b) => a.name.localeCompare(b.name, "en"))
+    .slice(0, limits.maxSkillsLoadedPerSource)
+    .map((skill) => createSkillEntry(skill, limits.maxSkillFileBytes));
 }
 
 function loadSkillEntries(
@@ -621,7 +644,18 @@ function loadSkillEntries(
     return loadSkillEntriesFromFilesystem(workspaceDir, opts);
   }
 
-  return dbEntries;
+  // Per-user DB skills are additive to bundled product skills. Returning the DB
+  // cache alone made every bundled skill disappear as soon as a user had one
+  // saved skill, so an explicitly named `$skill` could silently fall back to a
+  // different DB skill. Preserve workspace/DB precedence for duplicate names.
+  const merged = new Map<string, SkillEntry>();
+  for (const entry of loadBundledSkillEntries(opts)) {
+    merged.set(entry.skill.name, entry);
+  }
+  for (const entry of dbEntries) {
+    merged.set(entry.skill.name, entry);
+  }
+  return Array.from(merged.values()).sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
 }
 
 function escapeXml(str: string): string {

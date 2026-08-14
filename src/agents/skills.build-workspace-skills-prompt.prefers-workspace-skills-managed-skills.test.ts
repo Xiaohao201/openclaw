@@ -1,8 +1,10 @@
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { setSkillsDbCache } from "../infra/skills-db-cache.js";
 import { withEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { loadSkillsFromDirSafe } from "./skills/local-loader.js";
 import { buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-prompt-suite-");
@@ -13,6 +15,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fixtureSuite.cleanup();
+});
+
+afterEach(() => {
+  setSkillsDbCache(null);
 });
 
 describe("buildWorkspaceSkillsPrompt", () => {
@@ -54,6 +60,50 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
     expect(prompt).not.toContain("Managed version");
     expect(prompt).not.toContain("Bundled version");
+  });
+  it("keeps bundled skills visible when DB-backed skills are loaded", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("db-and-bundled");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const bundledSkillDir = path.join(bundledDir, "government-report");
+    const bundledConflictDir = path.join(bundledDir, "custom-brief");
+    const dbSkillDir = path.join(workspaceDir, "skills", "custom-brief");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "government-report",
+      description: "Bundled government report",
+    });
+    await writeSkill({
+      dir: bundledConflictDir,
+      name: "custom-brief",
+      description: "Bundled conflicting brief",
+    });
+    await writeSkill({
+      dir: dbSkillDir,
+      name: "custom-brief",
+      description: "User DB brief",
+    });
+
+    const { skills } = loadSkillsFromDirSafe({
+      dir: dbSkillDir,
+      source: "openclaw-workspace",
+    });
+    setSkillsDbCache(
+      skills.map((skill) => ({
+        skill,
+        frontmatter: { name: skill.name, description: skill.description },
+      })),
+      2059,
+    );
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir: bundledDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+
+    expect(prompt).toContain("User DB brief");
+    expect(prompt).toContain("Bundled government report");
+    expect(prompt).not.toContain("Bundled conflicting brief");
   });
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
