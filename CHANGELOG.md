@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Web tools: add a bounded `full_text_search` plugin tool for indexed cross-platform content with date, platform, sentiment, and originality filters; explicit Chinese “观象台” requests route to full-text search, while ordinary discovery and live URL fetching stay on `web_search` and `web_fetch`.
 - Report generator/email: send completed daily, weekly, and monthly reports to matching MySQL subscribers over SMTP, using the topic sender signature or `观舆卫士` when unset.
 - Leading v2/email: add a confirmed `send_email` tool for sending the current conversation's plain-text content to one validated recipient through the configured SMTP account.
+- Agents/skills: upgrade the bundled AI public-opinion brief to V3.1 with staged analysis and slot locking, source-aware media deduplication, strictly templated three- or four-section briefs, and leadership-approved reference examples.
 
 ### Fixes
 

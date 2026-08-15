@@ -7,7 +7,7 @@ import { loadSkillsFromDirSafe } from "./local-loader.js";
 const skillDir = path.resolve("skills/ai-public-opinion-brief");
 
 describe("bundled AI public-opinion brief skill", () => {
-  it("is discoverable with the complete V2 brief specification", async () => {
+  it("is discoverable with the complete V3.1 brief specification", async () => {
     const bundledSkillsDir = resolveBundledSkillsDir();
     const { skills } = loadSkillsFromDirSafe({
       dir: bundledSkillsDir!,
@@ -19,22 +19,66 @@ describe("bundled AI public-opinion brief skill", () => {
     expect(skill?.description).toContain("AI舆情速报");
 
     const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-    expect(content).toContain("references/ai-public-opinion-brief-v2.md");
+    expect(content).toContain("references/ai-public-opinion-brief-v3.1.md");
+    expect(content).not.toContain("ai-public-opinion-brief-v2.md");
     expect(content).toContain("默认检索公开网络信息");
     expect(content).toContain("不得编造");
+    expect(content).toContain("后台分析 → 锁定槽位 → 模板渲染");
+    expect(content).toContain("references/leadership-approved-examples.md");
+    expect(content).toContain("不得复用其中的事件事实");
+
+    await expect(
+      fs.access(path.join(skillDir, "references/ai-public-opinion-brief-v2.md")),
+    ).rejects.toThrow();
 
     const reference = await fs.readFile(
-      path.join(skillDir, "references/ai-public-opinion-brief-v2.md"),
+      path.join(skillDir, "references/ai-public-opinion-brief-v3.1.md"),
       "utf8",
     );
-    expect(reference).toContain("version: 2.0.0");
-    expect(reference).toContain("# AI舆情速报 Skill V2.0");
+    expect(reference).toContain("version: 3.1.0");
+    expect(reference).toContain("# AI舆情速报 Skill V3.1");
+    expect(reference).toContain("阶段A：后台分析");
+    expect(reference).toContain("阶段B：锁定槽位");
+    expect(reference).toContain("阶段C：按领导审定模板渲染成稿");
+    expect(reference).toContain("# 16. 模板A｜3部分简版");
+    expect(reference).toContain("# 17. 模板B｜4部分完整版");
+    for (let section = 0; section <= 63; section += 1) {
+      expect(reference).toMatch(new RegExp(`^# ${section}\\. `, "m"));
+    }
     expect(reference).toContain("一、基本情况及热度");
     expect(reference).toContain("二、传播情况");
     expect(reference).toContain("三、工作情况");
     expect(reference).toContain("四、下一步工作");
-    expect(reference).toContain("据反馈，（）。");
-    expect(reference).toContain("第一优先级：事实不能编造");
+    expect(reference).toContain("后台分析不是正文素材");
+    expect(reference).toContain("平台不是媒体，转载不是报道，自媒体不计入媒体");
+
+    const examples = await fs.readFile(
+      path.join(skillDir, "references/leadership-approved-examples.md"),
+      "utf8",
+    );
+    expect(examples).toContain("case_count: 5");
+    expect(examples).toContain("anonymized: true");
+    expect(examples).toContain("案例不是事实库");
+    expect(examples.match(/^【舆情(?:速报|续报)】/gm)).toHaveLength(5);
+    const expectedExampleHeadings = [
+      "## 案例一｜一般民生/经营风险，3 部分简版",
+      "## 案例二｜线下维权/敏感现场，3 部分简版",
+      "## 案例三｜重要会议/重大活动，3 部分简版",
+      "## 案例四｜重要会议/重大活动，4 部分续报",
+      "## 案例五｜劳动权益/职场舆情，4 部分完整版",
+    ];
+    for (const heading of expectedExampleHeadings) {
+      expect(examples).toContain(heading);
+    }
+    const exampleBlocks = Array.from(
+      examples.matchAll(/```text\n([\s\S]*?)\n```/g),
+      (match) => match[1],
+    );
+    expect(exampleBlocks).toHaveLength(5);
+    for (const [index, block] of exampleBlocks.entries()) {
+      expect(block.match(/^[一二三四]、/gm)).toHaveLength(index < 3 ? 3 : 4);
+    }
+    expect(examples).not.toMatch(/weibo\.com|douyin\.com|toutiao\.com|iesdouyin\.com/);
 
     const metadata = await fs.readFile(path.join(skillDir, "agents/openai.yaml"), "utf8");
     expect(metadata).toContain('display_name: "舆情速报"');
