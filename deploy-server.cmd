@@ -5,6 +5,10 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
 
+echo [openclaw-deploy] Pulling origin/v1.
+git pull origin v1
+if errorlevel 1 goto :failed
+
 echo [openclaw-deploy] Installing dependencies.
 call pnpm install
 if errorlevel 1 goto :failed

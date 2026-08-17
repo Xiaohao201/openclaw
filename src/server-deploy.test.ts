@@ -23,6 +23,16 @@ async function createSandbox(): Promise<Sandbox> {
   await mkdir(runDir, { recursive: true });
   await writeFile(logPath, "");
   await writeFile(
+    join(binDir, "git.cmd"),
+    [
+      "@echo off",
+      'echo %CD%^|%*>>"%DEPLOY_TEST_LOG%"',
+      'if "%DEPLOY_TEST_FAIL_COMMAND%"=="pull" if "%~1 %~2 %~3"=="pull origin v1" exit /b 21',
+      "exit /b 0",
+      "",
+    ].join("\r\n"),
+  );
+  await writeFile(
     join(binDir, "pnpm.cmd"),
     [
       "@echo off",
@@ -37,7 +47,7 @@ async function createSandbox(): Promise<Sandbox> {
   return { binDir, logPath, runDir };
 }
 
-function runDeploy(sandbox: Sandbox, failCommand?: "install" | "build" | "stop") {
+function runDeploy(sandbox: Sandbox, failCommand?: "pull" | "install" | "build" | "stop") {
   return spawnSync("cmd.exe", ["/d", "/c", join(repoRoot, "deploy-server.cmd")], {
     cwd: sandbox.runDir,
     env: {
@@ -69,10 +79,11 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     await sandboxTracker.cleanup();
   });
 
-  it("installs, builds, stops the old gateway, and runs the new gateway in the foreground", async () => {
+  it("pulls, installs, builds, stops the old gateway, and runs the new gateway in the foreground", async () => {
     const result = runDeploy(sandbox);
     expect(result.status, result.stderr).toBe(0);
     expect(await readCommands(sandbox)).toEqual([
+      "pull origin v1",
       "install",
       "build",
       "openclaw gateway stop",
@@ -84,7 +95,7 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     await writeFile(sandbox.logPath, "");
     const result = runDeploy(sandbox, "build");
     expect(result.status).toBe(23);
-    expect(await readCommands(sandbox)).toEqual(["install", "build"]);
+    expect(await readCommands(sandbox)).toEqual(["pull origin v1", "install", "build"]);
   });
 
   it("does not start a new gateway when stopping the old one fails", async () => {
@@ -92,6 +103,7 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     const result = runDeploy(sandbox, "stop");
     expect(result.status).toBe(24);
     expect(await readCommands(sandbox)).toEqual([
+      "pull origin v1",
       "install",
       "build",
       "openclaw gateway stop",
