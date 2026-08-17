@@ -238,7 +238,7 @@ async function resolveReportTopic(args: {
  *
  * The ack is never blocked on a feed COUNT: a high-volume topic (广汽本田 etc.)
  * makes that COUNT slow, and running it BEFORE the ack used to blow the
- * frontend's response deadline ("处理超时：未收到响应（可能后端记录未持久化）").
+ * frontend's response deadline (which now shows the standard Suheng learning fallback).
  * The empty-data case is now handled authoritatively by the report-generator
  * (it short-circuits to a "暂无数据" report when its full-set total is 0); the
  * COUNT here is a best-effort volume hint pushed off the critical path.
@@ -433,6 +433,7 @@ export type ChatTurnOptions = {
 
 /** Historical ceiling; kept as the default so an unset config changes nothing. */
 export const DEFAULT_TURN_TIMEOUT_MS = 300_000;
+export const TURN_TIMEOUT_REPLY = "这个任务暂时无法完成，但是夙衡已经自动学习，争取尽早完善。";
 /** Below a minute no realistic tool-using turn finishes; above an hour the broker complains. */
 const MIN_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 3_600_000;
@@ -1134,9 +1135,9 @@ export async function processChatMessage(
       // assistant events fire during waitForRun below, after this assignment.
       currentRunId = runResult.runId;
 
-      // Step 5: Wait for completion. The ceiling is operator-tunable because a
-      // turn that exceeds it persists no response at all — it must sit at or
-      // above the frontend's own request timeout (see ChatTurnConfig).
+      // Step 5: Wait for completion. The ceiling is operator-tunable; keep it at
+      // or below the frontend's idle watchdog so the terminal fallback event can
+      // still reach the active chat connection (see ChatTurnConfig).
       const waitResult = await runtime.subagent.waitForRun({
         runId: runResult.runId,
         timeoutMs: turnTimeoutMs,
@@ -1158,10 +1159,13 @@ export async function processChatMessage(
           `[CHAT_PIPELINE] Subagent timed out after ${Math.round(turnTimeoutMs / 1000)}s ` +
             `for runId=${runResult.runId}, historyId=${chatMsg.historyId}`,
         );
-        await streamPusherCtx.streamPusher.pushError("Processing timed out");
+        // Use the error event as a terminal replacement signal: ai-assistant
+        // replaces any partial bubble with this exact customer-facing fallback.
+        await streamPusherCtx.streamPusher.pushError(TURN_TIMEOUT_REPLY);
+        await historyManager.updateResponse(chatMsg.historyId, TURN_TIMEOUT_REPLY);
         await persistTimeline("failed");
         await persistUsage();
-        return "Error: Processing timed out";
+        return TURN_TIMEOUT_REPLY;
       }
 
       // Step 6: Extract response from session messages as the canonical source

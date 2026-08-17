@@ -14,7 +14,7 @@ import { resolveUsageCurrencyPolicy } from "./src/usage-pricing.js";
 
 /**
  * Clamp the channel prefetch to a sane window. Default 6: at the default 300s
- * turn timeout, a single user's back-to-back burst keeps its last unacked
+ * turn timeout, a single session's back-to-back burst keeps its last unacked
  * message under RabbitMQ's default 30min consumer_timeout (6 × 300s). Raising
  * prefetch — or `chat.turnTimeoutSeconds` — requires raising consumer_timeout
  * on the broker first (see assertAckBudget).
@@ -201,9 +201,9 @@ export default definePluginEntry({
           ctx.logger,
         );
 
-        // Per-user serialization lives in the consumer (see message-consumer.ts):
-        // with prefetch > 1 different users' turns run concurrently while one
-        // user's messages stay strictly ordered.
+        // Per-session serialization lives in the consumer (see message-consumer.ts):
+        // with prefetch > 1 different windows run concurrently while messages
+        // inside one conversation stay strictly ordered.
         const client = new RabbitMqClient(
           pluginConfig.rabbitmq,
           ctx.logger,

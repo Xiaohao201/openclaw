@@ -8,8 +8,8 @@ function msgOf(payload: unknown): amqplib.ConsumeMessage {
   return { content: Buffer.from(JSON.stringify(payload)) } as amqplib.ConsumeMessage;
 }
 
-function chatPayload(historyId: number, userId: string) {
-  return { id: historyId, message: `msg-${historyId}`, user_id: userId, session_id: "s1" };
+function chatPayload(historyId: number, userId: string, sessionId = "s1") {
+  return { id: historyId, message: `msg-${historyId}`, user_id: userId, session_id: sessionId };
 }
 
 function makeGate() {
@@ -32,7 +32,7 @@ function makeDeps(overrides?: Partial<MessageConsumerDeps>): MessageConsumerDeps
 }
 
 describe("createMessageConsumer", () => {
-  it("serializes same-user chat messages in delivery order", async () => {
+  it("serializes messages from the same user and session in delivery order", async () => {
     const gate1 = makeGate();
     const started: number[] = [];
     const runChat = vi.fn(async (chatMsg: { historyId: number }) => {
@@ -53,6 +53,50 @@ describe("createMessageConsumer", () => {
     gate1.resolve();
     await Promise.all([p1, p2]);
     expect(started).toEqual([1, 2]);
+  });
+
+  it("runs the same user's different window sessions concurrently", async () => {
+    const gate1 = makeGate();
+    const started: number[] = [];
+    const runChat = vi.fn(async (chatMsg: { historyId: number }) => {
+      started.push(chatMsg.historyId);
+      if (chatMsg.historyId === 1) {
+        await gate1.promise;
+      }
+    });
+    const handler = createMessageConsumer(makeDeps({ runChat: runChat as never }));
+
+    const p1 = handler(msgOf(chatPayload(1, "1749", "window-a")));
+    const p2 = handler(msgOf(chatPayload(2, "1749", "window-b")));
+
+    await tick();
+    expect(started).toEqual([1, 2]);
+    await p2;
+
+    gate1.resolve();
+    await p1;
+  });
+
+  it("does not merge legacy messages that have no session id", async () => {
+    const gate1 = makeGate();
+    const started: number[] = [];
+    const runChat = vi.fn(async (chatMsg: { historyId: number }) => {
+      started.push(chatMsg.historyId);
+      if (chatMsg.historyId === 1) {
+        await gate1.promise;
+      }
+    });
+    const handler = createMessageConsumer(makeDeps({ runChat: runChat as never }));
+
+    const p1 = handler(msgOf(chatPayload(1, "1749", "")));
+    const p2 = handler(msgOf(chatPayload(2, "1749", "")));
+
+    await tick();
+    expect(started).toEqual([1, 2]);
+    await p2;
+
+    gate1.resolve();
+    await p1;
   });
 
   it("runs different users' messages concurrently", async () => {
@@ -92,7 +136,7 @@ describe("createMessageConsumer", () => {
       makeDeps({ runWarmup: runWarmup as never, runChat: runChat as never }),
     );
 
-    const p1 = handler(msgOf({ type: "warmup", user_id: "1749" }));
+    const p1 = handler(msgOf({ type: "warmup", user_id: "1749", session_id: "s1" }));
     const p2 = handler(msgOf(chatPayload(1, "1749")));
 
     await tick();

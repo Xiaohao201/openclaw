@@ -9,8 +9,8 @@ export interface RabbitMqConfig {
   reportTaskQueue: string;
   /**
    * Channel prefetch: how many unacked messages the broker hands us at once,
-   * i.e. the cross-user concurrency ceiling (per-user ordering is enforced in
-   * message-consumer.ts). Keep ≤ 6 unless the broker's consumer_timeout has
+   * i.e. the cross-session concurrency ceiling (per-session ordering is enforced
+   * in message-consumer.ts). Keep ≤ 6 unless the broker's consumer_timeout has
    * been raised (see clampPrefetch in index.ts).
    */
   prefetch: number;
@@ -44,11 +44,11 @@ export interface MercureConfig {
 export interface ChatTurnConfig {
   /**
    * How long one chat turn may run before the pipeline gives up on the subagent
-   * (`waitForRun`). A turn that blows this ceiling persists no response at all,
-   * so the value must stay at or above the frontend's own request timeout —
-   * otherwise the frontend gives up first and the backend work is wasted.
+   * (`waitForRun`). A turn that blows this ceiling returns and persists the
+   * standard Suheng learning fallback. Keep the value at or below the frontend's
+   * idle timeout so the terminal event arrives before the browser gives up.
    *
-   * Raising it also raises the worst-case unacked time for a single user's
+   * Raising it also raises the worst-case unacked time for a single session's
    * queued burst (prefetch × timeout), which must remain under the broker's
    * `consumer_timeout` (see clampPrefetch in index.ts).
    */

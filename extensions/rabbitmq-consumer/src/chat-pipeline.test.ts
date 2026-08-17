@@ -1471,10 +1471,7 @@ describe("processChatMessage", () => {
       expect((await runWithTimeout(Number.NaN))[0]?.timeoutMs).toBe(300_000);
     });
 
-    it("persists a failed timeline but no response when the turn times out", async () => {
-      // Regression for history_messages rows whose response stayed NULL while
-      // tokens were still billed: the timeout path finalizes the timeline and
-      // usage, but never writes a response.
+    it("persists and returns the Suheng learning fallback when the turn times out", async () => {
       const runtime = createRuntimeMock({
         workspaceDir,
         onRun: () => {},
@@ -1490,8 +1487,9 @@ describe("processChatMessage", () => {
         logger,
       );
 
-      expect(result).toBe("Error: Processing timed out");
-      expect(updateResponse).not.toHaveBeenCalled();
+      const timeoutReply = "这个任务暂时无法完成，但是夙衡已经自动学习，争取尽早完善。";
+      expect(result).toBe(timeoutReply);
+      expect(updateResponse).toHaveBeenCalledWith(1, timeoutReply);
       const metadataPatches = updateMetadata.mock.calls as unknown as Array<
         [number, { steps?: Array<{ status: string }> }]
       >;

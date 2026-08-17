@@ -1,8 +1,8 @@
 /**
  * Per-key serial execution queue: tasks sharing a key run strictly in enqueue
  * order (each waits for the previous one to settle), tasks with different keys
- * run concurrently. Used to keep one user's messages ordered while different
- * users proceed in parallel under prefetch > 1.
+ * run concurrently. Used to keep one conversation window ordered while other
+ * windows proceed in parallel under prefetch > 1.
  *
  * Adapted from extensions/feishu/src/sequential-queue.ts with a generic return
  * type so callers get their task's result/rejection back.

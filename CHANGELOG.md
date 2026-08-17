@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Leading v2/judgment actions: submit confirmed reports and enterprise complaints directly from Suheng's judgment without creating or resolving an intermediate content-detection task.
 - Legal check/tools: hide the legacy system content-detection create and status tools from agents so judgment skills cannot fall back to asynchronous detection tasks.
 - RabbitMQ/skills: honor a frontend-selected bundled skill as an exclusive per-run skill filter, including existing sessions with cached skill snapshots.
+- RabbitMQ/chat: isolate scheduling by conversation session so one user's multiple Suheng windows run concurrently, and persist the standard learning fallback when a turn reaches its configured timeout.
 
 ## 2026.4.15
 
