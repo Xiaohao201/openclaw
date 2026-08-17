@@ -986,6 +986,31 @@ describe("processChatMessage", () => {
     expect(capturedMessage).not.toContain("no-memory");
   });
 
+  it("injects the Suheng design context for visual artifact requests", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      { ...createChatMessage(), message: "请设计一个可交互的舆情看板" },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(capturedMessage).toContain("[suheng-design]");
+    expect(capturedMessage).toContain("Delivery compatibility for ai-assistant");
+    expect(capturedMessage).toContain(`[userId:${USER_ID}] 请设计一个可交互的舆情看板`);
+  });
+
   it("prefixes a no-memory directive when use_memory is false", async () => {
     // use_memory:false must reach the agent: memory tools are agent-level and
     // cannot be removed per-run, so we suppress recall via a prompt directive.

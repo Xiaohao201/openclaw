@@ -351,3 +351,16 @@ Before completing UI work, verify:
 - Both OpenKnot themes remain legible.
 - Mobile retains the same decision hierarchy.
 - The implementation reuses existing tokens instead of introducing isolated values.
+
+## 14. Runtime Delivery
+
+RabbitMQ chat turns receive a compact projection of this document only when the user explicitly asks for Suheng/OpenKnot design guidance or requests creation of a visual artifact such as a page, interface, dashboard, chart, or prototype. Ordinary analysis, search, summarization, and report turns must not receive the extra design context.
+
+The ai-assistant chat surface safely renders GFM Markdown, including headings, lists, tables, blockquotes, highlighted code, links, images, and citations. It does not execute JavaScript, iframe content, Mermaid, or ECharts configuration, and it does not provide a live HTML preview.
+
+Choose the delivery format accordingly:
+
+- Present ordinary explanations and compact data in Markdown.
+- Present static charts as PNG/SVG images with useful alternative text, plus a table or text summary when practical.
+- Deliver runnable or interactive designs as standalone HTML/CSS/JavaScript files through the available file-sharing path, with a concise Markdown summary and download link in chat.
+- Never paste a complete runnable page into the chat as raw rendered HTML.
