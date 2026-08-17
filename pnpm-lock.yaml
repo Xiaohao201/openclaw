@@ -1168,7 +1168,7 @@ importers:
         version: 3.22.0(@types/node@25.6.0)
       nodemailer:
         specifier: ^9.0.3
-        version: 9.0.3
+        version: 9.0.5
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -4362,6 +4362,9 @@ packages:
   '@types/nodemailer@6.4.24':
     resolution: {integrity: sha512-Ww4u0rT9wQNXh4JiQaIwx3QWdcOFXzOjQA2zc+jtFYNmQiT4mIUqcDin51bDFdkzKubFnQCZNK7FIHlPKQ/q9w==}
 
+  '@types/nodemailer@8.0.1':
+    resolution: {integrity: sha512-PxpaInm8V1JQDd4j0ds5HfvWQk8JupS1C0Picb96QJsrrRDjBH+DlK7L4ZdNSqNULhiZRQHc40nLVShaGxXAMw==}
+
   '@types/q@1.5.8':
     resolution: {integrity: sha512-hroOstUScF6zhIi+5+x0dzqrHA1EJi+Irri6b1fxolMTqqHIV/Cg77EtnQcZqZCu8hR3mX2BzIxN4/GzI68Kfw==}
 
@@ -6634,6 +6637,10 @@ packages:
 
   nodemailer@6.10.1:
     resolution: {integrity: sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA==}
+    engines: {node: '>=6.0.0'}
+
+  nodemailer@9.0.5:
+    resolution: {integrity: sha512-wvjiKvjczmsN7U/8006JOdXubgBk2XFAbioDMbT+sM7cPs0QrhJTa6KBRX7P5REGGkDcLUz/EarWidb8G8C1jQ==}
     engines: {node: '>=6.0.0'}
 
   nopt@5.0.0:
@@ -11623,6 +11630,10 @@ snapshots:
     dependencies:
       '@types/node': 25.6.0
 
+  '@types/nodemailer@8.0.1':
+    dependencies:
+      '@types/node': 25.6.0
+
   '@types/q@1.5.8': {}
 
   '@types/qrcode-terminal@0.12.2': {}
@@ -14152,6 +14163,8 @@ snapshots:
     optional: true
 
   nodemailer@6.10.1: {}
+
+  nodemailer@9.0.5: {}
 
   nopt@5.0.0:
     dependencies:
