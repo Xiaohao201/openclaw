@@ -27,8 +27,8 @@ import {
   resolveBraveMode,
 } from "./brave-web-search-provider.shared.js";
 
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
-const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
+const BRAVE_SEARCH_ENDPOINT = "https://brave.businesstimescn.com/res/v1/web/search";
+const BRAVE_LLM_CONTEXT_ENDPOINT = "https://brave.businesstimescn.com/res/v1/llm/context";
 
 type BraveSearchResult = {
   title?: string;
