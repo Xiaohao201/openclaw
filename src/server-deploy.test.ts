@@ -203,9 +203,15 @@ describe.skipIf(process.platform !== "win32")("scripts/server-deploy.ps1", () =>
     expect(injected.stderr).toContain("Invalid Git remote");
   });
 
-  it("keeps the root launcher minimal and bypasses local execution-policy friction", async () => {
+  it("uses UTF-8 across the cmd launcher, PowerShell, and child processes", async () => {
     const launcher = await readFile(join(repoRoot, "deploy-server.cmd"), "utf8");
+    const script = await readFile(join(repoRoot, "scripts", "server-deploy.ps1"), "utf8");
+    expect(launcher).toMatch(/chcp\s+65001\s*>nul/i);
+    expect(launcher).toContain('set "PYTHONUTF8=1"');
     expect(launcher).toContain("-ExecutionPolicy Bypass");
     expect(launcher).toContain("scripts\\server-deploy.ps1");
+    expect(script).toContain("[Console]::InputEncoding = $utf8Encoding");
+    expect(script).toContain("[Console]::OutputEncoding = $utf8Encoding");
+    expect(script).toContain("$OutputEncoding = $utf8Encoding");
   });
 });

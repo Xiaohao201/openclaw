@@ -9,6 +9,13 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version 2.0
 
+$utf8Encoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = $utf8Encoding
+[Console]::OutputEncoding = $utf8Encoding
+$OutputEncoding = $utf8Encoding
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 function Write-DeployLog {
     param([string]$Message)
     Write-Host "[openclaw-deploy] $Message"
