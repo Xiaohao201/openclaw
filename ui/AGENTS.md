@@ -17,3 +17,9 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Keep UI-specific rules here.
 - Leave repo-global architecture, verification, and git workflow rules in the root `AGENTS.md`.
+
+## Suheng Design System
+
+- Treat the root `DESIGN.md` as the visual source of truth for Suheng user-facing UI.
+- Reuse the existing OpenKnot theme tokens and components before adding new visual variants.
+- When product requirements conflict with `DESIGN.md`, preserve accessibility, evidence provenance, and explicit risk semantics, then update the design document with the approved decision.
