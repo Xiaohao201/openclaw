@@ -66,14 +66,15 @@ repository includes a foreground deployment helper:
 The helper runs these commands from the repository root:
 
 ```text
+pnpm install
 pnpm build
 pnpm openclaw gateway stop
 pnpm openclaw gateway
 ```
 
-Update the checkout and install dependencies separately when the source or lockfile changes.
-The final command runs the gateway in the current terminal, so keep that window open. Press
-Ctrl+C to stop it. The helper does not install a Scheduled Task or Startup-folder entry.
+Update the checkout separately when the source changes. The final command runs the gateway
+in the current terminal, so keep that window open. Press Ctrl+C to stop it. The helper does
+not install a Scheduled Task or Startup-folder entry.
 
 ## Auto-updater
 

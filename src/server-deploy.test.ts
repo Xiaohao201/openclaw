@@ -27,6 +27,7 @@ async function createSandbox(): Promise<Sandbox> {
     [
       "@echo off",
       'echo %CD%^|%*>>"%DEPLOY_TEST_LOG%"',
+      'if "%DEPLOY_TEST_FAIL_COMMAND%"=="install" if "%~1"=="install" exit /b 22',
       'if "%DEPLOY_TEST_FAIL_COMMAND%"=="build" if "%~1"=="build" exit /b 23',
       'if "%DEPLOY_TEST_FAIL_COMMAND%"=="stop" if "%~1"=="openclaw" if "%~2"=="gateway" if "%~3"=="stop" exit /b 24',
       "exit /b 0",
@@ -36,7 +37,7 @@ async function createSandbox(): Promise<Sandbox> {
   return { binDir, logPath, runDir };
 }
 
-function runDeploy(sandbox: Sandbox, failCommand?: "build" | "stop") {
+function runDeploy(sandbox: Sandbox, failCommand?: "install" | "build" | "stop") {
   return spawnSync("cmd.exe", ["/d", "/c", join(repoRoot, "deploy-server.cmd")], {
     cwd: sandbox.runDir,
     env: {
@@ -68,10 +69,11 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     await sandboxTracker.cleanup();
   });
 
-  it("builds, stops the old gateway, and runs the new gateway in the foreground", async () => {
+  it("installs, builds, stops the old gateway, and runs the new gateway in the foreground", async () => {
     const result = runDeploy(sandbox);
     expect(result.status, result.stderr).toBe(0);
     expect(await readCommands(sandbox)).toEqual([
+      "install",
       "build",
       "openclaw gateway stop",
       "openclaw gateway",
@@ -82,14 +84,18 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     await writeFile(sandbox.logPath, "");
     const result = runDeploy(sandbox, "build");
     expect(result.status).toBe(23);
-    expect(await readCommands(sandbox)).toEqual(["build"]);
+    expect(await readCommands(sandbox)).toEqual(["install", "build"]);
   });
 
   it("does not start a new gateway when stopping the old one fails", async () => {
     await writeFile(sandbox.logPath, "");
     const result = runDeploy(sandbox, "stop");
     expect(result.status).toBe(24);
-    expect(await readCommands(sandbox)).toEqual(["build", "openclaw gateway stop"]);
+    expect(await readCommands(sandbox)).toEqual([
+      "install",
+      "build",
+      "openclaw gateway stop",
+    ]);
   });
 
   it("uses UTF-8 and invokes pnpm directly instead of a managed-service script", async () => {
