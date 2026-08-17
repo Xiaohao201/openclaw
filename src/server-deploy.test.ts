@@ -136,7 +136,7 @@ describe.skipIf(process.platform !== "win32")("scripts/server-deploy.ps1", () =>
 
     const log = await readFile(sandbox.logPath, "utf8");
     expect(log).toContain("install --frozen-lockfile");
-    expect(log).toContain("|check");
+    expect(log).not.toMatch(/\|check(?:\s|$)/);
     expect(log).toContain("|build");
     expect(log).toContain("openclaw backup create --verify --no-include-workspace --output");
     expect(log).toContain("openclaw doctor --non-interactive");

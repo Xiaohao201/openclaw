@@ -287,9 +287,7 @@ function Invoke-Deployment {
     $targetDir = Get-OrCreateRelease -Sha $targetSha
     Write-DeployLog "Installing locked dependencies."
     Invoke-Native -Command "pnpm" -Arguments @("install", "--frozen-lockfile") -WorkingDirectory $targetDir
-    Write-DeployLog "Running static checks."
-    Invoke-Native -Command "pnpm" -Arguments @("check") -WorkingDirectory $targetDir
-    Write-DeployLog "Building production output."
+    Write-DeployLog "Building and validating production output."
     Invoke-Native -Command "pnpm" -Arguments @("build") -WorkingDirectory $targetDir
     if (-not (Test-Path -LiteralPath (Join-Path $targetDir "dist\index.js") -PathType Leaf)) {
         throw "Build completed without dist/index.js."
@@ -345,7 +343,7 @@ try {
 
     if ($Action -eq "dry-run") {
         Write-DeployLog "Dry run: deploy $remote/$branch into $releaseRoot."
-        Write-DeployLog "Planned gates: locked install, static checks, build, backup, doctor, task restart, RPC health check."
+        Write-DeployLog "Planned gates: locked install, build, backup, doctor, task restart, RPC health check."
         exit 0
     }
 

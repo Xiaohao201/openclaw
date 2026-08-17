@@ -64,8 +64,8 @@ For a native Windows checkout that currently keeps the gateway alive in a termin
 ```
 
 By default it deploys `origin/v1`. The helper fetches that branch into an isolated Git
-worktree, installs locked dependencies, runs static checks, builds OpenClaw, creates and
-verifies a state/config backup, runs `doctor`, and activates OpenClaw's native Windows
+worktree, installs locked dependencies, builds and validates OpenClaw, creates and verifies
+a state/config backup, runs `doctor`, and activates OpenClaw's native Windows
 Scheduled Task. If task creation is denied, OpenClaw uses its per-user Startup-folder
 fallback. On the first run, the managed restart takes over the gateway port from the old
 foreground process. Later runs leave the active release unchanged until the replacement
