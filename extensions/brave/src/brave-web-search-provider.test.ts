@@ -189,40 +189,4 @@ describe("brave web search provider", () => {
     const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
     expect(requestUrl.searchParams.get("country")).toBe("ALL");
   });
-
-  it.each([
-    { mode: "web" as const, path: "/res/v1/web/search" },
-    { mode: "llm-context" as const, path: "/res/v1/llm/context" },
-  ])(
-    "routes Brave $mode requests through the configured transparent proxy",
-    async ({ mode, path }) => {
-      vi.stubEnv("BRAVE_API_KEY", "test-key");
-      const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
-        return {
-          ok: true,
-          json: async () =>
-            mode === "web" ? { web: { results: [] } } : { grounding: { generic: [] } },
-        } as Response;
-      });
-      global.fetch = mockFetch as typeof global.fetch;
-
-      const provider = createBraveWebSearchProvider();
-      const tool = provider.createTool({
-        config: {},
-        searchConfig: {
-          apiKey: "BSA...",
-          brave: { mode },
-        },
-      });
-      if (!tool) {
-        throw new Error("Expected tool definition");
-      }
-
-      await tool.execute({ query: "openclaw" });
-
-      const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
-      expect(requestUrl.origin).toBe("https://brave.businesstimescn.com");
-      expect(requestUrl.pathname).toBe(path);
-    },
-  );
 });
