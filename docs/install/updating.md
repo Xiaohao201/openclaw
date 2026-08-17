@@ -54,6 +54,49 @@ pnpm add -g openclaw@latest
 bun add -g openclaw@latest
 ```
 
+## Native Windows source server deployment
+
+For a native Windows checkout that currently keeps the gateway alive in a terminal with
+`pnpm openclaw gateway`, this repository includes an idempotent deployment helper:
+
+```powershell
+.\deploy-server.cmd
+```
+
+By default it deploys `origin/v1`. The helper fetches that branch into an isolated Git
+worktree, installs locked dependencies, runs static checks, builds OpenClaw, creates and
+verifies a state/config backup, runs `doctor`, and activates OpenClaw's native Windows
+Scheduled Task. If task creation is denied, OpenClaw uses its per-user Startup-folder
+fallback. On the first run, the managed restart takes over the gateway port from the old
+foreground process. Later runs leave the active release unchanged until the replacement
+passes its RPC health check; a failed activation restores the previous built release.
+
+OpenClaw configuration, credentials, sessions, and workspaces remain in their existing
+locations. Release worktrees, backups, deployment state, and the concurrency lock default
+to `%LOCALAPPDATA%\OpenClawDeploy`.
+
+Useful operations:
+
+```powershell
+.\deploy-server.cmd dry-run
+.\deploy-server.cmd status
+.\deploy-server.cmd rollback
+```
+
+Override the source when needed:
+
+```powershell
+$env:OPENCLAW_DEPLOY_REMOTE = "origin"
+$env:OPENCLAW_DEPLOY_BRANCH = "main"
+.\deploy-server.cmd
+```
+
+Requirements: native Windows, Node.js 22 or newer, pnpm, and Git. The managed gateway
+survives closing the deployment terminal and starts when that Windows user signs in. A
+native per-user Scheduled Task does not provide pre-login startup. The gateway is restarted
+in place, so expect a short interruption; this is not a zero-downtime multi-instance
+deployment.
+
 ## Auto-updater
 
 The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
