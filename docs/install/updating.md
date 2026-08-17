@@ -69,7 +69,9 @@ a state/config backup, runs `doctor`, and activates OpenClaw's native Windows
 Scheduled Task. If task creation is denied, OpenClaw uses its per-user Startup-folder
 fallback. On the first run, the managed restart takes over the gateway port from the old
 foreground process. Later runs leave the active release unchanged until the replacement
-passes its RPC health check; a failed activation restores the previous built release.
+passes its RPC health check. Windows cold starts can exceed the CLI restart timeout, so the
+helper continues polling RPC health for up to five minutes before it restores the previous
+built release.
 
 OpenClaw configuration, credentials, sessions, and workspaces remain in their existing
 locations. Release worktrees, backups, deployment state, and the concurrency lock default

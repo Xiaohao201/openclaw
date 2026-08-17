@@ -30,6 +30,21 @@ function Get-EnvOrDefault {
     return $value
 }
 
+function Get-IntegerEnvOrDefault {
+    param(
+        [string]$Name,
+        [int]$Default,
+        [int]$Minimum,
+        [int]$Maximum
+    )
+    $raw = Get-EnvOrDefault -Name $Name -Default $Default.ToString()
+    $parsed = 0
+    if (-not [int]::TryParse($raw, [ref]$parsed) -or $parsed -lt $Minimum -or $parsed -gt $Maximum) {
+        throw "$Name must be an integer from $Minimum to $Maximum."
+    }
+    return $parsed
+}
+
 function Invoke-Native {
     param(
         [string]$Command,
@@ -87,13 +102,55 @@ function Test-GatewayHealth {
     )
 }
 
+function Wait-GatewayHealth {
+    param([string]$ReleaseDirectory)
+    $deadline = [DateTime]::UtcNow.AddSeconds($healthTimeoutSeconds)
+    $attempt = 0
+    $lastError = $null
+    Write-DeployLog "Waiting up to $healthTimeoutSeconds seconds for the gateway RPC health check."
+    do {
+        $attempt += 1
+        try {
+            Test-GatewayHealth -ReleaseDirectory $ReleaseDirectory
+            if ($attempt -gt 1) {
+                Write-DeployLog "Gateway became healthy after $attempt checks."
+            }
+            return
+        }
+        catch {
+            $lastError = $_
+        }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            break
+        }
+        Start-Sleep -Milliseconds $healthPollMilliseconds
+    } while ($true)
+
+    throw "Gateway did not become healthy within $healthTimeoutSeconds seconds. Last error: $($lastError.Exception.Message)"
+}
+
 function Enable-Release {
     param([string]$ReleaseDirectory)
     Invoke-OpenClaw -ReleaseDirectory $ReleaseDirectory -Arguments @(
         "gateway", "install", "--force", "--runtime", "node"
     )
-    Invoke-OpenClaw -ReleaseDirectory $ReleaseDirectory -Arguments @("gateway", "restart")
-    Test-GatewayHealth -ReleaseDirectory $ReleaseDirectory
+    $restartError = $null
+    try {
+        Invoke-OpenClaw -ReleaseDirectory $ReleaseDirectory -Arguments @("gateway", "restart")
+    }
+    catch {
+        $restartError = $_
+        Write-Warning "Gateway restart command reported a failure; the Windows process may still be loading, so deployment will continue polling RPC health."
+    }
+    try {
+        Wait-GatewayHealth -ReleaseDirectory $ReleaseDirectory
+    }
+    catch {
+        if ($null -ne $restartError) {
+            throw "Gateway restart failed and the extended health check also failed. Restart error: $($restartError.Exception.Message). Health error: $($_.Exception.Message)"
+        }
+        throw
+    }
 }
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -113,6 +170,8 @@ $releaseRoot = Join-Path $dataDir "releases"
 $backupDir = Join-Path $dataDir "backups"
 $stateFile = Join-Path $stateDir "state.json"
 $lockFile = Join-Path $stateDir "deploy.lock"
+$healthTimeoutSeconds = Get-IntegerEnvOrDefault -Name "OPENCLAW_DEPLOY_HEALTH_TIMEOUT_SECONDS" -Default 300 -Minimum 1 -Maximum 3600
+$healthPollMilliseconds = Get-IntegerEnvOrDefault -Name "OPENCLAW_DEPLOY_HEALTH_POLL_MILLISECONDS" -Default 5000 -Minimum 100 -Maximum 60000
 $script:lockStream = $null
 
 function Get-ReleasePath {

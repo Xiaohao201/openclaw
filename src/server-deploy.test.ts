@@ -68,7 +68,18 @@ async function createSandbox(): Promise<Sandbox> {
       ")",
       'echo %*|%SystemRoot%\\System32\\findstr.exe /C:"gateway status" >nul',
       "if not errorlevel 1 (",
-      '  if "%DEPLOY_TEST_FAIL_HEALTH_ONCE%"=="1" if not exist "%DEPLOY_TEST_FAIL_MARKER%" (',
+      '  if "%DEPLOY_TEST_HEALTH_MODE%"=="once" if not exist "%DEPLOY_TEST_FAIL_MARKER%" (',
+      '    type nul>"%DEPLOY_TEST_FAIL_MARKER%"',
+      "    exit /b 1",
+      "  )",
+      '  if "%DEPLOY_TEST_HEALTH_MODE%"=="target" (',
+      '    %SystemRoot%\\System32\\findstr.exe /C:"three" version.txt >nul',
+      "    if not errorlevel 1 exit /b 1",
+      "  )",
+      ")",
+      'echo %*|%SystemRoot%\\System32\\findstr.exe /C:"gateway restart" >nul',
+      "if not errorlevel 1 (",
+      '  if "%DEPLOY_TEST_HEALTH_MODE%"=="restart-once" if not exist "%DEPLOY_TEST_FAIL_MARKER%" (',
       '    type nul>"%DEPLOY_TEST_FAIL_MARKER%"',
       "    exit /b 1",
       "  )",
@@ -89,6 +100,8 @@ function deployEnv(sandbox: Sandbox, overrides: Record<string, string> = {}): No
     DEPLOY_TEST_LOG: sandbox.logPath,
     OPENCLAW_DEPLOY_DATA_DIR: sandbox.dataDir,
     OPENCLAW_DEPLOY_STATE_DIR: join(sandbox.dataDir, "state"),
+    OPENCLAW_DEPLOY_HEALTH_TIMEOUT_SECONDS: "2",
+    OPENCLAW_DEPLOY_HEALTH_POLL_MILLISECONDS: "100",
     ...overrides,
   };
 }
@@ -105,10 +118,10 @@ function runDeploy(sandbox: Sandbox, action?: string, overrides = {}) {
   });
 }
 
-async function commitAndPushUpdate(sandbox: Sandbox) {
-  await writeFile(join(sandbox.controllerDir, "version.txt"), "two\n");
+async function commitAndPushUpdate(sandbox: Sandbox, version: string) {
+  await writeFile(join(sandbox.controllerDir, "version.txt"), `${version}\n`);
   run("git", ["add", "version.txt"], sandbox.controllerDir);
-  run("git", ["commit", "-m", "second"], sandbox.controllerDir);
+  run("git", ["commit", "-m", version], sandbox.controllerDir);
   run("git", ["push", "origin", "v1"], sandbox.controllerDir);
 }
 
@@ -145,29 +158,47 @@ describe.skipIf(process.platform !== "win32")("scripts/server-deploy.ps1", () =>
     expect(log).toContain("openclaw gateway status --require-rpc --deep --json");
   });
 
-  it("restores the previous release when the new gateway fails its health gate", async () => {
+  it("allows a slow Windows gateway to become healthy after restart reports a timeout", async () => {
     const firstState = JSON.parse(
       await readFile(join(sandbox.dataDir, "state", "state.json"), "utf8"),
     ) as { currentSha: string };
-    await commitAndPushUpdate(sandbox);
+    await commitAndPushUpdate(sandbox, "two");
     await writeFile(sandbox.logPath, "");
 
-    const result = runDeploy(sandbox, undefined, { DEPLOY_TEST_FAIL_HEALTH_ONCE: "1" });
+    const result = runDeploy(sandbox, undefined, { DEPLOY_TEST_HEALTH_MODE: "restart-once" });
+    expect(result.status, result.stderr).toBe(0);
+
+    const state = JSON.parse(
+      await readFile(join(sandbox.dataDir, "state", "state.json"), "utf8"),
+    ) as { currentSha: string; previousSha: string };
+    expect(state.currentSha).not.toBe(firstState.currentSha);
+    expect(state.previousSha).toBe(firstState.currentSha);
+    const log = await readFile(sandbox.logPath, "utf8");
+    expect(log).toContain("openclaw gateway status --require-rpc --deep --json");
+    expect(`${result.stdout}\n${result.stderr}`).toContain("continue polling RPC health");
+  });
+
+  it("restores the previous release when the new gateway stays unhealthy", async () => {
+    const stableState = JSON.parse(
+      await readFile(join(sandbox.dataDir, "state", "state.json"), "utf8"),
+    ) as { currentSha: string };
+    await commitAndPushUpdate(sandbox, "three");
+    await writeFile(sandbox.logPath, "");
+
+    const result = runDeploy(sandbox, undefined, { DEPLOY_TEST_HEALTH_MODE: "target" });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("previous release was restored");
 
     const state = JSON.parse(
       await readFile(join(sandbox.dataDir, "state", "state.json"), "utf8"),
     ) as { currentSha: string };
-    expect(state.currentSha).toBe(firstState.currentSha);
+    expect(state.currentSha).toBe(stableState.currentSha);
     const log = await readFile(sandbox.logPath, "utf8");
     expect(log.match(/openclaw gateway install --force --runtime node/g)).toHaveLength(2);
     expect(log.match(/openclaw gateway restart/g)).toHaveLength(2);
   });
 
   it("supports an explicit rollback after a later successful deployment", async () => {
-    const deployment = runDeploy(sandbox);
-    expect(deployment.status, deployment.stderr).toBe(0);
     const deployedState = JSON.parse(
       await readFile(join(sandbox.dataDir, "state", "state.json"), "utf8"),
     ) as { currentSha: string; previousSha: string };
