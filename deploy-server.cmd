@@ -17,12 +17,8 @@ echo [openclaw-deploy] Building OpenClaw.
 call pnpm build
 if errorlevel 1 goto :failed
 
-echo [openclaw-deploy] Stopping the old Gateway.
-call pnpm openclaw gateway stop
-if errorlevel 1 goto :failed
-
-echo [openclaw-deploy] Starting the Gateway in this terminal. Press Ctrl+C to stop it.
-call pnpm openclaw gateway
+echo [openclaw-deploy] Restarting the Gateway.
+call pnpm openclaw gateway restart
 if errorlevel 1 goto :failed
 exit /b 0
 
