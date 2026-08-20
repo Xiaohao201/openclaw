@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/chat: isolate scheduling by conversation session so one user's multiple Suheng windows run concurrently, and persist the standard learning fallback when a turn reaches its configured timeout.
 - RabbitMQ/chat: inject a user's default monitoring project only for monitoring-data and report requests so unrelated Suheng conversations no longer introduce the default enterprise on their own.
 - Windows/gateway: run interactive Startup-folder restart fallbacks in the caller's console instead of opening a detached command window, while keeping installation and login-time startup backgrounded.
+- Brave/Suheng breaking news: require time-filtered and authority-source searches, deduplicate with newest results first, open multiple recent sources, and avoid treating search-index absence as proof that a reported event did not occur.
 
 ## 2026.4.15
 

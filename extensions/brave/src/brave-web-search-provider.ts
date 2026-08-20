@@ -103,7 +103,7 @@ function createBraveToolDefinition(
     description:
       braveMode === "llm-context"
         ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
+        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research. For breaking or time-sensitive claims, first search with freshness=day and count=10, then run a separate unfiltered authority search; use web_fetch to open and verify the newest critical sources before concluding.",
     parameters: createBraveSchema(),
     execute: async (args) => {
       const { executeBraveSearch } = await import("./brave-web-search-provider.runtime.js");

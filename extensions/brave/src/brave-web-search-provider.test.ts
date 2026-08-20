@@ -66,6 +66,19 @@ describe("brave web search provider", () => {
     expect(__testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
   });
 
+  it("tells agents how to verify breaking-news claims", () => {
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    expect(tool.description).toContain("freshness=day");
+    expect(tool.description).toContain("count=10");
+    expect(tool.description).toContain("separate unfiltered authority search");
+    expect(tool.description).toContain("web_fetch");
+  });
+
   it("accepts llm-context in the Brave plugin config schema", () => {
     if (!braveManifest.configSchema) {
       throw new Error("Expected Brave manifest config schema");
