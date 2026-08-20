@@ -47,8 +47,27 @@ const SKILL_CONTEXT_TOTAL_MAX = 12000;
 const SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY =
   /(?:机构违规研判(?:及举报)?|通用违规研判(?:和举报函|及举报)?)/;
 
-function shouldInjectTopicContext(message: string): boolean {
-  return !SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY.test(message);
+/**
+ * Signals that the user wants data from one of their monitoring projects.
+ * Keep these deliberately narrower than general words such as "项目", "风险", or
+ * "负面": those occur constantly in writing, document review, and ordinary chat.
+ */
+const MONITORING_TOPIC_INTENT_PATTERNS = [
+  /(?:(?:舆情|网络|全网)?(?:监测|监控)(?:项目|专题)|舆情(?:项目|专题))/iu,
+  /(?:舆情|监测)(?:数据|记录|条目|列表|明细|动态|趋势|分布|声量|热度|来源|信源|预警|统计|结果)/iu,
+  /(?:数据|记录|条目|列表|明细|动态|趋势|分布|声量|热度|来源|信源|预警|统计|结果).{0,4}(?:舆情|监测)/iu,
+  /(?:查询|查找|检索|排查|统计|汇总|筛选|调取|获取|拉取|读取|查看|关注|跟踪|追踪|看看|看一下|查一下).{0,16}(?:舆情|舆论动态|网络动态|媒体动态)/iu,
+  /(?:今天|昨日|昨天|本周|这周|本月|这个月|最近|近[一二两三四五六七八九十\d]+(?:天|周|月)|过去[一二两三四五六七八九十\d]+(?:天|周|月)).{0,12}(?:负面|正面|中性)(?:舆情|信息|新闻|报道|内容|帖子|文章|动态)?/iu,
+  /(?:负面|正面|中性)(?:舆情|信息|新闻|报道|内容|帖子|文章|动态)?.{0,10}(?:多少|几条|数据|趋势|分布|声量|热度)/iu,
+];
+
+function shouldInjectTopicContext(message: string, reportRequested: boolean): boolean {
+  if (SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY.test(message)) {
+    return false;
+  }
+  return (
+    reportRequested || MONITORING_TOPIC_INTENT_PATTERNS.some((pattern) => pattern.test(message))
+  );
 }
 
 /**
@@ -737,12 +756,16 @@ export async function processChatMessage(
       });
     }
 
-    // Resolve the user's topic ownership up front (entity_auth: uid ->
-    // masterId/slaveId) and inject it into the message, so the agent never
-    // has to guess which feed_topic belongs to this user. Resolution failure
-    // degrades to the plain [userId:...] prefix instead of failing the chat.
+    // Resolve and inject project ownership only for turns that actually need
+    // monitoring data. A default project is authorization metadata, not normal
+    // conversation context; injecting it into every turn made the model bring
+    // that enterprise into unrelated writing, analysis, and chat. Resolution
+    // failure degrades to the plain [userId:...] prefix instead of failing.
     let topicContext = "";
-    if (topicResolver && shouldInjectTopicContext(userMessage)) {
+    const needsTopicContext =
+      !chatMsg.hasAttachment &&
+      shouldInjectTopicContext(userMessage, reportRequested || pendingReport !== null);
+    if (topicResolver && needsTopicContext) {
       try {
         const resolution = await topicResolver.getTopicIdsByUser(userId);
         if (resolution.topicId && resolution.topicId > 0) {

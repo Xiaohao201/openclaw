@@ -520,7 +520,7 @@ describe("processChatMessage", () => {
     expect(updateResponse).toHaveBeenCalledWith(1, "块状内容答案");
   });
 
-  it("injects the resolved topic ownership into the subagent message", async () => {
+  it("injects the resolved topic ownership for an explicit monitoring-data request", async () => {
     // Regression: the chat path used to pass only [userId:...], forcing the
     // agent to guess project ownership from the DB (it once reused a stale
     // hardcoded topic-id list). entity_auth is the source of truth.
@@ -547,8 +547,9 @@ describe("processChatMessage", () => {
       },
     } as unknown as TopicResolver;
 
+    const message = "排查昨天的高风险舆情";
     await processChatMessage(
-      createChatMessage(),
+      { ...createChatMessage(), message },
       historyManager,
       mercureConfig,
       runtime,
@@ -558,9 +559,63 @@ describe("processChatMessage", () => {
     );
 
     expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 topicName:"广本监测专项" useSlaveTopic:true] hi there`,
+      `[userId:${USER_ID}] [topicId:585 topicName:"广本监测专项" useSlaveTopic:true] ${message}`,
     );
   });
+
+  it.each([
+    "hi there",
+    "帮我写一封活动邀请邮件",
+    "把这份 Excel 做成图表",
+    "分析一下这份合同的风险",
+    "把这句话改得别那么负面",
+    "总结一下我这周的项目工作",
+    "舆情是什么意思？",
+    "帮我写一份舆情管理培训大纲",
+  ])(
+    "does not resolve or inject the default monitoring topic for unrelated work: %s",
+    async (message) => {
+      let capturedMessage = "";
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onRunArgs: (args) => {
+          capturedMessage = args.message;
+        },
+        sessionMessages: [{ role: "assistant", content: "ok" }],
+      });
+      const { historyManager } = createHistoryManagerMock();
+      const getTopicIdsByUser = vi.fn(async () => ({
+        topicId: 89,
+        useSlaveTopic: false,
+        masterId: 89,
+        topicName: "华泰联合证券舆情监测",
+        topics: [
+          {
+            topicId: 89,
+            useSlaveTopic: false,
+            masterId: 89,
+            topicName: "华泰联合证券舆情监测",
+          },
+        ],
+      }));
+      const topicResolver = { getTopicIdsByUser } as unknown as TopicResolver;
+
+      await processChatMessage(
+        { ...createChatMessage(), message },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        topicResolver,
+      );
+
+      expect(getTopicIdsByUser).not.toHaveBeenCalled();
+      expect(withoutCitation(capturedMessage)).toBe(`[userId:${USER_ID}] ${message}`);
+      expect(capturedMessage).not.toContain("华泰联合");
+    },
+  );
 
   it.each(["机构违规研判及举报", "通用违规研判和举报函"])(
     "omits enterprise topic context for %s",
@@ -633,8 +688,9 @@ describe("processChatMessage", () => {
       }),
     } as unknown as TopicResolver;
 
+    const message = "查一下监测项目最近的舆情动态";
     await processChatMessage(
-      createChatMessage(),
+      { ...createChatMessage(), message },
       historyManager,
       mercureConfig,
       runtime,
@@ -645,7 +701,7 @@ describe("processChatMessage", () => {
 
     expect(withoutCitation(capturedMessage)).toBe(
       `[userId:${USER_ID}] [topicId:585 topicName:"专题E" useSlaveTopic:false]` +
-        ` [allTopics: 116:"专题A", 357, 585:"专题E"] hi there`,
+        ` [allTopics: 116:"专题A", 357, 585:"专题E"] ${message}`,
     );
   });
 
@@ -670,8 +726,9 @@ describe("processChatMessage", () => {
       }),
     } as unknown as TopicResolver;
 
+    const message = "查询舆情数据";
     await processChatMessage(
-      createChatMessage(),
+      { ...createChatMessage(), message },
       historyManager,
       mercureConfig,
       runtime,
@@ -681,7 +738,7 @@ describe("processChatMessage", () => {
     );
 
     expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 topicName:"专项[A] \\"测试\\"" useSlaveTopic:true] hi there`,
+      `[userId:${USER_ID}] [topicId:585 topicName:"专项[A] \\"测试\\"" useSlaveTopic:true] ${message}`,
     );
   });
 
@@ -706,8 +763,9 @@ describe("processChatMessage", () => {
       }),
     } as unknown as TopicResolver;
 
+    const message = "这周负面舆情有多少条";
     await processChatMessage(
-      createChatMessage(),
+      { ...createChatMessage(), message },
       historyManager,
       mercureConfig,
       runtime,
@@ -717,7 +775,7 @@ describe("processChatMessage", () => {
     );
 
     expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] hi there`,
+      `[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] ${message}`,
     );
   });
 
