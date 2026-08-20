@@ -11,6 +11,7 @@ import { SkillLookup } from "./src/skill-lookup.js";
 import { TopicResolver } from "./src/topic-resolver.js";
 import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
 import { resolveUsageCurrencyPolicy } from "./src/usage-pricing.js";
+import { createVideoLinkParseToolFactory } from "./src/video-link-parse-tool.js";
 
 /**
  * Clamp the channel prefetch to a sane window. Default 6: at the default 300s
@@ -142,6 +143,8 @@ export default definePluginEntry({
   name: "RabbitMQ Consumer",
   description: "Consume chat messages from RabbitMQ and process them via OpenClaw subagent.",
   register(api: OpenClawPluginApi) {
+    api.registerTool(createVideoLinkParseToolFactory(api), { name: "video_link_parse" });
+
     api.registerService({
       id: "rabbitmq-consumer",
 

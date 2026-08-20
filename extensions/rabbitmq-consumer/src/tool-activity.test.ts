@@ -12,6 +12,7 @@ describe("resolveToolLabel", () => {
     expect(resolveToolLabel("exec")).toBe("正在查询分析数据");
     expect(resolveToolLabel("Read")).toBe("正在查阅资料");
     expect(resolveToolLabel("web_search")).toBe("正在检索网络信息");
+    expect(resolveToolLabel("video_link_parse")).toBe("正在解析视频链接");
   });
 
   it("falls back to a generic label for unknown tools", () => {
@@ -40,6 +41,7 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("edit")).toBe("write");
     expect(resolveToolCategory("web_fetch")).toBe("search");
     expect(resolveToolCategory("memory_search")).toBe("memory");
+    expect(resolveToolCategory("video_link_parse")).toBe("search");
   });
 
   it("falls back to the default category for unknown tools", () => {
@@ -78,7 +80,9 @@ describe("resolveStepDetail", () => {
       resolveStepDetail("feed_query", { sql: "SELECT secret FROM users", keyword: "内部代号X" }),
     ).toBeUndefined();
     // An enum field carrying arbitrary text is not in the fixed map → dropped.
-    expect(resolveStepDetail("report_create", { period: "internal-codename-leak" })).toBeUndefined();
+    expect(
+      resolveStepDetail("report_create", { period: "internal-codename-leak" }),
+    ).toBeUndefined();
   });
 });
 
@@ -158,7 +162,14 @@ describe("ToolActivityNarrator", () => {
       },
     });
     expect(steps).toEqual([
-      { phase: "start", stepId: "tc-1", index: 1, label: "正在查询分析数据", category: "query", status: "running" },
+      {
+        phase: "start",
+        stepId: "tc-1",
+        index: 1,
+        label: "正在查询分析数据",
+        category: "query",
+        status: "running",
+      },
     ]);
     expect(JSON.stringify(steps)).not.toContain("secret");
   });
@@ -175,7 +186,14 @@ describe("ToolActivityNarrator", () => {
       data: { phase: "end", name: "read", toolCallId: "tc-9", status: "completed" },
     });
     expect(steps).toEqual([
-      { phase: "start", stepId: "tc-9", index: 1, label: "正在查阅资料", category: "read", status: "running" },
+      {
+        phase: "start",
+        stepId: "tc-9",
+        index: 1,
+        label: "正在查阅资料",
+        category: "read",
+        status: "running",
+      },
       {
         phase: "end",
         stepId: "tc-9",

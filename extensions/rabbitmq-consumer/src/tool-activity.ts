@@ -70,6 +70,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // Web search / fetch
   web_search: "正在检索网络信息",
   web_fetch: "正在读取网页内容",
+  video_link_parse: "正在解析视频链接",
   video_understand: "正在观看并分析视频",
   browser: "正在浏览网页",
   tavily_search: "正在检索网络信息",
@@ -150,6 +151,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   chart_render: "write",
   web_search: "search",
   web_fetch: "search",
+  video_link_parse: "search",
   video_understand: "search",
   browser: "search",
   tavily_search: "search",
