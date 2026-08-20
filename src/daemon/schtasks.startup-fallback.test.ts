@@ -91,12 +91,21 @@ async function writeStartupFallbackEntry(env: Record<string, string>) {
   return startupEntryPath;
 }
 
-function expectStartupFallbackSpawn(env: Record<string, string>) {
+function expectBackgroundFallbackSpawn(env: Record<string, string>) {
   expect(spawn).toHaveBeenCalledWith(
     "cmd.exe",
     ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
     expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
   );
+}
+
+function expectCurrentConsoleFallbackSpawn(env: Record<string, string>) {
+  expect(spawn).toHaveBeenCalledWith(
+    "cmd.exe",
+    ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
+    expect.objectContaining({ detached: false, stdio: "inherit", windowsHide: false }),
+  );
+  expect(childUnref).not.toHaveBeenCalled();
 }
 
 function expectGatewayTermination(pid: number) {
@@ -205,7 +214,7 @@ describe("Windows startup fallback", () => {
       });
 
       await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
-      expectStartupFallbackSpawn(env);
+      expectBackgroundFallbackSpawn(env);
     });
   });
 
@@ -232,7 +241,7 @@ describe("Windows startup fallback", () => {
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
       });
 
-      expectStartupFallbackSpawn(env);
+      expectBackgroundFallbackSpawn(env);
     });
   });
 
@@ -395,7 +404,7 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("restarts the Startup fallback by killing the current pid and relaunching the entry", async () => {
+  it("restarts the Startup fallback in the current console after killing the current pid", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
@@ -414,11 +423,11 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
       expectGatewayTermination(5151);
-      expectStartupFallbackSpawn(env);
+      expectCurrentConsoleFallbackSpawn(env);
     });
   });
 
-  it("relaunches the task script when restart sees a scheduled-task run no-op", async () => {
+  it("relaunches a scheduled-task run no-op in the current console during restart", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await writeGatewayScript(env);
       sleepMock.mockImplementationOnce(async () => {
@@ -445,7 +454,7 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
 
-      expectStartupFallbackSpawn(env);
+      expectCurrentConsoleFallbackSpawn(env);
     });
   });
 

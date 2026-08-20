@@ -309,13 +309,23 @@ async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolea
   return res.code === 0;
 }
 
-function launchFallbackTaskScript(scriptPath: string): void {
+type FallbackLaunchMode = "background" | "current-console";
+
+function launchFallbackTaskScript(
+  scriptPath: string,
+  mode: FallbackLaunchMode = "background",
+): void {
+  const useCurrentConsole = mode === "current-console";
   const child = spawn("cmd.exe", ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+    detached: !useCurrentConsole,
+    stdio: useCurrentConsole ? "inherit" : "ignore",
+    windowsHide: !useCurrentConsole,
   });
-  child.unref();
+  // Current-console restarts intentionally stay referenced: the invoking
+  // terminal owns the gateway lifetime and Ctrl+C can stop it.
+  if (!useCurrentConsole) {
+    child.unref();
+  }
 }
 
 function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
@@ -563,7 +573,7 @@ async function restartStartupEntry(
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
-  launchFallbackTaskScript(resolveTaskScriptPath(env));
+  launchFallbackTaskScript(resolveTaskScriptPath(env), "current-console");
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
@@ -774,6 +784,7 @@ async function runScheduledTaskOrThrow(params: {
   taskName: string;
   env: GatewayServiceEnv;
   scriptPath: string;
+  fallbackLaunchMode?: FallbackLaunchMode;
 }): Promise<void> {
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
@@ -784,7 +795,7 @@ async function runScheduledTaskOrThrow(params: {
   ) {
     return;
   }
-  launchFallbackTaskScript(params.scriptPath);
+  launchFallbackTaskScript(params.scriptPath, params.fallbackLaunchMode);
 }
 
 async function activateScheduledTask(params: {
@@ -980,6 +991,7 @@ export async function restartScheduledTask({
     taskName,
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),
+    fallbackLaunchMode: "current-console",
   });
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
