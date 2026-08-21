@@ -525,6 +525,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",

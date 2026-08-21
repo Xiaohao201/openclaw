@@ -343,6 +343,18 @@ describe("browser config", () => {
     });
   });
 
+  it("preserves the RFC2544 benchmark-range opt-in without enabling private networks", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowRfc2544BenchmarkRange: true,
+      },
+    });
+
+    expect(resolved.ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
+
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {
     const resolved = resolveBrowserConfig({
       profiles: {

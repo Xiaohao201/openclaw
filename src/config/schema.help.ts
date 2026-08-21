@@ -296,6 +296,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows only the RFC 2544 benchmarking range (198.18.0.0/15), which trusted fake-IP proxies such as Clash may use for public domains. Other private and special-use networks remain blocked.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":

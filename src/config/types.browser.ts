@@ -20,6 +20,11 @@ export type BrowserSsrFPolicyConfig = {
   /** If true, permit browser navigation to private/internal networks. Default: true */
   dangerouslyAllowPrivateNetwork?: boolean;
   /**
+   * If true, permit only the RFC 2544 benchmark range (198.18.0.0/15).
+   * Useful for trusted fake-IP proxy environments without enabling other private networks.
+   */
+  allowRfc2544BenchmarkRange?: boolean;
+  /**
    * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
    * Example: ["localhost", "metadata.internal"]
    */

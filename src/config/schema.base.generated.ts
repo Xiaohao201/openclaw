@@ -620,6 +620,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
               },
+              allowRfc2544BenchmarkRange: {
+                type: "boolean",
+                title: "Browser Allow RFC2544 Benchmark Range",
+                description:
+                  "Allows only the RFC 2544 benchmarking range (198.18.0.0/15), which trusted fake-IP proxies such as Clash may use for public domains. Other private and special-use networks remain blocked.",
+              },
               allowedHostnames: {
                 type: "array",
                 items: {
@@ -25950,6 +25956,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Browser Dangerously Allow Private Network",
       help: "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
       tags: ["security", "access", "advanced"],
+    },
+    "browser.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Browser Allow RFC2544 Benchmark Range",
+      help: "Allows only the RFC 2544 benchmarking range (198.18.0.0/15), which trusted fake-IP proxies such as Clash may use for public domains. Other private and special-use networks remain blocked.",
+      tags: ["access"],
     },
     "browser.ssrfPolicy.allowedHostnames": {
       label: "Browser Allowed Hostnames",

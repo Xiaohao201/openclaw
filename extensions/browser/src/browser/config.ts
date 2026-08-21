@@ -130,6 +130,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowRfc2544BenchmarkRange = rawPolicy?.allowRfc2544BenchmarkRange === true;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
@@ -140,6 +141,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   if (
     !resolvedAllowPrivateNetwork &&
     !hasExplicitPrivateSetting &&
+    !allowRfc2544BenchmarkRange &&
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
@@ -154,6 +156,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     allowPrivateNetwork === false
       ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
       : {}),
+    ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange: true } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };

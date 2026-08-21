@@ -93,6 +93,20 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("browser.ssrfPolicy.allowRfc2544BenchmarkRange", () => {
+  it("accepts the narrow RFC2544 benchmark-range opt-in", () => {
+    const result = OpenClawSchema.safeParse({
+      browser: {
+        ssrfPolicy: {
+          allowRfc2544BenchmarkRange: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("gateway.controlUi.embedSandbox", () => {
   it("accepts strict, scripts, and trusted modes", () => {
     for (const mode of ["strict", "scripts", "trusted"] as const) {

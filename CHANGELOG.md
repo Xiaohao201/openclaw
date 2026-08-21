@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng public-opinion reports: route unmistakable brief and formal-analysis requests through their bundled skills even when the frontend skill picker is not used, and make empty Brave results prompt broader event variants instead of a premature no-coverage conclusion.
 - Brave/search auditing: persist every upstream Brave response, including empty result sets, to the configured MySQL `websearch_cache` table without exposing credentials or failing the search when persistence is unavailable.
 - Full-text search/web fetch: prioritize indexed cross-platform search for fresh and local social events before open-web corroboration, and document the narrow RFC2544 fake-IP opt-in for trusted Clash/Surge environments without allowing private networks.
+- Browser/SSRF: add a narrow RFC2544 benchmark-range opt-in so trusted Clash/Surge fake-IP environments can navigate public websites without enabling access to other private networks.
 
 ## 2026.4.15
 

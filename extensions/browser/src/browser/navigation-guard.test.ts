@@ -105,6 +105,28 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(SsrFBlockedError);
   });
 
+  it("allows Clash fake-IP navigation only with the RFC2544 opt-in", async () => {
+    const lookupFn = createLookupFn("198.18.0.42");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps RFC1918 destinations blocked with the RFC2544 opt-in", async () => {
+    const lookupFn = createLookupFn("192.168.1.42");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
   it("allows hostnames that resolve to public addresses", async () => {
     const lookupFn = createLookupFn("93.184.216.34");
     await expect(

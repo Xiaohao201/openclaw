@@ -371,6 +371,7 @@ export const OpenClawSchema = z
         ssrfPolicy: z
           .object({
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+            allowRfc2544BenchmarkRange: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),
           })
