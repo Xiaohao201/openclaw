@@ -18,6 +18,11 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { resolveBraveSearchGuidance } from "./brave-search-guidance.js";
+import {
+  persistBraveSearchCache,
+  resolveBraveSearchCacheDbConfig,
+} from "./brave-web-search-cache.js";
 import {
   type BraveLlmContextResponse,
   mapBraveLlmContextResults,
@@ -313,6 +318,7 @@ export async function executeBraveSearch(
       search_lang: normalizedLanguage.search_lang,
       freshness,
     });
+    const guidance = resolveBraveSearchGuidance(results.length);
     const payload = {
       query,
       provider: "brave",
@@ -332,7 +338,16 @@ export async function executeBraveSearch(
         siteName: entry.siteName,
       })),
       sources,
+      ...(guidance ? { guidance } : {}),
     };
+    await persistBraveSearchCache({
+      config: resolveBraveSearchCacheDbConfig(braveConfig),
+      cacheKey,
+      query,
+      content: payload,
+      resultCount: results.length,
+      ttlMs: cacheTtlMs,
+    });
     writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
     return payload;
   }
@@ -349,6 +364,7 @@ export async function executeBraveSearch(
     dateAfter,
     dateBefore,
   });
+  const guidance = resolveBraveSearchGuidance(results.length);
   const payload = {
     query,
     provider: "brave",
@@ -361,7 +377,16 @@ export async function executeBraveSearch(
       wrapped: true,
     },
     results,
+    ...(guidance ? { guidance } : {}),
   };
+  await persistBraveSearchCache({
+    config: resolveBraveSearchCacheDbConfig(braveConfig),
+    cacheKey,
+    query,
+    content: payload,
+    resultCount: results.length,
+    ttlMs: cacheTtlMs,
+  });
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }

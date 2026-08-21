@@ -22,6 +22,17 @@ It complements the existing web tools instead of replacing them:
 | Search indexed social posts, news, forums, and web content    | `full_text_search` |
 | Fetch or verify the current contents of a specific result URL | `web_fetch`        |
 
+For requests about something that happened “today,” “just now,” or “breaking,”
+and for local social incidents with a specific place or venue, OpenClaw
+prioritizes `full_text_search` before open-web corroboration. The indexed corpus
+often surfaces fresh social posts before general web indexes do. The normal
+sequence is `full_text_search`, then `web_search` with a one-day freshness
+window, then `web_fetch` or the browser to verify the strongest result URLs.
+
+The number of raw search results is not the number of relevant matches. Filter
+same-name, old, and wrong-location results before deciding whether an event was
+found.
+
 ## Enable the plugin
 
 ```json5

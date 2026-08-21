@@ -1443,6 +1443,35 @@ describe("processChatMessage", () => {
     expect(capturedMessage).not.toContain("不应注入");
   });
 
+  it("auto-selects the brief skill for an unmistakable public-opinion brief request", async () => {
+    let capturedSkillFilter: string[] | undefined;
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedSkillFilter = args.skillFilter;
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        message: "深圳赛百味维修人员穿鞋踩踏出餐区，写撰写该事件舆情速报",
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(capturedSkillFilter).toEqual(["ai-public-opinion-brief"]);
+    expect(capturedMessage).toContain("请使用 $ai-public-opinion-brief 完成任务");
+  });
+
   it("does not inject a skill block when no skill id resolves", async () => {
     // Unresolvable ids (deleted / disabled / another user's) resolve to [] and the
     // turn degrades to an ordinary chat with no injected block.

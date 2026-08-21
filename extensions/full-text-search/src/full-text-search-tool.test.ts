@@ -33,7 +33,7 @@ describe("full_text_search tool", () => {
     expect(hooks[0]?.name).toBe("before_prompt_build");
   });
 
-  it("injects the extracted query only for an explicit 观象台 invocation", () => {
+  it("keeps explicit 观象台 invocation exclusive", () => {
     const hooks: Array<(event: { prompt: string }) => unknown> = [];
     plugin.register({
       registerTool() {},
@@ -47,6 +47,46 @@ describe("full_text_search tool", () => {
     });
     expect(hooks[0]?.({ prompt: "观象台这个名字怎么样？" })).toBeUndefined();
     expect(hooks[0]?.({ prompt: "不要使用观象台，搜索今天的新闻" })).toBeUndefined();
+  });
+
+  it("routes fresh and local social events to full-text search before open-web tools", () => {
+    const hooks: Array<(event: { prompt: string }) => unknown> = [];
+    plugin.register({
+      registerTool() {},
+      on(_name: string, handler: (event: { prompt: string }) => unknown) {
+        hooks.push(handler);
+      },
+    } as never);
+
+    const fresh = hooks[0]?.({ prompt: "今天深圳某餐厅发生食品安全事件，查一下" });
+    expect(fresh).toEqual({
+      prependContext: expect.stringMatching(/full_text_search.*before web_search/su),
+    });
+    expect((fresh as { prependContext: string }).prependContext).toContain('order="time_desc"');
+    expect((fresh as { prependContext: string }).prependContext).toContain(
+      "set dateAfter and dateBefore to today's local YYYY-MM-DD date",
+    );
+
+    const local = hooks[0]?.({
+      prompt: "深圳赛百味维修人员穿鞋踩踏出餐区，撰写该事件舆情速报",
+    });
+    expect((local as { prependContext: string }).prependContext).toContain(
+      'query="深圳赛百味维修人员穿鞋踩踏出餐区"',
+    );
+    expect((local as { prependContext: string }).prependContext).toContain("Then use web_search");
+  });
+
+  it("does not auto-route ordinary or no-network prompts", () => {
+    const hooks: Array<(event: { prompt: string }) => unknown> = [];
+    plugin.register({
+      registerTool() {},
+      on(_name: string, handler: (event: { prompt: string }) => unknown) {
+        hooks.push(handler);
+      },
+    } as never);
+
+    expect(hooks[0]?.({ prompt: "今天天气怎么样" })).toBeUndefined();
+    expect(hooks[0]?.({ prompt: "不要联网，只根据附件写深圳食品安全舆情报告" })).toBeUndefined();
   });
 
   it("maps rich search filters into the client without replacing web_fetch", async () => {
@@ -89,5 +129,13 @@ describe("full_text_search tool", () => {
       timeoutSeconds: 45,
     });
     expect(result).toMatchObject({ content: [{ type: "text" }] });
+  });
+
+  it("describes fresh and local-event priority without replacing later verification", () => {
+    const tool = createFullTextSearchTool({ config: {} } as never);
+
+    expect(tool.description).toContain("fresh or local social events");
+    expect(tool.description).toContain("before web_search");
+    expect(tool.description).toContain("web_fetch");
   });
 });

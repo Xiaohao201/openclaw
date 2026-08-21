@@ -32,6 +32,9 @@ Docs: https://docs.openclaw.ai
 - Windows/gateway: run interactive Startup-folder restart fallbacks in the caller's console instead of opening a detached command window, while keeping installation and login-time startup backgrounded.
 - Brave/Suheng breaking news: require time-filtered and authority-source searches, deduplicate with newest results first, open multiple recent sources, and avoid treating search-index absence as proof that a reported event did not occur.
 - Agents/video understanding: auto-discover Qwen Standard for both whole-video and keyframe analysis, run transcript and visual fallback work concurrently, use an adaptive six-frame budget, preserve sampled frames when visual providers fail, and surface actionable provider setup guidance.
+- RabbitMQ/Suheng public-opinion reports: route unmistakable brief and formal-analysis requests through their bundled skills even when the frontend skill picker is not used, and make empty Brave results prompt broader event variants instead of a premature no-coverage conclusion.
+- Brave/search auditing: persist every upstream Brave response, including empty result sets, to the configured MySQL `websearch_cache` table without exposing credentials or failing the search when persistence is unavailable.
+- Full-text search/web fetch: prioritize indexed cross-platform search for fresh and local social events before open-web corroboration, and document the narrow RFC2544 fake-IP opt-in for trusted Clash/Surge environments without allowing private networks.
 
 ## 2026.4.15
 

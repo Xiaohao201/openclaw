@@ -13,6 +13,11 @@
     "webSearch.mode": {
       "label": "Brave Search Mode",
       "help": "Brave Search mode: web or llm-context."
+    },
+    "webSearch.cacheDb.password": {
+      "label": "Web-search cache DB password",
+      "help": "MySQL password used to persist Brave responses in websearch_cache.",
+      "sensitive": true
     }
   },
   "contracts": {
@@ -35,6 +40,18 @@
           "mode": {
             "type": "string",
             "enum": ["web", "llm-context"]
+          },
+          "cacheDb": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "host": { "type": "string" },
+              "port": { "type": "number" },
+              "user": { "type": "string" },
+              "password": { "type": "string" },
+              "database": { "type": "string" }
+            }
           }
         }
       }

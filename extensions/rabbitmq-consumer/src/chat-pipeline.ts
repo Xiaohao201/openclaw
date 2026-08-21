@@ -6,6 +6,7 @@ import {
   type SessionTurnCurrencyPolicy,
 } from "../api.js";
 import { materializeAttachments } from "./attachment-materializer.js";
+import { inferBuiltinSkillName } from "./builtin-skill-routing.js";
 import {
   buildCitationDirective,
   splitCitations,
@@ -594,6 +595,20 @@ export async function processChatMessage(
     const userId = chatMsg.userId || record.userId;
     const mercureTopic = chatMsg.topic || userId;
 
+    // The frontend may explicitly select a bundled skill. For unmistakable
+    // public-opinion deliverables, also route deterministically when the user
+    // typed the request directly. Relying on discovery among the full skill
+    // catalog made identical report requests follow different evidence/search
+    // workflows depending on whether the skill picker happened to be used.
+    const builtinSkillName = chatMsg.builtinSkillName ?? inferBuiltinSkillName(userMessage);
+    const inferredBuiltinSkillName = chatMsg.builtinSkillName ? undefined : builtinSkillName;
+    if (inferredBuiltinSkillName) {
+      logger.info(
+        `[CHAT_PIPELINE] Auto-selected builtin skill ${inferredBuiltinSkillName} ` +
+          `for historyId=${chatMsg.historyId}`,
+      );
+    }
+
     // Bridge the live web-chat Mercure topic to other plugins (the leading-v2
     // completion notifier delivers proactive "task done" messages to this exact
     // topic). Shared via Symbol.for — no cross-extension import. Best-effort.
@@ -1042,6 +1057,13 @@ export async function processChatMessage(
       // them this turn. Kept out of the visible message (appended to context).
       const skillContext = selectedSkills.length ? buildSkillContext(selectedSkills) : "";
 
+      // Filtering makes the matching skill the only advertised bundled skill;
+      // naming it in the prompt additionally requires the normal skill loader
+      // to read and apply its SKILL.md before acting.
+      const inferredBuiltinSkillDirective = inferredBuiltinSkillName
+        ? `[auto-selected-skill] 本轮请求明确匹配内置技能，请使用 $${inferredBuiltinSkillName} 完成任务。 `
+        : "";
+
       // On the template path the report is generated right after this turn, so we
       // steer the turn to be a short, natural acknowledgement of the user's
       // message rather than a free-form answer (and never the report itself).
@@ -1149,8 +1171,8 @@ export async function processChatMessage(
 
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
-        ...(chatMsg.builtinSkillName ? { skillFilter: [chatMsg.builtinSkillName] } : {}),
+        message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        ...(builtinSkillName ? { skillFilter: [builtinSkillName] } : {}),
         deliver: false,
       });
 

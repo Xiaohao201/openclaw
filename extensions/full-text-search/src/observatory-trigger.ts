@@ -36,7 +36,7 @@ export function parseObservatorySearchIntent(prompt: string): ObservatorySearchI
     return null;
   }
 
-  const matches = INVOCATION_PATTERNS.flatMap((pattern) => [...prompt.matchAll(pattern)]).sort(
+  const matches = INVOCATION_PATTERNS.flatMap((pattern) => [...prompt.matchAll(pattern)]).toSorted(
     (left, right) => (left.index ?? 0) - (right.index ?? 0),
   );
   for (const match of matches) {

@@ -70,6 +70,10 @@ await web_fetch({ url: "https://example.com/article" });
         maxRedirects: 3,
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
+        ssrfPolicy: {
+          // Only for trusted Clash/Surge-style DNS fake-IP environments.
+          allowRfc2544BenchmarkRange: false,
+        },
       },
     },
   },
@@ -136,6 +140,11 @@ Current runtime behavior:
 - Response body is capped at `maxResponseBytes` before parsing; oversized
   responses are truncated with a warning
 - Private/internal hostnames are blocked
+- DNS fake-IP addresses in `198.18.0.0/15` are blocked by default. In a trusted
+  local Clash/Surge-style environment, set
+  `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` to `true`. This narrow
+  exception does not allow loopback, RFC1918, link-local, or cloud metadata
+  addresses.
 - Redirects are checked and limited by `maxRedirects`
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
 

@@ -178,4 +178,40 @@ describe("web_fetch SSRF protection", () => {
     const stricterTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });
+
+  it("allows public hostnames resolved through RFC2544 fake IPs only when opted in", async () => {
+    lookupMock.mockResolvedValue([{ address: "198.19.2.72", family: 4 }]);
+
+    const deniedTool = await createWebFetchToolForTest();
+    await expectBlockedUrl(
+      deniedTool,
+      "https://www.weibo.com/example",
+      /private|internal|blocked/i,
+    );
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("fake-ip proxy response"));
+    const allowedTool = await createWebFetchToolForTest({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+    const allowed = await allowedTool?.execute?.("call", {
+      url: "https://www.weibo.com/example",
+    });
+
+    expect(allowed?.details).toMatchObject({ status: 200, extractor: "raw" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("still blocks mixed fake-IP and private DNS answers when RFC2544 is allowed", async () => {
+    lookupMock.mockResolvedValue([
+      { address: "198.19.2.72", family: 4 },
+      { address: "10.0.0.5", family: 4 },
+    ]);
+    const fetchSpy = setMockFetch();
+    const tool = await createWebFetchToolForTest({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    await expectBlockedUrl(tool, "https://mixed.test/resource", /private|internal|blocked/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

@@ -6,6 +6,7 @@ import {
 
 export type BraveConfig = {
   mode?: string;
+  cacheDb?: unknown;
 };
 
 export type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
