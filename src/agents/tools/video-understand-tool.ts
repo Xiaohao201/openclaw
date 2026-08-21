@@ -62,8 +62,9 @@ const log = createSubsystemLogger("video-understand-tool");
 const TRANSCRIPT_MAX_CHARS = 20_000;
 const DESCRIPTION_MAX_CHARS = 4_000;
 const FRAME_DESCRIPTION_MAX_CHARS = 600;
-const DEFAULT_MAX_FRAMES = 12;
+const DEFAULT_MAX_FRAMES = 6;
 const MAX_FRAMES_CAP = 24;
+const DEFAULT_FRAME_INTERVAL_SECONDS = 15;
 const PAGE_FETCH_MAX_BYTES = 2_000_000;
 const PAGE_FETCH_TIMEOUT_SECONDS = 30;
 
@@ -75,6 +76,12 @@ const DEFAULT_FRAME_PROMPT =
   "Describe this video frame: the scene, people, actions, and transcribe any " +
   "on-screen text, captions, or watermarks verbatim. Answer in the language of the text shown.";
 const DEFAULT_TRANSCRIPT_PROMPT = "Transcribe the speech in this audio.";
+const VIDEO_PROVIDER_HINT =
+  "整片理解未返回内容。请配置 tools.media.video 及对应密钥；推荐 qwen/qwen-vl-max-latest，" +
+  "并确保网关进程可读取 QWEN_API_KEY（需使用 DashScope Standard 按量付费密钥）。";
+const IMAGE_PROVIDER_HINT =
+  "关键帧描述未返回内容。请配置 tools.media.image 及对应密钥；推荐 qwen/qwen-vl-max-latest，" +
+  "并确保网关进程可读取 QWEN_API_KEY（需使用 DashScope Standard 按量付费密钥）。";
 
 const VideoUnderstandSchema = Type.Object({
   url: Type.String({
@@ -88,7 +95,9 @@ const VideoUnderstandSchema = Type.Object({
   ),
   maxFrames: Type.Optional(
     Type.Number({
-      description: `Frames to sample on the decomposed route (default ${DEFAULT_MAX_FRAMES}, max ${MAX_FRAMES_CAP}).`,
+      description:
+        `Frames to sample on the decomposed route (automatic: about one per ` +
+        `${DEFAULT_FRAME_INTERVAL_SECONDS}s, up to ${DEFAULT_MAX_FRAMES}; max ${MAX_FRAMES_CAP}).`,
       minimum: 1,
     }),
   ),
@@ -107,6 +116,7 @@ export type VideoUnderstandResult = {
   description?: string;
   transcript?: string;
   frames: Array<{ at: string; description: string }>;
+  snapshots: Array<{ at: string; path: string }>;
   markdown: string;
   warnings: string[];
 };
@@ -117,6 +127,7 @@ export type VideoUnderstandToolDeps = {
   compress: typeof compressForWholeVideo;
   extractAudio: typeof extractAudioTrack;
   sampleFrames: typeof extractFrames;
+  saveFrame: (frame: ExtractedFrame) => Promise<string>;
   ffmpegAvailable: () => boolean;
   fetchPageHtml: (url: string) => Promise<string | null>;
   describeMedia: (params: DescribeMediaParams) => Promise<MediaUnderstandingOutput[]>;
@@ -213,6 +224,19 @@ const DEFAULT_DEPS: VideoUnderstandToolDeps = {
   compress: compressForWholeVideo,
   extractAudio: extractAudioTrack,
   sampleFrames: extractFrames,
+  saveFrame: async (frame) => {
+    const { saveMediaBuffer } = await import("../../media/store.js");
+    const buffer = await fs.readFile(frame.path);
+    const timestamp = formatTimestamp(frame.atSeconds).replace(":", "-");
+    const saved = await saveMediaBuffer(
+      buffer,
+      "image/jpeg",
+      "tool-video-understand",
+      undefined,
+      `frame-${timestamp}.jpg`,
+    );
+    return saved.path;
+  },
   ffmpegAvailable: hasFfmpeg,
   fetchPageHtml: fetchPageHtmlDefault,
   describeMedia: describeLocalMedia,
@@ -287,6 +311,12 @@ function buildMarkdown(result: Omit<VideoUnderstandResult, "markdown">): string 
       lines.push(`- **${frame.at}** ${frame.description}`);
     }
   }
+  if (result.snapshots.length > 0) {
+    lines.push("", "### 关键帧截图");
+    for (const snapshot of result.snapshots) {
+      lines.push(`- **${snapshot.at}** MEDIA:${snapshot.path}`);
+    }
+  }
   if (result.warnings.length > 0) {
     lines.push("", "### 说明");
     for (const warning of result.warnings) {
@@ -329,7 +359,157 @@ async function analyzeWholeVideo(params: {
     maxAttachments: 1,
     localRoot: params.workDir,
   });
-  return normalizeOptionalString(outputs[0]?.text);
+  const description = normalizeOptionalString(outputs[0]?.text);
+  if (!description) {
+    params.warnings.push(VIDEO_PROVIDER_HINT);
+  }
+  return description;
+}
+
+function resolveFrameBudget(
+  durationSeconds: number | undefined,
+  requestedMaxFrames?: number,
+): number {
+  if (requestedMaxFrames !== undefined) {
+    return Math.max(1, Math.min(MAX_FRAMES_CAP, Math.floor(requestedMaxFrames)));
+  }
+  if (!durationSeconds || !Number.isFinite(durationSeconds)) {
+    return DEFAULT_MAX_FRAMES;
+  }
+  return Math.max(
+    1,
+    Math.min(DEFAULT_MAX_FRAMES, Math.ceil(durationSeconds / DEFAULT_FRAME_INTERVAL_SECONDS)),
+  );
+}
+
+async function analyzeAudioTrack(params: {
+  filePath: string;
+  workDir: string;
+  hasAudio: boolean;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  deps: VideoUnderstandToolDeps;
+}): Promise<{ transcript?: string; warnings: string[] }> {
+  const warnings: string[] = [];
+  if (!params.hasAudio) {
+    return { warnings: ["该视频没有音轨，只能依据画面分析。"] };
+  }
+
+  try {
+    const audioPath = await params.deps.extractAudio({
+      inputPath: params.filePath,
+      workDir: params.workDir,
+    });
+    const outputs = await params.deps.describeMedia({
+      capability: "audio",
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      files: [{ path: audioPath, mime: "audio/mpeg" }],
+      prompt: DEFAULT_TRANSCRIPT_PROMPT,
+      maxChars: TRANSCRIPT_MAX_CHARS,
+      maxAttachments: 1,
+      localRoot: params.workDir,
+    });
+    const transcript = normalizeOptionalString(outputs[0]?.text);
+    if (!transcript) {
+      warnings.push("音轨转写未返回内容（可能没有配置语音转写 provider，或视频无人声）。");
+    }
+    return { transcript, warnings };
+  } catch (error) {
+    return { warnings: [`音轨转写失败：${formatErrorMessage(error)}`] };
+  }
+}
+
+async function analyzeFrameTimeline(params: {
+  filePath: string;
+  workDir: string;
+  durationSeconds: number;
+  prompt: string;
+  maxFrames: number;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  deps: VideoUnderstandToolDeps;
+}): Promise<{
+  frames: Array<{ at: string; description: string }>;
+  snapshots: Array<{ at: string; path: string }>;
+  warnings: string[];
+}> {
+  const warnings: string[] = [];
+  if (params.durationSeconds <= 0) {
+    return { frames: [], snapshots: [], warnings };
+  }
+
+  let sampled: ExtractedFrame[] = [];
+  try {
+    sampled = await params.deps.sampleFrames({
+      inputPath: params.filePath,
+      workDir: params.workDir,
+      durationSeconds: params.durationSeconds,
+      maxFrames: params.maxFrames,
+    });
+  } catch (error) {
+    return {
+      frames: [],
+      snapshots: [],
+      warnings: [`关键帧抽取失败：${formatErrorMessage(error)}`],
+    };
+  }
+
+  if (sampled.length === 0) {
+    return { frames: [], snapshots: [], warnings };
+  }
+
+  const saveSnapshots = async (): Promise<Array<{ at: string; path: string }>> => {
+    const settled = await Promise.allSettled(sampled.map((frame) => params.deps.saveFrame(frame)));
+    const snapshots: Array<{ at: string; path: string }> = [];
+    for (const [index, result] of settled.entries()) {
+      const frame = sampled[index];
+      if (result.status === "fulfilled" && frame) {
+        snapshots.push({ at: formatTimestamp(frame.atSeconds), path: result.value });
+      }
+    }
+    const failed = settled.length - snapshots.length;
+    if (failed > 0) {
+      warnings.push(`有 ${failed} 张关键帧截图未能保存。`);
+    }
+    return snapshots;
+  };
+
+  try {
+    const outputs = await params.deps.describeMedia({
+      capability: "image",
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      files: sampled.map((frame) => ({ path: frame.path, mime: "image/jpeg" })),
+      prompt: `${params.prompt}\n\n${DEFAULT_FRAME_PROMPT}`,
+      maxChars: FRAME_DESCRIPTION_MAX_CHARS,
+      maxAttachments: sampled.length,
+      localRoot: params.workDir,
+    });
+    const frames: Array<{ at: string; description: string }> = [];
+    for (const output of outputs) {
+      const frame = sampled[output.attachmentIndex];
+      const description = normalizeOptionalString(output.text);
+      if (frame && description) {
+        frames.push({ at: formatTimestamp(frame.atSeconds), description });
+      }
+    }
+    if (frames.length === 0) {
+      warnings.push(IMAGE_PROVIDER_HINT);
+      return { frames, snapshots: await saveSnapshots(), warnings };
+    }
+    return { frames, snapshots: [], warnings };
+  } catch (error) {
+    const snapshots = await saveSnapshots();
+    return {
+      frames: [],
+      snapshots,
+      warnings: [
+        `关键帧描述失败：${formatErrorMessage(error)}。请检查 tools.media.image、QWEN_API_KEY、网络和模型额度。`,
+        ...warnings,
+      ],
+    };
+  }
 }
 
 async function analyzeDecomposed(params: {
@@ -342,80 +522,35 @@ async function analyzeDecomposed(params: {
   agentDir?: string;
   deps: VideoUnderstandToolDeps;
   warnings: string[];
-}): Promise<{ transcript?: string; frames: Array<{ at: string; description: string }> }> {
+}): Promise<{
+  transcript?: string;
+  frames: Array<{ at: string; description: string }>;
+  snapshots: Array<{ at: string; path: string }>;
+}> {
   const duration = params.probe.durationSeconds ?? 0;
-
-  let transcript: string | undefined;
-  if (params.probe.hasAudio) {
-    try {
-      const audioPath = await params.deps.extractAudio({
-        inputPath: params.filePath,
-        workDir: params.workDir,
-      });
-      const outputs = await params.deps.describeMedia({
-        capability: "audio",
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        files: [{ path: audioPath, mime: "audio/mpeg" }],
-        prompt: DEFAULT_TRANSCRIPT_PROMPT,
-        maxChars: TRANSCRIPT_MAX_CHARS,
-        maxAttachments: 1,
-        localRoot: params.workDir,
-      });
-      transcript = normalizeOptionalString(outputs[0]?.text);
-      if (!transcript) {
-        params.warnings.push("音轨转写未返回内容（可能没有配置语音转写 provider，或视频无人声）。");
-      }
-    } catch (error) {
-      params.warnings.push(`音轨转写失败：${formatErrorMessage(error)}`);
-    }
-  } else {
-    params.warnings.push("该视频没有音轨，只能依据画面分析。");
-  }
-
-  let sampled: ExtractedFrame[] = [];
-  if (duration > 0) {
-    try {
-      sampled = await params.deps.sampleFrames({
-        inputPath: params.filePath,
-        workDir: params.workDir,
-        durationSeconds: duration,
-        maxFrames: params.maxFrames,
-      });
-    } catch (error) {
-      params.warnings.push(`关键帧抽取失败：${formatErrorMessage(error)}`);
-    }
-  }
-
-  const frames: Array<{ at: string; description: string }> = [];
-  if (sampled.length > 0) {
-    try {
-      const outputs = await params.deps.describeMedia({
-        capability: "image",
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        files: sampled.map((frame) => ({ path: frame.path, mime: "image/jpeg" })),
-        prompt: `${params.prompt}\n\n${DEFAULT_FRAME_PROMPT}`,
-        maxChars: FRAME_DESCRIPTION_MAX_CHARS,
-        maxAttachments: sampled.length,
-        localRoot: params.workDir,
-      });
-      for (const output of outputs) {
-        const frame = sampled[output.attachmentIndex];
-        const description = normalizeOptionalString(output.text);
-        if (frame && description) {
-          frames.push({ at: formatTimestamp(frame.atSeconds), description });
-        }
-      }
-      if (frames.length === 0) {
-        params.warnings.push("关键帧描述未返回内容（可能没有配置图像理解 provider）。");
-      }
-    } catch (error) {
-      params.warnings.push(`关键帧描述失败：${formatErrorMessage(error)}`);
-    }
-  }
-
-  return { transcript, frames };
+  const [audio, visual] = await Promise.all([
+    analyzeAudioTrack({
+      filePath: params.filePath,
+      workDir: params.workDir,
+      hasAudio: params.probe.hasAudio,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      deps: params.deps,
+    }),
+    analyzeFrameTimeline({
+      filePath: params.filePath,
+      workDir: params.workDir,
+      durationSeconds: duration,
+      prompt: params.prompt,
+      maxFrames: params.maxFrames,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      deps: params.deps,
+    }),
+  ]);
+  // Keep warning order deterministic even though the expensive work runs concurrently.
+  params.warnings.push(...audio.warnings, ...visual.warnings);
+  return { transcript: audio.transcript, frames: visual.frames, snapshots: visual.snapshots };
 }
 
 export async function runVideoUnderstand(params: {
@@ -436,10 +571,7 @@ export async function runVideoUnderstand(params: {
   }
   const warnings: string[] = [];
   const prompt = normalizeOptionalString(params.prompt) ?? DEFAULT_VIDEO_PROMPT;
-  const maxFrames = Math.max(
-    1,
-    Math.min(MAX_FRAMES_CAP, Math.floor(params.maxFrames ?? DEFAULT_MAX_FRAMES)),
-  );
+  const requestedMaxFrames = params.maxFrames;
 
   const target = await resolveTargetUrl({ url: params.url, deps, warnings });
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-"));
@@ -488,15 +620,20 @@ export async function runVideoUnderstand(params: {
             workDir,
             probe,
             prompt,
-            maxFrames,
+            maxFrames: resolveFrameBudget(probe.durationSeconds, requestedMaxFrames),
             cfg: params.cfg,
             agentDir: params.agentDir,
             deps,
             warnings,
           })
-        : { transcript: undefined, frames: [] };
+        : { transcript: undefined, frames: [], snapshots: [] };
 
-    if (!description && !decomposed.transcript && decomposed.frames.length === 0) {
+    if (
+      !description &&
+      !decomposed.transcript &&
+      decomposed.frames.length === 0 &&
+      decomposed.snapshots.length === 0
+    ) {
       throw new Error(
         `视频已取回但没有任何分析结果。${warnings.length > 0 ? warnings.join(" ") : ""}`.trim(),
       );
@@ -513,6 +650,7 @@ export async function runVideoUnderstand(params: {
       description,
       transcript: decomposed.transcript,
       frames: decomposed.frames,
+      snapshots: decomposed.snapshots,
       warnings,
     };
     return { ...base, markdown: buildMarkdown(base) };
@@ -533,7 +671,8 @@ export function createVideoUnderstandTool(options?: {
     description:
       "Download the video behind a URL and analyze its content. Accepts a direct video URL, an HLS manifest, " +
       "a platform watch page (抖音/哔哩哔哩/微博/快手/YouTube…), or an article URL whose main video is detected automatically. " +
-      "Short clips are analyzed whole by a multimodal model; longer ones are transcribed and sampled into a frame timeline.",
+      "Short clips are analyzed whole by a multimodal model; longer ones are transcribed and sampled into a frame timeline. " +
+      "If visual understanding is unavailable, saved keyframes are returned as MEDIA paths that can be shown to the user.",
     parameters: VideoUnderstandSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

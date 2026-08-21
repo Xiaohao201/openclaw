@@ -55,7 +55,7 @@ const BUNDLED_MEDIA_PROVIDER_DEFAULTS: Record<string, BundledMediaProviderDefaul
   },
   qwen: {
     defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
-    autoPriority: { video: 15 },
+    autoPriority: { image: 35, video: 15 },
   },
   moonshot: {
     defaultModels: { image: "kimi-k2.5", video: "kimi-k2.5" },

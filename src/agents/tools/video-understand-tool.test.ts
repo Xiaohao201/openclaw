@@ -20,6 +20,7 @@ type Recorder = {
   compressed: number;
   audioExtracted: number;
   framesRequested: number[];
+  savedFrames: string[];
 };
 
 function makeDeps(options?: {
@@ -36,6 +37,7 @@ function makeDeps(options?: {
     compressed: 0,
     audioExtracted: 0,
     framesRequested: [],
+    savedFrames: [],
   };
   const deps: Partial<VideoUnderstandToolDeps> = {
     ffmpegAvailable: () => options?.ffmpegAvailable !== false,
@@ -71,6 +73,10 @@ function makeDeps(options?: {
           { path: "/tmp/frame-02.jpg", atSeconds: 90 },
         ]
       );
+    },
+    saveFrame: async ({ path: framePath }) => {
+      recorder.savedFrames.push(framePath);
+      return `/managed-media/${path.basename(framePath)}`;
     },
     describeMedia: async (params) => {
       recorder.describeCalls.push(params);
@@ -132,6 +138,61 @@ describe("runVideoUnderstand routing", () => {
       { at: "01:30", description: "第 2 帧画面" },
     ]);
     expect(recorder.describeCalls.map((call) => call.capability)).toEqual(["audio", "image"]);
+  });
+
+  it("starts audio transcription and frame understanding in parallel", async () => {
+    const started = new Set<string>();
+    let releaseAudio: (() => void) | undefined;
+    let releaseImage: (() => void) | undefined;
+    const audioGate = new Promise<void>((resolve) => {
+      releaseAudio = resolve;
+    });
+    const imageGate = new Promise<void>((resolve) => {
+      releaseImage = resolve;
+    });
+    const { deps } = makeDeps({
+      probe: { durationSeconds: 600 },
+      describe: async (params) => {
+        started.add(params.capability);
+        if (params.capability === "audio") {
+          await audioGate;
+          return [
+            {
+              kind: "audio.transcription",
+              attachmentIndex: 0,
+              text: "并行转写",
+              provider: "google",
+            },
+          ];
+        }
+        if (params.capability === "image") {
+          await imageGate;
+          return [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              text: "并行画面",
+              provider: "qwen",
+            },
+          ];
+        }
+        return [];
+      },
+    });
+
+    const pending = runVideoUnderstand({
+      url: "https://cdn.example.com/long.mp4",
+      cfg: CFG,
+      deps,
+    });
+
+    await expect.poll(() => [...started].toSorted()).toEqual(["audio", "image"]);
+    releaseAudio?.();
+    releaseImage?.();
+    await expect(pending).resolves.toMatchObject({
+      transcript: "并行转写",
+      frames: [{ at: "00:30", description: "并行画面" }],
+    });
   });
 
   it("compresses before whole-video analysis when the file is oversized", async () => {
@@ -196,6 +257,8 @@ describe("runVideoUnderstand routing", () => {
     });
     expect(result.route).toBe("decomposed");
     expect(result.transcript).toBe("兜底转写");
+    expect(result.warnings.join(" ")).toContain("tools.media.video");
+    expect(result.warnings.join(" ")).toContain("QWEN_API_KEY");
   });
 
   it("falls back when whole-video analysis throws and records the reason", async () => {
@@ -266,10 +329,28 @@ describe("runVideoUnderstand routing", () => {
     expect(result.warnings.join(" ")).toContain("no asr provider");
   });
 
+  it("returns saved keyframes when no provider produced text", async () => {
+    const { deps } = makeDeps({
+      probe: { durationSeconds: 600, hasAudio: false },
+      describe: async () => [],
+    });
+
+    const result = await runVideoUnderstand({
+      url: "https://cdn.example.com/silent.mp4",
+      cfg: CFG,
+      deps,
+    });
+
+    expect(result.frames).toEqual([]);
+    expect(result.snapshots).toHaveLength(2);
+    expect(result.markdown).toContain("### 关键帧截图");
+  });
+
   it("throws when neither route produced any analysis", async () => {
     const { deps } = makeDeps({
       probe: { durationSeconds: 600 },
       describe: async () => [],
+      frames: [],
     });
     await expect(
       runVideoUnderstand({ url: "https://cdn.example.com/long.mp4", cfg: CFG, deps }),
@@ -353,6 +434,40 @@ describe("runVideoUnderstand acquisition", () => {
 });
 
 describe("runVideoUnderstand output", () => {
+  it("uses an adaptive six-frame default budget", async () => {
+    const { deps, recorder } = makeDeps({ probe: { durationSeconds: 80 } });
+    deps.describeMedia = async (params) => {
+      recorder.describeCalls.push(params);
+      if (params.capability === "video" || params.capability === "image") {
+        return [];
+      }
+      return [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "转写内容",
+          provider: "google",
+        },
+      ];
+    };
+
+    const result = await runVideoUnderstand({
+      url: "https://cdn.example.com/eighty-seconds.mp4",
+      cfg: CFG,
+      deps,
+    });
+
+    expect(recorder.framesRequested).toEqual([6]);
+    expect(recorder.savedFrames).toEqual(["/tmp/frame-01.jpg", "/tmp/frame-02.jpg"]);
+    expect(result.snapshots).toEqual([
+      { at: "00:30", path: "/managed-media/frame-01.jpg" },
+      { at: "01:30", path: "/managed-media/frame-02.jpg" },
+    ]);
+    expect(result.markdown).toContain("MEDIA:/managed-media/frame-01.jpg");
+    expect(result.warnings.join(" ")).toContain("tools.media.image");
+    expect(result.warnings.join(" ")).toContain("QWEN_API_KEY");
+  });
+
   it("clamps the requested frame count", async () => {
     const { deps, recorder } = makeDeps({ probe: { durationSeconds: 600 } });
     await runVideoUnderstand({

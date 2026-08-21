@@ -44,6 +44,7 @@ describe("resolveAutoMediaKeyProviders", () => {
       "openai",
       "anthropic",
       "google",
+      "qwen",
       "minimax",
       "minimax-portal",
       "zai",

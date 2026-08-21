@@ -3,11 +3,21 @@ import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "../../src/media-understanding/audio.test-helpers.js";
-import { describeQwenVideo } from "./media-understanding-provider.js";
+import {
+  buildQwenMediaUnderstandingProvider,
+  describeQwenImagesWithApiKey,
+  describeQwenVideo,
+} from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
 describe("describeQwenVideo", () => {
+  it("opts image and video understanding into key-based auto-discovery", () => {
+    const provider = buildQwenMediaUnderstandingProvider();
+
+    expect(provider.autoPriority).toEqual({ image: 35, video: 15 });
+  });
+
   it("builds the expected OpenAI-compatible video payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
       choices: [
@@ -56,6 +66,64 @@ describe("describeQwenVideo", () => {
     expect(body.messages?.[0]?.content?.[1]?.type).toBe("video_url");
     expect(body.messages?.[0]?.content?.[1]?.video_url?.url).toBe(
       `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
+    );
+  });
+
+  it("maps a Coding Plan host to the Standard endpoint", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      choices: [{ message: { content: "video result" } }],
+    });
+
+    await describeQwenVideo({
+      buffer: Buffer.from("video-bytes"),
+      fileName: "clip.mp4",
+      mime: "video/mp4",
+      apiKey: "test-key",
+      timeoutMs: 1500,
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+      fetchFn,
+    });
+
+    expect(getRequest().url).toBe(
+      "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+    );
+  });
+});
+
+describe("describeQwenImagesWithApiKey", () => {
+  it("sends images directly to qwen-vl on the Standard endpoint", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      choices: [{ message: { content: "frame result" } }],
+    });
+
+    const result = await describeQwenImagesWithApiKey({
+      images: [
+        { buffer: Buffer.from("first-image"), fileName: "first.jpg", mime: "image/jpeg" },
+        { buffer: Buffer.from("second-image"), fileName: "second.png", mime: "image/png" },
+      ],
+      apiKey: "test-key",
+      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+      timeoutMs: 1500,
+      prompt: "describe both frames",
+      fetchFn,
+    });
+    const { url, init } = getRequest();
+    const bodyText =
+      typeof init?.body === "string"
+        ? init.body
+        : Buffer.isBuffer(init?.body)
+          ? init.body.toString("utf8")
+          : "";
+    const body = JSON.parse(bodyText);
+
+    expect(result).toEqual({ text: "frame result", model: "qwen-vl-max-latest" });
+    expect(url).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+    expect(body.messages[0].content[0]).toEqual({ type: "text", text: "describe both frames" });
+    expect(body.messages[0].content[1].image_url.url).toBe(
+      `data:image/jpeg;base64,${Buffer.from("first-image").toString("base64")}`,
+    );
+    expect(body.messages[0].content[2].image_url.url).toBe(
+      `data:image/png;base64,${Buffer.from("second-image").toString("base64")}`,
     );
   });
 });
