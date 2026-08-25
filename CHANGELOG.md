@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Brave/search auditing: persist every upstream Brave response, including empty result sets, to the configured MySQL `websearch_cache` table without exposing credentials or failing the search when persistence is unavailable.
 - Full-text search/web fetch: prioritize indexed cross-platform search for fresh and local social events before open-web corroboration, and document the narrow RFC2544 fake-IP opt-in for trusted Clash/Surge environments without allowing private networks.
 - Browser/SSRF: add a narrow RFC2544 benchmark-range opt-in so trusted Clash/Surge fake-IP environments can navigate public websites without enabling access to other private networks.
+- RabbitMQ/Suheng workspaces: preserve Chinese directory and file names during artifact generation, pass Unicode paths as values instead of inline Python source, and syntax-check generated Python before execution.
 
 ## 2026.4.15
 

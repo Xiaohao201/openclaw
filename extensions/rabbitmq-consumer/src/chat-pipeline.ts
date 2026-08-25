@@ -25,6 +25,7 @@ import { computeDateScope, detectReportRequest, type ReportPeriod } from "./repo
 import { sanitizeInternalRefs } from "./sanitize-output.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
+import { buildSuhengWorkspaceContext } from "./suheng-workspace-context.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
@@ -1162,6 +1163,7 @@ export async function processChatMessage(
       // block (split off in Step 6). It self-gates per the "when to cite" rules,
       // so pure chat/creative turns simply omit it.
       const citationDirective = buildCitationDirective();
+      const suhengWorkspaceContext = buildSuhengWorkspaceContext(userMessage);
       const suhengDesignContext = buildSuhengDesignContext(userMessage);
 
       // Open the accounting window BEFORE the run: every assistant message the
@@ -1171,7 +1173,7 @@ export async function processChatMessage(
 
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
         ...(builtinSkillName ? { skillFilter: [builtinSkillName] } : {}),
         deliver: false,
       });

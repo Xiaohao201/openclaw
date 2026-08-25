@@ -1069,6 +1069,33 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain(`[userId:${USER_ID}] 请设计一个可交互的舆情看板`);
   });
 
+  it("preserves Chinese workspace names without embedding them in Python source", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      { ...createChatMessage(), message: "请创建工作文件夹：舆情报告（夙衡）" },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(capturedMessage).toContain("[suheng-workspace]");
+    expect(capturedMessage).toContain("保留用户要求的中文目录名和文件名");
+    expect(capturedMessage).toContain("pathlib.Path(sys.argv[1])");
+    expect(capturedMessage).toContain("python -m py_compile");
+    expect(capturedMessage).toContain(`[userId:${USER_ID}] 请创建工作文件夹：舆情报告（夙衡）`);
+  });
+
   it("prefixes a no-memory directive when use_memory is false", async () => {
     // use_memory:false must reach the agent: memory tools are agent-level and
     // cannot be removed per-run, so we suppress recall via a prompt directive.
