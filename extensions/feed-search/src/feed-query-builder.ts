@@ -3,10 +3,12 @@ import {
   AGGREGATION_DIMENSIONS,
   DEFAULT_STATS_DIMENSIONS,
   EMOTIONS,
+  FULL_READ_THRESHOLD,
   LEVELS,
   SEARCH_COLUMNS,
   SEARCH_LIMIT_DEFAULT,
   SEARCH_LIMIT_MAX,
+  SEARCH_SAMPLE_SIZE_DEFAULT,
   STATS_BUCKET_MAX,
 } from "./feed-query-fields.js";
 
@@ -164,6 +166,14 @@ export function buildSearchQuery(
   const where = buildWhere(filters, topic);
   const limit = clamp(filters.limit, 1, SEARCH_LIMIT_MAX, SEARCH_LIMIT_DEFAULT);
 
+  return buildOrderedDetailQuery(topic, where, limit);
+}
+
+function buildOrderedDetailQuery(
+  topic: AuthorizedTopic,
+  where: WhereClause,
+  limit: number,
+): BuiltQuery & { topic: AuthorizedTopic } {
   const sql =
     `SELECT ${SEARCH_COLUMNS.join(", ")} ` +
     "FROM feed_monitor_item f JOIN feed_monitor_item_data d ON d.id = f.id " +
@@ -171,6 +181,103 @@ export function buildSearchQuery(
     // limit is a server-clamped integer, never raw input (mysql2 execute()
     // does not accept LIMIT as a bound parameter).
     `ORDER BY f.date DESC, f.id DESC LIMIT ${limit}`;
+
+  return { sql, values: where.values, topic };
+}
+
+/** Build the exact COUNT(*) used before every adaptive detail search. */
+export function buildSearchCountQuery(
+  filters: FeedQueryFilters,
+  authorizedTopics: AuthorizedTopic[],
+): BuiltQuery & { topic: AuthorizedTopic } {
+  const topic = selectTargetTopic(filters.topicId, authorizedTopics);
+  const where = buildWhere(filters, topic);
+  const join = where.needsDataJoin ? " JOIN feed_monitor_item_data d ON d.id = f.id" : "";
+
+  return {
+    topic,
+    sql: `SELECT COUNT(*) AS cnt FROM feed_monitor_item f${join} WHERE ${where.conditions.join(" AND ")}`,
+    values: where.values,
+  };
+}
+
+/** Read all matching details after COUNT confirms the result is within the safe threshold. */
+export function buildFullSearchQuery(
+  filters: FeedQueryFilters,
+  authorizedTopics: AuthorizedTopic[],
+): BuiltQuery & { topic: AuthorizedTopic } {
+  const topic = selectTargetTopic(filters.topicId, authorizedTopics);
+  const where = buildWhere(filters, topic);
+  return buildOrderedDetailQuery(topic, where, FULL_READ_THRESHOLD);
+}
+
+function resolveSampleSize(limit: number | undefined): number {
+  return clamp(limit, 1, SEARCH_LIMIT_MAX, SEARCH_SAMPLE_SIZE_DEFAULT);
+}
+
+function resolveSampleQuotas(sampleSize: number): {
+  latest: number;
+  highImpact: number;
+  temporal: number;
+} {
+  const latest = Math.max(1, Math.floor(sampleSize * 0.25));
+  const highImpact = sampleSize > 1 ? Math.max(1, Math.floor(sampleSize * 0.15)) : 0;
+  return { latest, highImpact, temporal: sampleSize - latest - highImpact };
+}
+
+/**
+ * Build a deterministic mixed sample for large result sets. The CTE ranks only
+ * lightweight item metadata; long title/summary fields are joined after the
+ * latest, high-impact, and time-distributed ids have been selected.
+ */
+export function buildSampleSearchQuery(
+  filters: FeedQueryFilters,
+  authorizedTopics: AuthorizedTopic[],
+): BuiltQuery & { topic: AuthorizedTopic } {
+  const topic = selectTargetTopic(filters.topicId, authorizedTopics);
+  const where = buildWhere(filters, topic);
+  const sampleSize = resolveSampleSize(filters.limit);
+  const quotas = resolveSampleQuotas(sampleSize);
+  const filterJoin = where.needsDataJoin ? " JOIN feed_monitor_item_data d ON d.id = f.id" : "";
+  const temporalCtes =
+    quotas.temporal === 0
+      ? ", temporal AS (SELECT id FROM matched WHERE 1 = 0)"
+      : ", temporal_ranked AS (" +
+        "SELECT m.id, ROW_NUMBER() OVER (ORDER BY m.date DESC, m.id DESC) AS remaining_rank " +
+        "FROM matched m WHERE NOT EXISTS (SELECT 1 FROM latest l WHERE l.id = m.id) " +
+        "AND NOT EXISTS (SELECT 1 FROM high_impact h WHERE h.id = m.id)" +
+        "), temporal_bucketed AS (" +
+        `SELECT id, remaining_rank, NTILE(${quotas.temporal}) OVER ` +
+        "(ORDER BY remaining_rank) AS time_bucket FROM temporal_ranked" +
+        "), temporal AS (" +
+        "SELECT id FROM (SELECT id, remaining_rank, " +
+        "ROW_NUMBER() OVER (PARTITION BY time_bucket ORDER BY remaining_rank) AS bucket_rank " +
+        "FROM temporal_bucketed) bucketed WHERE bucket_rank = 1 " +
+        `ORDER BY remaining_rank LIMIT ${quotas.temporal})`;
+
+  const sql =
+    "WITH matched AS (" +
+    "SELECT f.id, f.date, f.level, " +
+    "(COALESCE(f.readCount, 0) + COALESCE(f.comments, 0) + " +
+    "COALESCE(f.forwardNumber, 0) + COALESCE(f.praiseNum, 0)) AS engagement " +
+    `FROM feed_monitor_item f${filterJoin} WHERE ${where.conditions.join(" AND ")}` +
+    "), latest AS (" +
+    `SELECT id FROM matched ORDER BY date DESC, id DESC LIMIT ${quotas.latest}` +
+    "), high_impact AS (" +
+    "SELECT m.id FROM matched m " +
+    "WHERE NOT EXISTS (SELECT 1 FROM latest l WHERE l.id = m.id) " +
+    "ORDER BY CASE m.level WHEN 'Red' THEN 4 WHEN 'Orange' THEN 3 " +
+    "WHEN 'Yellow' THEN 2 WHEN 'Blue' THEN 1 ELSE 0 END DESC, " +
+    `m.engagement DESC, m.date DESC, m.id DESC LIMIT ${quotas.highImpact})` +
+    temporalCtes +
+    ", selected AS (" +
+    "SELECT id FROM latest UNION ALL SELECT id FROM high_impact " +
+    "UNION ALL SELECT id FROM temporal" +
+    ") " +
+    `SELECT ${SEARCH_COLUMNS.join(", ")} FROM selected s ` +
+    "JOIN feed_monitor_item f ON f.id = s.id " +
+    "JOIN feed_monitor_item_data d ON d.id = f.id " +
+    `ORDER BY f.date DESC, f.id DESC LIMIT ${sampleSize}`;
 
   return { sql, values: where.values, topic };
 }

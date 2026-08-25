@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  FULL_READ_THRESHOLD,
+  SEARCH_RESULT_CHAR_BUDGET,
+  SEARCH_TEXT_FIELD_LIMITS,
+} from "./feed-query-fields.js";
 
 const { mockExecuteQuery } = vi.hoisted(() => ({
   mockExecuteQuery: vi.fn<(...args: unknown[]) => Promise<unknown[]>>(),
@@ -17,7 +22,10 @@ vi.mock("./mysql-client.js", () => ({
 
 const { createFeedQueryToolFactory } = await import("./feed-query-tool.js");
 
-type ToolResult = { details: Record<string, unknown> };
+type ToolResult = {
+  content: Array<{ type: string; text: string }>;
+  details: Record<string, unknown>;
+};
 type Tool = {
   name: string;
   execute: (toolCallId: string, params: Record<string, unknown>) => Promise<ToolResult>;
@@ -55,6 +63,22 @@ describe("createFeedQueryToolFactory", () => {
     vi.clearAllMocks();
   });
 
+  it("uses text budgets aligned with the database schema and sampled lengths", () => {
+    expect(SEARCH_TEXT_FIELD_LIMITS).toEqual({
+      title: 120,
+      summary: 300,
+      author: 40,
+      platform: 16,
+      level: 6,
+      emotion: 8,
+      date: 24,
+      link: 320,
+      mediaLevel: 10,
+      contentType: 7,
+      city: 16,
+    });
+  });
+
   it("exposes the tool only to rabbitmq-prefixed agents", () => {
     expect(factory({ agentId: "rabbitmq-1749" })).not.toBeNull();
     expect(factory({ agentId: "telegram-bot" })).toBeNull();
@@ -67,6 +91,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本监测专项"]));
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: 1 }]);
     mockExecuteQuery.mockResolvedValueOnce([
       { id: 1, title: "标题", level: "Red", emotion: "Negative" },
     ]);
@@ -77,6 +102,10 @@ describe("createFeedQueryToolFactory", () => {
       success: true,
       topic: { topicId: 585, topicName: "广本监测专项" },
       count: 1,
+      returnedCount: 1,
+      total: 1,
+      readMode: "full",
+      sampled: false,
     });
     // The auth query must use the trusted userId parsed from agentId.
     expect(mockExecuteQuery).toHaveBeenNthCalledWith(
@@ -85,9 +114,131 @@ describe("createFeedQueryToolFactory", () => {
       expect.stringContaining("FROM entity_auth"),
       ["2005"],
     );
-    const searchCall = mockExecuteQuery.mock.calls[3];
+    const countCall = mockExecuteQuery.mock.calls[3];
+    expect(countCall[1]).toContain("SELECT COUNT(*) AS cnt");
+    const searchCall = mockExecuteQuery.mock.calls[4];
     expect(searchCall[1]).toContain("WHERE f.slaveTopicId = ? AND f.skip = 0");
     expect(searchCall[2]).toEqual([585, "%裁员%", "%裁员%", "%裁员%"]);
+  });
+
+  it("returns zero total without running a detail query", async () => {
+    const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: 0 }]);
+
+    const result = await tool.execute("call-1", {});
+
+    expect(result.details).toMatchObject({
+      success: true,
+      total: 0,
+      returnedCount: 0,
+      count: 0,
+      readMode: "full",
+      sampled: false,
+      items: [],
+    });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(4);
+  });
+
+  it("reads the complete result at the threshold", async () => {
+    const tool = factory({ agentId: "rabbitmq-2005" })!;
+    const rows = Array.from({ length: FULL_READ_THRESHOLD }, (_, index) => ({
+      id: index + 1,
+      title: `标题 ${index + 1}`,
+      summary: "摘要",
+      date: "2026-06-01",
+    }));
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: FULL_READ_THRESHOLD }]);
+    mockExecuteQuery.mockResolvedValueOnce(rows);
+
+    const result = await tool.execute("call-1", { limit: 5 });
+
+    expect(result.details).toMatchObject({
+      total: FULL_READ_THRESHOLD,
+      returnedCount: FULL_READ_THRESHOLD,
+      count: FULL_READ_THRESHOLD,
+      readMode: "full",
+      sampled: false,
+    });
+    expect(mockExecuteQuery.mock.calls[4][1]).toContain(`LIMIT ${FULL_READ_THRESHOLD}`);
+  });
+
+  it.each([FULL_READ_THRESHOLD + 1, 1_000_000])(
+    "samples a larger result while preserving its exact total (%i)",
+    async (total) => {
+      const tool = factory({ agentId: "rabbitmq-2005" })!;
+      const rows = Array.from({ length: 100 }, (_, index) => ({
+        id: index + 1,
+        title: `样本 ${index + 1}`,
+        date: "2026-06-01",
+      }));
+      mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+      mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
+      mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
+      mockExecuteQuery.mockResolvedValueOnce([{ cnt: total }]);
+      mockExecuteQuery.mockResolvedValueOnce(rows);
+
+      const result = await tool.execute("call-1", {});
+
+      expect(result.details).toMatchObject({
+        total,
+        returnedCount: 100,
+        count: 100,
+        readMode: "sample",
+        sampled: true,
+        samplingMethod: "recent-risk-temporal-v1",
+      });
+      const sampleSql = String(mockExecuteQuery.mock.calls[4][1]);
+      expect(sampleSql).toContain("ROW_NUMBER() OVER");
+      expect(sampleSql).not.toMatch(/ORDER BY\s+RAND\s*\(/i);
+    },
+  );
+
+  it("bounds long model-visible rows and reports field truncation", async () => {
+    const tool = factory({ agentId: "rabbitmq-2005" })!;
+    const longText = "舆情内容".repeat(2_000);
+    const rows = Array.from({ length: FULL_READ_THRESHOLD }, (_, index) => ({
+      id: index + 1,
+      title: longText,
+      summary: longText,
+      author: longText,
+      platform: "微博",
+      level: "Red",
+      emotion: "Negative",
+      date: "2026-06-01",
+      link: `https://example.com/${longText}`,
+      mediaLevel: "Government",
+      contentType: "Article",
+      city: "广州市",
+    }));
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: FULL_READ_THRESHOLD }]);
+    mockExecuteQuery.mockResolvedValueOnce(rows);
+
+    const result = await tool.execute("call-1", {});
+
+    expect(result.content[0].text.length).toBeLessThanOrEqual(SEARCH_RESULT_CHAR_BUDGET);
+    expect(result.details).toMatchObject({
+      returnedCount: FULL_READ_THRESHOLD,
+      fieldsTruncated: true,
+    });
+    expect((result.details.items as unknown[]).length).toBe(FULL_READ_THRESHOLD);
+    expect((result.details.items as Array<Record<string, unknown>>)[0]).toMatchObject({
+      platform: "微博",
+      level: "Red",
+      emotion: "Negative",
+      date: "2026-06-01",
+      mediaLevel: "Government",
+      contentType: "Article",
+      city: "广州市",
+    });
   });
 
   it("rejects a topicId outside the authorized set without querying data", async () => {

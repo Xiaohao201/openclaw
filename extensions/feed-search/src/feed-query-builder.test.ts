@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { AuthorizedTopic } from "./auth-topic-resolver.js";
 import {
+  buildFullSearchQuery,
+  buildSampleSearchQuery,
+  buildSearchCountQuery,
   buildSearchQuery,
   buildStatsQueries,
   UnauthorizedTopicError,
 } from "./feed-query-builder.js";
 import {
   AGGREGATION_DIMENSIONS,
+  FULL_READ_THRESHOLD,
+  SEARCH_SAMPLE_SIZE_DEFAULT,
   SEARCH_LIMIT_DEFAULT,
   SEARCH_LIMIT_MAX,
 } from "./feed-query-fields.js";
@@ -130,6 +135,70 @@ describe("buildSearchQuery", () => {
     const { sql } = buildSearchQuery({}, AUTH);
 
     expect(sql).toContain("ORDER BY f.date DESC, f.id DESC");
+  });
+});
+
+describe("adaptive search queries", () => {
+  it("builds an exact count with the same filters and parameters as details", () => {
+    const filters = {
+      topicId: 585,
+      startDate: "2026-06-01",
+      endDate: "2026-06-06",
+      level: ["Red", "Orange"],
+      emotion: ["Negative"],
+      platform: "微博",
+      keyword: "裁员",
+    };
+
+    const count = buildSearchCountQuery(filters, AUTH);
+    const full = buildFullSearchQuery(filters, AUTH);
+
+    expect(count.sql).toContain("SELECT COUNT(*) AS cnt");
+    expect(count.sql).toContain("JOIN feed_monitor_item_data d ON d.id = f.id");
+    expect(count.values).toEqual(full.values);
+    expect(placeholders(count.sql)).toBe(count.values.length);
+    expect(placeholders(full.sql)).toBe(full.values.length);
+  });
+
+  it("does not join the data table for counts without a keyword", () => {
+    const count = buildSearchCountQuery({ platform: "微博" }, AUTH);
+
+    expect(count.sql).not.toContain("JOIN feed_monitor_item_data");
+    expect(count.values).toEqual([585, "微博"]);
+  });
+
+  it("reads every match up to the full-read threshold regardless of legacy limit", () => {
+    const query = buildFullSearchQuery({ limit: 5 }, AUTH);
+
+    expect(query.sql).toContain(`LIMIT ${FULL_READ_THRESHOLD}`);
+  });
+
+  it("builds a deterministic mixed sample without ORDER BY RAND", () => {
+    const query = buildSampleSearchQuery({ keyword: "裁员" }, AUTH);
+
+    expect(query.sql).toContain("ROW_NUMBER() OVER");
+    expect(query.sql).toContain("latest AS");
+    expect(query.sql).toContain("high_impact AS");
+    expect(query.sql).toContain("temporal_ranked AS");
+    expect(query.sql).toContain("NTILE(60) OVER");
+    expect(query.sql).toContain("bucket_rank = 1");
+    expect(query.sql).toContain(`LIMIT ${SEARCH_SAMPLE_SIZE_DEFAULT}`);
+    expect(query.sql).not.toMatch(/ORDER BY\s+RAND\s*\(/i);
+    expect(placeholders(query.sql)).toBe(query.values.length);
+  });
+
+  it("keeps sample SQL byte-stable and clamps the requested sample size", () => {
+    const first = buildSampleSearchQuery({ limit: SEARCH_LIMIT_MAX + 1 }, AUTH);
+    const second = buildSampleSearchQuery({ limit: SEARCH_LIMIT_MAX + 1 }, AUTH);
+
+    expect(first).toEqual(second);
+    expect(first.sql).toContain(`LIMIT ${SEARCH_LIMIT_MAX}`);
+  });
+
+  it("enforces topic authorization before building count or detail SQL", () => {
+    expect(() => buildSearchCountQuery({ topicId: 999 }, AUTH)).toThrow(UnauthorizedTopicError);
+    expect(() => buildFullSearchQuery({ topicId: 999 }, AUTH)).toThrow(UnauthorizedTopicError);
+    expect(() => buildSampleSearchQuery({ topicId: 999 }, AUTH)).toThrow(UnauthorizedTopicError);
   });
 });
 

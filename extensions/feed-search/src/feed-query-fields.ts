@@ -51,8 +51,48 @@ export const SEARCH_COLUMNS = [
   "f.praiseNum",
 ] as const;
 
-export const SEARCH_LIMIT_MAX = 500;
+/** Matches at or below this count are read in full. */
+export const FULL_READ_THRESHOLD = 100;
+
+/** Detail count used when a larger result set must be sampled. */
+export const SEARCH_SAMPLE_SIZE_DEFAULT = 100;
+export const SEARCH_LIMIT_MAX = 100;
+
+/** Legacy search default, retained for callers of buildSearchQuery(). */
 export const SEARCH_LIMIT_DEFAULT = 20;
+
+/** Maximum serialized characters exposed to the model for one search result. */
+export const SEARCH_RESULT_CHAR_BUDGET = 40_000;
+
+/**
+ * Per-field limits keep every selected row visible without one row dominating
+ * the result. Narrative limits reflect a recent 10,000-row length sample;
+ * enum limits match the longest value declared by the MySQL schema.
+ */
+export const SEARCH_TEXT_FIELD_LIMITS: Readonly<Record<string, number>> = {
+  title: 120,
+  summary: 300,
+  author: 40,
+  platform: 16,
+  level: 6,
+  emotion: 8,
+  date: 24,
+  link: 320,
+  mediaLevel: 10,
+  contentType: 7,
+  city: 16,
+};
+
+/** Structured values stay complete when narrative fields are scaled to fit the result budget. */
+export const SEARCH_UNSCALED_TEXT_FIELDS: ReadonlySet<string> = new Set([
+  "platform",
+  "level",
+  "emotion",
+  "date",
+  "mediaLevel",
+  "contentType",
+  "city",
+]);
 
 /** Max buckets returned per stats dimension. */
 export const STATS_BUCKET_MAX = 30;

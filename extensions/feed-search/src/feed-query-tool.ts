@@ -3,12 +3,24 @@ import type { RowDataPacket } from "mysql2/promise";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import { AuthTopicResolver, type AuthorizedTopic } from "./auth-topic-resolver.js";
 import {
-  buildSearchQuery,
+  buildFullSearchQuery,
+  buildSampleSearchQuery,
+  buildSearchCountQuery,
   buildStatsQueries,
   UnauthorizedTopicError,
   type FeedQueryFilters,
 } from "./feed-query-builder.js";
-import { AGGREGATION_DIMENSIONS, EMOTIONS, LEVELS, SEARCH_LIMIT_MAX } from "./feed-query-fields.js";
+import {
+  AGGREGATION_DIMENSIONS,
+  EMOTIONS,
+  FULL_READ_THRESHOLD,
+  LEVELS,
+  SEARCH_COLUMNS,
+  SEARCH_LIMIT_MAX,
+  SEARCH_RESULT_CHAR_BUDGET,
+  SEARCH_TEXT_FIELD_LIMITS,
+  SEARCH_UNSCALED_TEXT_FIELDS,
+} from "./feed-query-fields.js";
 import { executeQuery, resolveConfig } from "./mysql-client.js";
 
 /**
@@ -73,7 +85,9 @@ const FeedQueryToolSchema = Type.Object(
       Type.Number({
         minimum: 1,
         maximum: SEARCH_LIMIT_MAX,
-        description: `Search mode only: max items to return (default 20, max ${SEARCH_LIMIT_MAX}).`,
+        description:
+          `Search mode only: sample size when more than ${FULL_READ_THRESHOLD} items match ` +
+          `(default and max ${SEARCH_LIMIT_MAX}). Smaller result sets are always read in full.`,
       }),
     ),
   },
@@ -142,8 +156,9 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
       label: "Feed Query",
       description:
         "Query the sentiment-monitoring (舆情) database for your authorized monitoring topics. " +
-        'Use mode="search" for recent matching items (title, summary, platform, risk level, ' +
+        'Use mode="search" for matching items plus an exact total count (title, summary, platform, risk level, ' +
         'sentiment, link) and mode="stats" for aggregate counts over the full filtered set. ' +
+        `Search reads all results up to ${FULL_READ_THRESHOLD}; larger sets return a stable mixed sample. ` +
         "Access is automatically restricted to topics owned by the current user.",
       parameters: FeedQueryToolSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -171,7 +186,7 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
           if (mode === "stats") {
             return jsonResult(await runStats(config, filters, topics));
           }
-          return jsonResult(await runSearch(config, filters, topics));
+          return await runSearch(config, filters, topics);
         } catch (error) {
           if (error instanceof UnauthorizedTopicError) {
             return jsonResult({
@@ -200,16 +215,140 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
 
 type DbConfig = ReturnType<typeof resolveConfig>;
 
-async function runSearch(config: DbConfig, filters: FeedQueryFilters, topics: AuthorizedTopic[]) {
-  const { sql, values, topic } = buildSearchQuery(filters, topics);
-  const rows = await executeQuery<RowDataPacket[]>(config, sql, values);
-  const items: Array<Record<string, unknown>> = rows ?? [];
+type SearchReadMode = "full" | "sample";
+
+const SEARCH_RESULT_FIELDS = SEARCH_COLUMNS.map((column) => column.slice(column.indexOf(".") + 1));
+
+function truncateText(value: string, limit: number): { value: string; truncated: boolean } {
+  if (value.length <= limit) {
+    return { value, truncated: false };
+  }
+  if (limit <= 1) {
+    return { value: "…", truncated: true };
+  }
+  return { value: `${value.slice(0, limit - 1)}…`, truncated: true };
+}
+
+function normalizeSearchValue(
+  field: string,
+  value: unknown,
+  scale: number,
+): { value: unknown; truncated: boolean } {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return { value: value ?? null, truncated: false };
+  }
+  if (value instanceof Date) {
+    return { value: value.toISOString(), truncated: false };
+  }
+
+  if (typeof value !== "string" && typeof value !== "bigint") {
+    return { value: null, truncated: true };
+  }
+  const text = typeof value === "bigint" ? value.toString() : value;
+  const baseLimit = SEARCH_TEXT_FIELD_LIMITS[field] ?? 64;
+  const effectiveScale = SEARCH_UNSCALED_TEXT_FIELDS.has(field) ? 1 : scale;
+  const scaledLimit = Math.max(1, Math.floor(baseLimit * effectiveScale));
+  return truncateText(text, scaledLimit);
+}
+
+function compactSearchItems(rows: Array<Record<string, unknown>>, scale: number) {
+  let fieldsTruncated = false;
+  const items = rows.map((row) => {
+    const item: Record<string, unknown> = {};
+    for (const field of SEARCH_RESULT_FIELDS) {
+      const normalized = normalizeSearchValue(field, row[field], scale);
+      item[field] = normalized.value;
+      fieldsTruncated ||= normalized.truncated;
+    }
+    return item;
+  });
+  return { items, fieldsTruncated };
+}
+
+function buildModelPayload(
+  metadata: Record<string, unknown>,
+  items: Array<Record<string, unknown>>,
+) {
   return {
-    success: true,
-    topic: { topicId: topic.topicId, topicName: topic.topicName },
-    count: items.length,
-    items,
+    ...metadata,
+    columns: SEARCH_RESULT_FIELDS,
+    // Columnar rows avoid repeating 16 JSON keys for every model-visible item.
+    items: items.map((item) => SEARCH_RESULT_FIELDS.map((field) => item[field])),
   };
+}
+
+function boundedSearchResult(params: {
+  topic: AuthorizedTopic;
+  total: number;
+  rows: Array<Record<string, unknown>>;
+  readMode: SearchReadMode;
+}) {
+  const sampled = params.readMode === "sample";
+  const metadata: Record<string, unknown> = {
+    success: true,
+    topic: { topicId: params.topic.topicId, topicName: params.topic.topicName },
+    total: params.total,
+    returnedCount: params.rows.length,
+    count: params.rows.length,
+    readMode: params.readMode,
+    sampled,
+    fullReadThreshold: FULL_READ_THRESHOLD,
+    sampleSize: params.rows.length,
+    ...(sampled ? { samplingMethod: "recent-risk-temporal-v1" } : {}),
+  };
+
+  const scales = [1, 0.75, 0.5, 0.35, 0.25, 0.15, 0.08, 0];
+  for (const scale of scales) {
+    const compacted = compactSearchItems(params.rows, scale);
+    const details = {
+      ...metadata,
+      fieldsTruncated: compacted.fieldsTruncated,
+      items: compacted.items,
+    };
+    const text = JSON.stringify(
+      buildModelPayload(
+        { ...metadata, fieldsTruncated: compacted.fieldsTruncated },
+        compacted.items,
+      ),
+    );
+    if (text.length <= SEARCH_RESULT_CHAR_BUDGET) {
+      return {
+        content: [{ type: "text" as const, text }],
+        details,
+      };
+    }
+  }
+
+  // The zero-scale representation keeps all selected ids/rows and is expected
+  // to fit. Treat a future schema expansion that breaks this invariant as a
+  // query failure instead of silently dropping records.
+  throw new RangeError(
+    `Search result metadata exceeds the ${SEARCH_RESULT_CHAR_BUDGET}-character budget`,
+  );
+}
+
+async function runSearch(config: DbConfig, filters: FeedQueryFilters, topics: AuthorizedTopic[]) {
+  const countQuery = buildSearchCountQuery(filters, topics);
+  const countRows = await executeQuery<RowDataPacket[]>(config, countQuery.sql, countQuery.values);
+  const total = Number(countRows?.[0]?.cnt) || 0;
+
+  if (total === 0) {
+    return boundedSearchResult({ topic: countQuery.topic, total, rows: [], readMode: "full" });
+  }
+
+  const readMode: SearchReadMode = total <= FULL_READ_THRESHOLD ? "full" : "sample";
+  const detailQuery =
+    readMode === "full"
+      ? buildFullSearchQuery(filters, topics)
+      : buildSampleSearchQuery(filters, topics);
+  const rows = await executeQuery<RowDataPacket[]>(config, detailQuery.sql, detailQuery.values);
+  const items: Array<Record<string, unknown>> = rows ?? [];
+  return boundedSearchResult({ topic: countQuery.topic, total, rows: items, readMode });
 }
 
 async function runStats(config: DbConfig, filters: FeedQueryFilters, topics: AuthorizedTopic[]) {

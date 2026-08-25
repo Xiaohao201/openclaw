@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Agents/skills: upgrade the bundled AI public-opinion brief to V3.1 with staged analysis and slot locking, source-aware media deduplication, strictly templated three- or four-section briefs, and leadership-approved reference examples.
 - RabbitMQ/Suheng design: inject the compact OpenKnot design guidance only for visual-artifact requests and align generated Markdown, images, and standalone HTML delivery with the ai-assistant chat renderer.
 - RabbitMQ/Suheng video links: add an optional short-video parsing tool backed by the Qiyun API, returning direct media and metadata for follow-up `video_understand` analysis while keeping credentials in environment configuration.
+- Feed search: return an exact total for every monitoring-data search, read result sets up to 100 items in full, and use a bounded deterministic sample for larger matches.
 
 ### Fixes
 
