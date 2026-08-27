@@ -158,6 +158,7 @@ the Standard endpoint.
 | --------------------------- | ----------- | --------- | -------------------------------------------------- |
 | `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
 | `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
+| `qwen/qwen3.8-flash`        | text, image | 1,000,000 | Standard only; alias: `Suheng 3.2mini`             |
 | `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
 | `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
 | `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
@@ -170,6 +171,15 @@ the Standard endpoint.
 Availability can still vary by endpoint and billing plan even when a model is
 present in the bundled catalog.
 </Note>
+
+Qwen lists `qwen3.8-flash` at $0.16 per million input tokens and $0.47 per
+million output tokens. OpenClaw records Qwen prices in CNY using the deployment's
+default 7:1 conversion rate: **¥1.12 per million input tokens**, **¥3.29 per
+million output tokens**, and **¥0.224 per million implicit cache-read tokens**.
+The cache price follows Qwen Cloud's published
+[20% cache-hit rate](https://www.alibabacloud.com/help/en/model-studio/context-cache). The
+[Qwen3.8-Flash-Next announcement](https://qwen.ai/blog?id=qwen3.8-flash-next)
+also says that managed API access is rolling out after the model announcement.
 
 ## Multimodal add-ons
 

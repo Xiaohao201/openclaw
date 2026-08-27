@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng design: inject the compact OpenKnot design guidance only for visual-artifact requests and align generated Markdown, images, and standalone HTML delivery with the ai-assistant chat renderer.
 - RabbitMQ/Suheng video links: add an optional short-video parsing tool backed by the Qiyun API, returning direct media and metadata for follow-up `video_understand` analysis while keeping credentials in environment configuration.
 - Feed search: return an exact total for every monitoring-data search, read result sets up to 100 items in full, and use a bounded deterministic sample for larger matches.
+- Qwen/models: add the Standard-endpoint `qwen3.8-flash` catalog entry with text and image input, reasoning, 1M context, CNY usage pricing, and the `Suheng 3.2mini` alias.
 
 ### Fixes
 

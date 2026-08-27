@@ -16,13 +16,23 @@ export const QWEN_STANDARD_GLOBAL_BASE_URL =
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
+export const QWEN_38_FLASH_MODEL_ID = "qwen3.8-flash";
+export const QWEN_38_FLASH_ALIAS = "Suheng 3.2mini";
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
 };
+export const QWEN_38_FLASH_COST = {
+  input: 1.12,
+  output: 3.29,
+  cacheRead: 0.224,
+  cacheWrite: 0,
+};
 export const QWEN_DEFAULT_MODEL_REF = `qwen/${QWEN_DEFAULT_MODEL_ID}`;
+
+const QWEN_STANDARD_ONLY_MODEL_IDS = new Set([QWEN_36_PLUS_MODEL_ID, QWEN_38_FLASH_MODEL_ID]);
 
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {
@@ -40,6 +50,15 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     reasoning: false,
     input: ["text", "image"],
     cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_38_FLASH_MODEL_ID,
+    name: QWEN_38_FLASH_ALIAS,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_38_FLASH_COST,
     contextWindow: 1_000_000,
     maxTokens: 65_536,
   },
@@ -124,15 +143,23 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boolean {
+  return isQwenStandardEndpointBaseUrl(baseUrl);
+}
+
+export function isQwenStandardEndpointBaseUrl(baseUrl: string | undefined): boolean {
   return !isQwenCodingPlanBaseUrl(baseUrl);
+}
+
+export function isQwenStandardOnlyModel(modelId: string): boolean {
+  return QWEN_STANDARD_ONLY_MODEL_IDS.has(modelId);
 }
 
 export function buildQwenModelCatalogForBaseUrl(
   baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
-  return isQwen36PlusSupportedBaseUrl(baseUrl)
+  return isQwenStandardEndpointBaseUrl(baseUrl)
     ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+    : QWEN_MODEL_CATALOG.filter((model) => !isQwenStandardOnlyModel(model.id));
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
