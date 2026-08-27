@@ -1,4 +1,3 @@
-import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { processChatMessage, resolveTurnTimeoutMs, warmupAgent } from "./src/chat-pipeline.js";
 import { DownloadManager } from "./src/download-manager.js";
@@ -8,7 +7,6 @@ import { createMessageConsumer } from "./src/message-consumer.js";
 import { RabbitMqClient } from "./src/rabbitmq-client.js";
 import { ReportTaskPublisher } from "./src/report-task-publisher.js";
 import { ReportTemplateLookup } from "./src/report-template-lookup.js";
-import { createSkillAdminHttpHandler } from "./src/skill-admin-http.js";
 import { SkillLookup } from "./src/skill-lookup.js";
 import { TopicResolver } from "./src/topic-resolver.js";
 import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
@@ -146,24 +144,6 @@ export default definePluginEntry({
   description: "Consume chat messages from RabbitMQ and process them via OpenClaw subagent.",
   register(api: OpenClawPluginApi) {
     api.registerTool(createVideoLinkParseToolFactory(api), { name: "video_link_parse" });
-
-    const bundledSkillsRoots = [
-      process.env.OPENCLAW_BUNDLED_SKILLS_DIR,
-      api.rootDir ? path.resolve(api.rootDir, "..", "..", "skills") : undefined,
-      api.rootDir ? path.resolve(api.rootDir, "..", "..", "..", "skills") : undefined,
-      process.argv[1] ? path.resolve(path.dirname(process.argv[1]), "skills") : undefined,
-      process.argv[1] ? path.resolve(path.dirname(process.argv[1]), "..", "skills") : undefined,
-      path.resolve(process.cwd(), "skills"),
-    ].filter((root): root is string => Boolean(root?.trim()));
-    api.registerHttpRoute({
-      path: "/plugins/rabbitmq-consumer/skills",
-      auth: "plugin",
-      match: "prefix",
-      handler: createSkillAdminHttpHandler({
-        token: process.env.LOBSTER_SKILL_ADMIN_TOKEN,
-        skillRoots: bundledSkillsRoots,
-      }),
-    });
 
     api.registerService({
       id: "rabbitmq-consumer",

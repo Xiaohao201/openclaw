@@ -1,5 +1,30 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { resolveSkillUserId, sanitizeSkillSegment } from "./skills-mysql.js";
+import {
+  mergeVisibleSkillRows,
+  PUBLIC_SKILL_NAMES,
+  PUBLIC_SKILL_OWNER_ID,
+  resolveSkillUserId,
+  sanitizeSkillSegment,
+  type SkillRow,
+} from "./skills-mysql.js";
+
+function skillRow(id: number, userId: number, name: string): SkillRow {
+  return {
+    id,
+    user_id: userId,
+    name,
+    description: name,
+    content: `---\nname: ${name}\n---\n`,
+    source: "workspace",
+    category: null,
+    is_enable: 1,
+    references: "",
+    scripts: null,
+    created_at: new Date(0),
+    updated_at: new Date(0),
+  };
+}
 
 describe("resolveSkillUserId", () => {
   it("extracts userId from a guardian sessionKey", () => {
@@ -43,5 +68,48 @@ describe("sanitizeSkillSegment (path-traversal guard)", () => {
 
   it("replaces unsafe characters with underscores", () => {
     expect(sanitizeSkillSegment("a b;rm -rf.sh")).toBe("a_b_rm_-rf.sh");
+  });
+});
+
+describe("mergeVisibleSkillRows", () => {
+  it("publishes only the four reserved owner-126 skills to another user", () => {
+    expect(PUBLIC_SKILL_OWNER_ID).toBe(126);
+    expect(PUBLIC_SKILL_NAMES).toEqual([
+      "institution-violation-judgment",
+      "gov-public-opinion-analysis-agent",
+      "ai-public-opinion-brief",
+      "ai-collaboration-diagnostic",
+    ]);
+
+    const rows = [
+      skillRow(1, 999, "my-private-skill"),
+      skillRow(2, 126, "ai-public-opinion-brief"),
+      skillRow(3, 126, "owner-private-skill"),
+    ];
+
+    expect(mergeVisibleSkillRows(rows, 999).map((row) => row.id)).toEqual([1, 2]);
+  });
+
+  it("makes the public owner row win over a user's same-named custom row", () => {
+    const rows = [
+      skillRow(10, 999, "ai-public-opinion-brief"),
+      skillRow(11, 126, "ai-public-opinion-brief"),
+      skillRow(12, 999, "my-private-skill"),
+    ];
+
+    const merged = mergeVisibleSkillRows(rows, 999);
+    expect(merged.find((row) => row.name === "ai-public-opinion-brief")?.id).toBe(11);
+    expect(merged.find((row) => row.name === "my-private-skill")?.id).toBe(12);
+  });
+
+  it("does not duplicate public rows for owner 126", () => {
+    const rows = [skillRow(20, 126, "ai-collaboration-diagnostic")];
+    expect(mergeVisibleSkillRows(rows, 126).map((row) => row.id)).toEqual([20]);
+  });
+
+  it("isolates public files from a user's same-named workspace directory", async () => {
+    const source = await fs.readFile(new URL("./skills-mysql.ts", import.meta.url), "utf8");
+    expect(source).toMatch(/path\.join\(workspaceDir, "\.openclaw-public-skills"\)/u);
+    expect(source).toMatch(/await fs\.cp\(path\.join\(bundledSkillsDir, row\.name\), baseDir/u);
   });
 });

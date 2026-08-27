@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import mysql from "mysql2/promise";
+import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
 import { createSyntheticSourceInfo } from "../agents/skills/skill-contract.js";
 import type { SourceScope } from "../agents/skills/skill-contract.js";
 import type {
@@ -29,6 +30,42 @@ export interface SkillRow {
   updated_at: Date;
 }
 
+export const PUBLIC_SKILL_OWNER_ID = 126;
+export const PUBLIC_SKILL_NAMES = [
+  "institution-violation-judgment",
+  "gov-public-opinion-analysis-agent",
+  "ai-public-opinion-brief",
+  "ai-collaboration-diagnostic",
+] as const;
+
+const publicSkillNames = new Set<string>(PUBLIC_SKILL_NAMES);
+const SKILL_SELECT_COLUMNS =
+  "id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at";
+
+/**
+ * Merge rows defensively even if a caller supplies a broader result set. A
+ * user's private Skills remain visible, while only owner 126's four reserved
+ * public names are shared. The public row always wins a same-name collision.
+ */
+export function mergeVisibleSkillRows(rows: SkillRow[], userId: number): SkillRow[] {
+  const merged = new Map<string, SkillRow>();
+  for (const row of rows) {
+    if (row.is_enable === 1 && row.user_id === userId) {
+      merged.set(row.name, row);
+    }
+  }
+  for (const row of rows) {
+    if (
+      row.is_enable === 1 &&
+      row.user_id === PUBLIC_SKILL_OWNER_ID &&
+      publicSkillNames.has(row.name)
+    ) {
+      merged.set(row.name, row);
+    }
+  }
+  return [...merged.values()];
+}
+
 interface MySqlConfig {
   host: string;
   port: number;
@@ -41,6 +78,7 @@ let pool: mysql.Pool | null = null;
 let cachedEntries: SkillEntry[] | null = null;
 let cacheLoadTime = 0;
 const CACHE_TTL_MS = 5000;
+let publicSkillsSeeded = false;
 
 function resolveConfig(): MySqlConfig {
   const cfg = loadConfig();
@@ -57,29 +95,33 @@ function resolveConfig(): MySqlConfig {
   // `superworker` server across the reader and writer accounts.
   return {
     host:
-      (mysqlCfg?.host as string) ??
       env.WRITER_MYSQL_HOST ??
+      (mysqlCfg?.host as string) ??
       env.HISTORY_MYSQL_HOST ??
       env.FEED_MYSQL_HOST ??
       "127.0.0.1",
     port: Number(
-      mysqlCfg?.port ?? env.WRITER_MYSQL_PORT ?? env.HISTORY_MYSQL_PORT ?? env.FEED_MYSQL_PORT ?? 3306,
+      env.WRITER_MYSQL_PORT ??
+        mysqlCfg?.port ??
+        env.HISTORY_MYSQL_PORT ??
+        env.FEED_MYSQL_PORT ??
+        3306,
     ),
     user:
-      (mysqlCfg?.user as string) ??
       env.WRITER_MYSQL_USER ??
+      (mysqlCfg?.user as string) ??
       env.HISTORY_MYSQL_USER ??
       env.FEED_MYSQL_USER ??
       "",
     password:
-      (mysqlCfg?.password as string) ??
       env.WRITER_MYSQL_PASSWORD ??
+      (mysqlCfg?.password as string) ??
       env.HISTORY_MYSQL_PASSWORD ??
       env.FEED_MYSQL_PASSWORD ??
       "",
     database:
-      (mysqlCfg?.database as string) ??
       env.WRITER_MYSQL_DATABASE ??
+      (mysqlCfg?.database as string) ??
       env.HISTORY_MYSQL_DATABASE ??
       env.FEED_MYSQL_DATABASE ??
       "superworker",
@@ -115,19 +157,62 @@ export async function closePool(): Promise<void> {
     pool = null;
   }
   cachedEntries = null;
+  publicSkillsSeeded = false;
+}
+
+function extractBundledSkillDescription(content: string): string {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(content)?.[1];
+  const line = frontmatter?.split(/\r?\n/u).find((value) => /^description\s*:/u.test(value));
+  return line?.replace(/^description\s*:\s*/u, "").trim() ?? "";
+}
+
+async function ensurePublicSkillRows(p: mysql.Pool): Promise<void> {
+  if (publicSkillsSeeded) {
+    return;
+  }
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (!bundledSkillsDir) {
+    return;
+  }
+
+  for (const skillName of PUBLIC_SKILL_NAMES) {
+    const content = await fs.readFile(path.join(bundledSkillsDir, skillName, "SKILL.md"), "utf8");
+    await p.execute(
+      `INSERT INTO skills
+         (user_id, name, description, content, source, category, is_enable, \`references\`, scripts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'workspace', 'public', 1, '', NULL, NOW(), NOW())
+       ON DUPLICATE KEY UPDATE id = id`,
+      [PUBLIC_SKILL_OWNER_ID, skillName, extractBundledSkillDescription(content), content],
+    );
+  }
+  publicSkillsSeeded = true;
+}
+
+async function fetchVisibleSkillRows(p: mysql.Pool, userId: number): Promise<SkillRow[]> {
+  await ensurePublicSkillRows(p);
+  const placeholders = PUBLIC_SKILL_NAMES.map(() => "?").join(", ");
+  const [rows] = await p.execute<mysql.RowDataPacket[]>(
+    `SELECT ${SKILL_SELECT_COLUMNS}
+       FROM skills
+      WHERE is_enable = 1
+        AND (user_id = ? OR (user_id = ? AND name IN (${placeholders})))
+      ORDER BY name ASC`,
+    [userId, PUBLIC_SKILL_OWNER_ID, ...PUBLIC_SKILL_NAMES],
+  );
+  return mergeVisibleSkillRows(rows as SkillRow[], userId);
 }
 
 export async function refreshSkillsCache(userId?: number): Promise<void> {
   const p = getPool();
-  const query =
+  const skillRows =
     userId !== undefined
-      ? "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE is_enable = 1 AND user_id = ? ORDER BY name ASC"
-      : "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE is_enable = 1 ORDER BY name ASC";
-  const [rows] =
-    userId !== undefined
-      ? await p.execute<mysql.RowDataPacket[]>(query, [userId])
-      : await p.execute<mysql.RowDataPacket[]>(query);
-  cachedEntries = (rows as SkillRow[]).map((row) => rowToSkillEntry(row));
+      ? await fetchVisibleSkillRows(p, userId)
+      : await p
+          .execute<mysql.RowDataPacket[]>(
+            `SELECT ${SKILL_SELECT_COLUMNS} FROM skills WHERE is_enable = 1 ORDER BY name ASC`,
+          )
+          .then(([rows]) => rows as SkillRow[]);
+  cachedEntries = skillRows.map((row) => rowToSkillEntry(row));
   cacheLoadTime = Date.now();
 }
 
@@ -498,21 +583,26 @@ async function doMaterializeSkills(
   key: string,
 ): Promise<SkillEntry[]> {
   const p = getPool();
-  const [rows] = await p.execute<mysql.RowDataPacket[]>(
-    "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE is_enable = 1 AND user_id = ? ORDER BY name ASC",
-    [numericUserId],
-  );
-  const skillRows = rows as SkillRow[];
+  const skillRows = await fetchVisibleSkillRows(p, numericUserId);
   const scriptsBySkill = await fetchSkillScripts(skillRows.map((r) => r.id));
 
   const skillsRoot = path.join(workspaceDir, "skills");
+  const publicSkillsRoot = path.join(workspaceDir, ".openclaw-public-skills");
+  const bundledSkillsDir = resolveBundledSkillsDir();
   const entries: SkillEntry[] = [];
   for (const row of skillRows) {
     const safeName = sanitizeSkillSegment(row.name);
     if (!safeName) {
       continue;
     }
-    const baseDir = path.join(skillsRoot, safeName);
+    const isPublicSkill = row.user_id === PUBLIC_SKILL_OWNER_ID && publicSkillNames.has(row.name);
+    const baseDir = path.join(isPublicSkill ? publicSkillsRoot : skillsRoot, safeName);
+    if (bundledSkillsDir && isPublicSkill) {
+      await fs.cp(path.join(bundledSkillsDir, row.name), baseDir, {
+        recursive: true,
+        force: true,
+      });
+    }
     await fs.mkdir(baseDir, { recursive: true });
     const skillMdPath = path.join(baseDir, "SKILL.md");
     await fs.writeFile(skillMdPath, row.content ?? "", "utf8");
