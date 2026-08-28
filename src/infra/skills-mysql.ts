@@ -36,6 +36,7 @@ export const PUBLIC_SKILL_NAMES = [
   "gov-public-opinion-analysis-agent",
   "ai-public-opinion-brief",
   "ai-collaboration-diagnostic",
+  "infringement-judgment",
 ] as const;
 
 const publicSkillNames = new Set<string>(PUBLIC_SKILL_NAMES);
@@ -44,7 +45,7 @@ const SKILL_SELECT_COLUMNS =
 
 /**
  * Merge rows defensively even if a caller supplies a broader result set. A
- * user's private Skills remain visible, while only owner 126's four reserved
+ * user's private Skills remain visible, while only owner 126's five reserved
  * public names are shared. The public row always wins a same-name collision.
  */
 export function mergeVisibleSkillRows(rows: SkillRow[], userId: number): SkillRow[] {

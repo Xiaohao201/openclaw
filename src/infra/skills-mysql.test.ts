@@ -72,22 +72,24 @@ describe("sanitizeSkillSegment (path-traversal guard)", () => {
 });
 
 describe("mergeVisibleSkillRows", () => {
-  it("publishes only the four reserved owner-126 skills to another user", () => {
+  it("publishes only the five reserved owner-126 skills to another user", () => {
     expect(PUBLIC_SKILL_OWNER_ID).toBe(126);
     expect(PUBLIC_SKILL_NAMES).toEqual([
       "institution-violation-judgment",
       "gov-public-opinion-analysis-agent",
       "ai-public-opinion-brief",
       "ai-collaboration-diagnostic",
+      "infringement-judgment",
     ]);
 
     const rows = [
       skillRow(1, 999, "my-private-skill"),
       skillRow(2, 126, "ai-public-opinion-brief"),
-      skillRow(3, 126, "owner-private-skill"),
+      skillRow(3, 126, "infringement-judgment"),
+      skillRow(4, 126, "owner-private-skill"),
     ];
 
-    expect(mergeVisibleSkillRows(rows, 999).map((row) => row.id)).toEqual([1, 2]);
+    expect(mergeVisibleSkillRows(rows, 999).map((row) => row.id)).toEqual([1, 2, 3]);
   });
 
   it("makes the public owner row win over a user's same-named custom row", () => {
