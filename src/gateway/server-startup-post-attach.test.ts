@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
@@ -113,6 +113,10 @@ type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
 
 describe("startGatewayPostAttachRuntime", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
@@ -142,6 +146,14 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );
+  });
+
+  it("skips long-lived plugin services for inherited local debug configs", async () => {
+    vi.stubEnv("OPENCLAW_SKIP_PLUGIN_SERVICES", "1");
+
+    await startGatewayPostAttachRuntime(createPostAttachParams());
+
+    expect(hoisted.startPluginServices).not.toHaveBeenCalled();
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {

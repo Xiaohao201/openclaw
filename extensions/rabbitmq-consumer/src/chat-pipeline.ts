@@ -16,7 +16,11 @@ import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
 import { mediaLinesToMarkdown } from "./media-lines.js";
-import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
+import {
+  MercurePusher,
+  StreamingMercurePusher,
+  type MercureEventPusher,
+} from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
 import { classifyReportIntent } from "./report-intent-llm.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
@@ -278,7 +282,7 @@ interface EnqueueReportTaskArgs {
   /** report_template.id the user picked explicitly (undefined for keyword reports). */
   templateId: number | undefined;
   chatMsg: ChatMessage;
-  mercure: MercurePusher;
+  mercure: MercureEventPusher;
   mercureTopic: string;
   downloadManager: DownloadManager;
   feedCounter: FeedCounter | undefined;
@@ -447,24 +451,23 @@ export async function warmupAgent(
 /** Per-turn execution limits handed down from the plugin config. */
 export type ChatTurnOptions = {
   /**
-   * Ceiling for the whole turn (`waitForRun`). Defaults to
-   * {@link DEFAULT_TURN_TIMEOUT_MS} when omitted or out of range, so existing
-   * callers and tests keep the historical 5-minute behavior.
+   * Duration of each `waitForRun` polling window. An elapsed window does not
+   * cancel or fail the turn; the pipeline starts another wait window.
    */
   turnTimeoutMs?: number;
+  /** Local/debug-only event sink. Production callers default to the real Mercure client. */
+  eventPusher?: MercureEventPusher;
 };
 
-/** Historical ceiling; kept as the default so an unset config changes nothing. */
+/** Five-minute polling windows keep the Gateway RPC bounded without limiting the whole turn. */
 export const DEFAULT_TURN_TIMEOUT_MS = 300_000;
-export const TURN_TIMEOUT_REPLY = "这个任务暂时无法完成，但是夙衡已经自动学习，争取尽早完善。";
 /** Below a minute no realistic tool-using turn finishes; above an hour the broker complains. */
 const MIN_TURN_TIMEOUT_MS = 60_000;
 const MAX_TURN_TIMEOUT_MS = 3_600_000;
 
 /**
- * Clamp a configured turn ceiling into the supported window. Exported so the
- * plugin entry logs and ack-budget check use the exact value the pipeline will
- * apply, rather than an unclamped copy that could disagree with it.
+ * Clamp a configured polling window into the supported range. This bounds each
+ * Gateway RPC only; it is not a deadline for the whole embedded run.
  */
 export function resolveTurnTimeoutMs(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -503,7 +506,7 @@ export async function processChatMessage(
   options?: ChatTurnOptions,
 ): Promise<string> {
   const turnTimeoutMs = resolveTurnTimeoutMs(options?.turnTimeoutMs);
-  const mercure = new MercurePusher(mercureConfig);
+  const mercure = options?.eventPusher ?? new MercurePusher(mercureConfig);
 
   // Declare streamPusherCtx early so it's available in catch block
   const streamPusherCtx: { streamPusher: StreamingMercurePusher | null } = { streamPusher: null };
@@ -513,7 +516,8 @@ export async function processChatMessage(
   // replay the panel. Declared at function scope so EVERY exit path (success,
   // subagent error/timeout, connection reset, unhandled throw) can finalize and
   // persist it — see persistTimeline. Carries only sanitized
-  // label/category/status/duration, never tool args (see ActivityStep).
+  // label/category/status/duration plus bounded public observations assembled
+  // from allowlisted tool fields, never raw tool args (see ActivityStep).
   type StoredStep = {
     id: string;
     index: number;
@@ -522,6 +526,7 @@ export async function processChatMessage(
     status: "running" | "completed" | "failed";
     durationMs?: number;
     detail?: string;
+    publicNarrative?: string[];
   };
   const storedSteps: StoredStep[] = [];
   let timelinePersisted = false;
@@ -876,6 +881,9 @@ export async function processChatMessage(
           if (step.detail) {
             existing.detail = step.detail;
           }
+          if (step.publicNarrative) {
+            existing.publicNarrative = step.publicNarrative;
+          }
         } else {
           storedSteps.push({
             id: step.stepId,
@@ -885,6 +893,7 @@ export async function processChatMessage(
             status: step.status ?? "completed",
             durationMs: step.durationMs,
             ...(step.detail ? { detail: step.detail } : {}),
+            ...(step.publicNarrative ? { publicNarrative: step.publicNarrative } : {}),
           });
         }
       } else if (!existing) {
@@ -894,6 +903,7 @@ export async function processChatMessage(
           label: step.label,
           category: step.category,
           status: step.status ?? "running",
+          ...(step.publicNarrative ? { publicNarrative: step.publicNarrative } : {}),
         });
       }
     };
@@ -972,7 +982,8 @@ export async function processChatMessage(
         void mercure.pushProgress(mercureTopic, message, chatMsg.historyId);
       },
       // Structured timeline steps (start/end) for the frontend's "工作过程"
-      // panel. Sanitized label/category only — the narrator never reads args.
+      // panel. Tool-specific observers read only allowlisted request/result
+      // fields and never pass raw args, credentials, links, or errors through.
       onStep: (step) => {
         // A tool starting means the agent moved from understanding/thinking to
         // acting — close those phases so the tool step reads as the next stage.
@@ -1216,13 +1227,26 @@ export async function processChatMessage(
       // assistant events fire during waitForRun below, after this assignment.
       currentRunId = runResult.runId;
 
-      // Step 5: Wait for completion. The ceiling is operator-tunable; keep it at
-      // or below the frontend's idle watchdog so the terminal fallback event can
-      // still reach the active chat connection (see ChatTurnConfig).
-      const waitResult = await runtime.subagent.waitForRun({
-        runId: runResult.runId,
-        timeoutMs: turnTimeoutMs,
-      });
+      // Step 5: Wait until the embedded run actually settles. agent.wait needs a
+      // bounded RPC timeout, but an elapsed wait window only means "still
+      // running"; it must not be turned into a failed user response while the
+      // model continues calling tools in the background.
+      let waitResult: Awaited<ReturnType<PluginRuntime["subagent"]["waitForRun"]>>;
+      let elapsedWaitMs = 0;
+      while (true) {
+        waitResult = await runtime.subagent.waitForRun({
+          runId: runResult.runId,
+          timeoutMs: turnTimeoutMs,
+        });
+        if (waitResult.status !== "timeout") {
+          break;
+        }
+        elapsedWaitMs += turnTimeoutMs;
+        logger.info(
+          `[CHAT_PIPELINE] Subagent still running after ${Math.round(elapsedWaitMs / 1000)}s; ` +
+            `continuing to wait for runId=${runResult.runId}, historyId=${chatMsg.historyId}`,
+        );
+      }
 
       if (waitResult.status === "error") {
         logger.error(`[CHAT_PIPELINE] Subagent error: ${waitResult.error}`);
@@ -1233,20 +1257,6 @@ export async function processChatMessage(
         // The failed run still consumed tokens; bill what it spent.
         await persistUsage();
         return `Error: ${waitResult.error}`;
-      }
-
-      if (waitResult.status === "timeout") {
-        logger.warn(
-          `[CHAT_PIPELINE] Subagent timed out after ${Math.round(turnTimeoutMs / 1000)}s ` +
-            `for runId=${runResult.runId}, historyId=${chatMsg.historyId}`,
-        );
-        // Use the error event as a terminal replacement signal: ai-assistant
-        // replaces any partial bubble with this exact customer-facing fallback.
-        await streamPusherCtx.streamPusher.pushError(TURN_TIMEOUT_REPLY);
-        await historyManager.updateResponse(chatMsg.historyId, TURN_TIMEOUT_REPLY);
-        await persistTimeline("failed");
-        await persistUsage();
-        return TURN_TIMEOUT_REPLY;
       }
 
       // Step 6: Extract response from session messages as the canonical source

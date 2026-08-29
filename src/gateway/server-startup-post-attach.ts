@@ -197,14 +197,16 @@ export async function startGatewaySidecars(params: {
   }
 
   let pluginServices: PluginServicesHandle | null = null;
-  try {
-    pluginServices = await startPluginServices({
-      registry: params.pluginRegistry,
-      config: params.cfg,
-      workspaceDir: params.defaultWorkspaceDir,
-    });
-  } catch (err) {
-    params.log.warn(`plugin services failed to start: ${String(err)}`);
+  if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_PLUGIN_SERVICES)) {
+    try {
+      pluginServices = await startPluginServices({
+        registry: params.pluginRegistry,
+        config: params.cfg,
+        workspaceDir: params.defaultWorkspaceDir,
+      });
+    } catch (err) {
+      params.log.warn(`plugin services failed to start: ${String(err)}`);
+    }
   }
 
   if (params.cfg.acp?.enabled) {

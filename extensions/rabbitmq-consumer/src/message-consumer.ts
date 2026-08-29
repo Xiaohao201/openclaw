@@ -21,7 +21,7 @@ export interface MessageConsumerDeps {
  * ordered: the pipeline's
  * pre-processing (LLM topic pick, attachment download, DB writes) has variable
  * latency, so without this a later message could reach the session lane first —
- * reordering replies and burning the 300s waitForRun budget while queued.
+ * reordering replies and burning the turn's waitForRun budget while queued.
  *
  * Parsing and key resolution happen synchronously (before the first await) so
  * broker delivery order becomes per-session chain order. Legacy messages with

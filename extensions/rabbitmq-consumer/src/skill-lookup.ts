@@ -12,6 +12,9 @@ export interface ResolvedSkill {
   description: string | null;
 }
 
+/** Safe projection exposed to the loopback debug picker; instruction content stays server-side. */
+export type SkillSummary = Pick<ResolvedSkill, "id" | "name" | "description">;
+
 /** Hard cap on how many skills we resolve for one turn (mirrors the producer cap). */
 const MAX_SKILLS = 20;
 
@@ -48,6 +51,35 @@ export class SkillLookup {
       });
     }
     return this.pool;
+  }
+
+  /** List enabled skills owned by one user without exposing their instruction bodies. */
+  async listForUser(userId: string, logger: PluginLogger): Promise<SkillSummary[]> {
+    const normalizedUserId = userId.trim();
+    if (!normalizedUserId) {
+      return [];
+    }
+
+    try {
+      const pool = await this.getPool();
+      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+        `SELECT id, name, description
+           FROM skills
+          WHERE is_enable = 1
+            AND user_id = ?
+          ORDER BY id DESC
+          LIMIT 100`,
+        [normalizedUserId],
+      );
+      return rows.map((row) => ({
+        id: Number(row.id),
+        name: typeof row.name === "string" ? row.name : "",
+        description: typeof row.description === "string" ? row.description : null,
+      }));
+    } catch (error) {
+      logger.error(`[SKILL_LOOKUP] List failed for user ${normalizedUserId}`);
+      throw error;
+    }
   }
 
   /**
@@ -109,8 +141,8 @@ export class SkillLookup {
         );
       }
       return resolved;
-    } catch (error) {
-      logger.error(`[SKILL_LOOKUP] Lookup failed for user ${userId}: ${String(error)}`);
+    } catch {
+      logger.error(`[SKILL_LOOKUP] Lookup failed for user ${userId}`);
       return [];
     }
   }
