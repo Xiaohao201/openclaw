@@ -122,7 +122,7 @@ describe("HistoryManager.addUsage", () => {
   function lastUpdate(): { sql: string; params: unknown[] } {
     const call = mockExecute.mock.calls
       .toReversed()
-      .find((c) => typeof c[0] === "string" && c[0].includes("UPDATE history_messages"));
+      .find((c) => typeof c[0] === "string" && c[0].includes("UPDATE `history_messages`"));
     if (!call) {
       throw new Error("no UPDATE executed");
     }
@@ -218,4 +218,90 @@ describe("HistoryManager.addUsage", () => {
 
     await expect(manager.addUsage(42, USAGE)).rejects.toThrow(/Deadlock found/);
   });
+});
+
+describe("HistoryManager test-table isolation", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates and uses an isolated history table", async () => {
+    const manager = new HistoryManager(DB_CONFIG, undefined, "history_test");
+    mockExecute.mockRejectedValueOnce(
+      Object.assign(new Error("Table does not exist"), { code: "ER_NO_SUCH_TABLE" }),
+    );
+    mockExecute.mockResolvedValue([[], undefined]);
+
+    await manager.ensureTableLike("history_messages");
+    await manager.createRecord({
+      historyId: 1_234,
+      sessionId: "session-test",
+      userId: "user-test",
+      message: "测试消息",
+      useMemory: true,
+      useWebsearch: false,
+    });
+    await manager.updateResponse(1_234, "测试回答");
+
+    expect(mockExecute.mock.calls.map((call) => call[0])).toEqual([
+      "SELECT 1 FROM `history_test` LIMIT 0",
+      "CREATE TABLE IF NOT EXISTS `history_test` LIKE `history_messages`",
+      expect.stringContaining("INSERT INTO `history_test`"),
+      "UPDATE `history_test` SET response = ? WHERE id = ?",
+    ]);
+    expect(mockExecute.mock.calls[2]?.[1]).toEqual([
+      1_234,
+      "session-test",
+      "user-test",
+      "测试消息",
+    ]);
+
+    await manager.close();
+  });
+
+  it("falls back to the reader connection when the writer cannot create tables", async () => {
+    const manager = new HistoryManager(DB_CONFIG, { ...DB_CONFIG, user: "writer" }, "history_test");
+    mockExecute.mockRejectedValueOnce(
+      Object.assign(new Error("Table does not exist"), { code: "ER_NO_SUCH_TABLE" }),
+    );
+    mockExecute.mockRejectedValueOnce(
+      Object.assign(new Error("CREATE command denied"), {
+        code: "ER_TABLEACCESS_DENIED_ERROR",
+      }),
+    );
+    mockExecute.mockResolvedValueOnce([[], undefined]);
+
+    await manager.ensureTableLike("history_messages");
+
+    expect(mockExecute).toHaveBeenCalledTimes(3);
+    expect(mockExecute.mock.calls[0]?.[0]).toBe("SELECT 1 FROM `history_test` LIMIT 0");
+    expect(mockExecute.mock.calls[1]?.[0]).toBe(
+      "CREATE TABLE IF NOT EXISTS `history_test` LIKE `history_messages`",
+    );
+    expect(mockExecute.mock.calls[2]?.[0]).toBe(
+      "CREATE TABLE IF NOT EXISTS `history_test` LIKE `history_messages`",
+    );
+    await manager.close();
+  });
+
+  it("does not require CREATE permission after the isolated table already exists", async () => {
+    const manager = new HistoryManager(DB_CONFIG, undefined, "history_test");
+    mockExecute.mockResolvedValueOnce([[], undefined]);
+
+    await manager.ensureTableLike("history_messages");
+
+    expect(mockExecute).toHaveBeenCalledOnce();
+    expect(mockExecute).toHaveBeenCalledWith("SELECT 1 FROM `history_test` LIMIT 0");
+    await manager.close();
+  });
+
+  it.each(["history-test", "history_test; DROP TABLE skills", "", "1history_test"])(
+    "rejects unsafe table identifier %j",
+    (tableName) => {
+      expect(() => new HistoryManager(DB_CONFIG, undefined, tableName)).toThrow(
+        /Invalid MySQL table identifier/,
+      );
+      expect(mockExecute).not.toHaveBeenCalled();
+    },
+  );
 });

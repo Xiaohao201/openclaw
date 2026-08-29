@@ -3,6 +3,11 @@ import { processChatMessage, resolveTurnTimeoutMs, warmupAgent } from "./src/cha
 import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
+import {
+  createLocalDebugExecutor,
+  createLocalDebugHttpHandler,
+  createLocalDebugRunner,
+} from "./src/local-debug.js";
 import { createMessageConsumer } from "./src/message-consumer.js";
 import { RabbitMqClient } from "./src/rabbitmq-client.js";
 import { ReportTaskPublisher } from "./src/report-task-publisher.js";
@@ -13,45 +18,14 @@ import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
 import { resolveUsageCurrencyPolicy } from "./src/usage-pricing.js";
 import { createVideoLinkParseToolFactory } from "./src/video-link-parse-tool.js";
 
-/**
- * Clamp the channel prefetch to a sane window. Default 6: at the default 300s
- * turn timeout, a single session's back-to-back burst keeps its last unacked
- * message under RabbitMQ's default 30min consumer_timeout (6 × 300s). Raising
- * prefetch — or `chat.turnTimeoutSeconds` — requires raising consumer_timeout
- * on the broker first (see assertAckBudget).
- */
+/** Clamp the cross-session concurrency window to a sane range. */
+const DEFAULT_PREFETCH = 6;
+
 function clampPrefetch(value: number): number {
   if (!Number.isFinite(value)) {
-    return 6;
+    return DEFAULT_PREFETCH;
   }
   return Math.min(32, Math.max(1, Math.floor(value)));
-}
-
-/** RabbitMQ's own default `consumer_timeout`, in seconds. */
-const BROKER_DEFAULT_CONSUMER_TIMEOUT_SECONDS = 1_800;
-
-/**
- * Warn when prefetch × turn timeout exceeds the broker's default
- * `consumer_timeout`. The broker closes the channel on a message left unacked
- * past that window, so a generous turn timeout silently trades one failure mode
- * (turn cut short) for a worse one (channel dropped mid-turn) unless the
- * operator raised `consumer_timeout` too.
- */
-function assertAckBudget(params: {
-  prefetch: number;
-  turnTimeoutSeconds: number;
-  logger: { warn: (message: string) => void };
-}): void {
-  const worstCaseSeconds = params.prefetch * params.turnTimeoutSeconds;
-  if (worstCaseSeconds <= BROKER_DEFAULT_CONSUMER_TIMEOUT_SECONDS) {
-    return;
-  }
-  params.logger.warn(
-    `[RABBITMQ_CONSUMER] prefetch=${params.prefetch} × turnTimeout=${params.turnTimeoutSeconds}s ` +
-      `= ${worstCaseSeconds}s worst-case unacked time, above RabbitMQ's default consumer_timeout ` +
-      `(${BROKER_DEFAULT_CONSUMER_TIMEOUT_SECONDS}s). Raise consumer_timeout on the broker or the ` +
-      `channel will be closed mid-turn.`,
-  );
 }
 
 /**
@@ -70,7 +44,9 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
       user: (rabbitmq?.user as string) ?? process.env.RABBITMQ_USER ?? "",
       password: (rabbitmq?.password as string) ?? process.env.RABBITMQ_PASSWORD ?? "",
       queue: (rabbitmq?.queue as string) ?? process.env.RABBITMQ_QUEUE ?? "MessageProxy",
-      prefetch: clampPrefetch(Number(rabbitmq?.prefetch ?? process.env.RABBITMQ_PREFETCH ?? 6)),
+      prefetch: clampPrefetch(
+        Number(rabbitmq?.prefetch ?? process.env.RABBITMQ_PREFETCH ?? DEFAULT_PREFETCH),
+      ),
       reportTaskQueue:
         (rabbitmq?.reportTaskQueue as string) ??
         process.env.RABBITMQ_REPORT_TASK_QUEUE ??
@@ -145,10 +121,94 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     api.registerTool(createVideoLinkParseToolFactory(api), { name: "video_link_parse" });
 
+    const localDebug = api.pluginConfig?.localDebug as
+      | { enabled?: unknown; historyTable?: unknown }
+      | undefined;
+    let prepareLocalDebugHistory: (() => Promise<void>) | undefined;
+    if (localDebug?.enabled === true) {
+      const pluginConfig = resolvePluginConfig(api.pluginConfig as Record<string, unknown>);
+      const writerConfig = resolveWriterConfig(api.pluginConfig as Record<string, unknown>);
+      const debugSkillLookup =
+        pluginConfig.historyDb.host && pluginConfig.historyDb.user
+          ? new SkillLookup(pluginConfig.historyDb)
+          : undefined;
+      const debugHistoryManager =
+        pluginConfig.historyDb.host && pluginConfig.historyDb.user
+          ? new HistoryManager(
+              pluginConfig.historyDb,
+              writerConfig,
+              typeof localDebug.historyTable === "string"
+                ? localDebug.historyTable
+                : "history_test",
+            )
+          : undefined;
+      let historyReady: Promise<void> | undefined;
+      if (debugHistoryManager) {
+        historyRef = debugHistoryManager;
+        prepareLocalDebugHistory = () => {
+          historyReady ??= debugHistoryManager
+            .ensureTableLike("history_messages")
+            .catch((error) => {
+              historyReady = undefined;
+              throw error;
+            });
+          return historyReady;
+        };
+      }
+      skillLookupRef = debugSkillLookup;
+      const run = createLocalDebugExecutor(
+        createLocalDebugRunner({
+          runtime: api.runtime,
+          config: api.config,
+          logger: api.logger,
+          skillLookup: debugSkillLookup,
+          historyManager: debugHistoryManager,
+          prepareHistory: prepareLocalDebugHistory,
+        }),
+      );
+      const handler = createLocalDebugHttpHandler({
+        run,
+        logger: api.logger,
+        listSkills: debugSkillLookup
+          ? async (userId) => await debugSkillLookup.listForUser(userId, api.logger)
+          : undefined,
+      });
+      api.registerHttpRoute({
+        path: "/plugins/rabbitmq-consumer/debug",
+        auth: "plugin",
+        match: "exact",
+        handler,
+      });
+      api.registerHttpRoute({
+        path: "/plugins/rabbitmq-consumer/debug/run",
+        auth: "plugin",
+        match: "exact",
+        handler,
+      });
+      api.registerHttpRoute({
+        path: "/plugins/rabbitmq-consumer/debug/skills",
+        auth: "plugin",
+        match: "exact",
+        handler,
+      });
+      api.logger.info(
+        `[RABBITMQ_LOCAL_DEBUG] Registered loopback-only debug page ` +
+          `(MySQL skills ${debugSkillLookup ? "read-only" : "unavailable"})`,
+      );
+    }
+
     api.registerService({
       id: "rabbitmq-consumer",
 
       async start(ctx) {
+        if (localDebug?.enabled === true) {
+          await prepareLocalDebugHistory?.();
+          ctx.logger.info(
+            "[RABBITMQ_LOCAL_DEBUG] Using existing data connections with history isolated to history_test and RabbitMQ queue set to MessageTest",
+          );
+          return;
+        }
+
         const pluginConfig = resolvePluginConfig(api.pluginConfig as Record<string, unknown>);
 
         if (!pluginConfig.rabbitmq.user || !pluginConfig.rabbitmq.host) {
@@ -164,16 +224,11 @@ export default definePluginEntry({
           return;
         }
 
-        const turnTimeoutSeconds = Math.round(pluginConfig.chat.turnTimeoutMs / 1000);
+        const turnWaitWindowSeconds = Math.round(pluginConfig.chat.turnTimeoutMs / 1000);
         ctx.logger.info(
-          `[RABBITMQ_CONSUMER] Chat turn timeout ${turnTimeoutSeconds}s ` +
+          `[RABBITMQ_CONSUMER] Chat wait window ${turnWaitWindowSeconds}s with no plugin deadline ` +
             `(prefetch=${pluginConfig.rabbitmq.prefetch})`,
         );
-        assertAckBudget({
-          prefetch: pluginConfig.rabbitmq.prefetch,
-          turnTimeoutSeconds,
-          logger: ctx.logger,
-        });
 
         // Per-turn token/cost accounting: providers quote their unit prices in
         // different currencies, so this folds them into one before storage.

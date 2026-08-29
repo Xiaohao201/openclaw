@@ -16,6 +16,8 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng video links: add an optional short-video parsing tool backed by the Qiyun API, returning direct media and metadata for follow-up `video_understand` analysis while keeping credentials in environment configuration.
 - Feed search: return an exact total for every monitoring-data search, read result sets up to 100 items in full, and use a bounded deterministic sample for larger matches.
 - Qwen/models: add the Standard-endpoint `qwen3.8-flash` catalog entry with text and image input, reasoning, 1M context, CNY usage pricing, and the `Suheng 3.2mini` alias.
+- RabbitMQ/local debugging: add a loopback-only simulated inbound page that runs the real agent pipeline with a path-scoped HttpOnly debug session, bundled and read-only MySQL Skill selection, scheduled-task command drafting, and a sanitized event timeline with an expandable, label-free Control UI-style public reasoning narrative covering actual actions, rationale, outcomes, and final output, including bounded `feed_list` and `milvus_search` result observations while suppressing framework-only initialization, progress, synthetic thinking, and answer-assembly noise.
+- RabbitMQ/local debugging: add a dedicated launcher that inherits real model, enabled-extension, production tool-policy, MySQL, and Milvus configuration through a disposable restricted config, isolates local chat rows in `history_test`, forces the RabbitMQ queue setting to `MessageTest`, keeps dev state isolated, and suppresses channels, hooks, Mercure, and long-lived plugin services.
 
 ### Fixes
 
@@ -39,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Full-text search/web fetch: prioritize indexed cross-platform search for fresh and local social events before open-web corroboration, and document the narrow RFC2544 fake-IP opt-in for trusted Clash/Surge environments without allowing private networks.
 - Browser/SSRF: add a narrow RFC2544 benchmark-range opt-in so trusted Clash/Surge fake-IP environments can navigate public websites without enabling access to other private networks.
 - RabbitMQ/Suheng workspaces: preserve Chinese directory and file names during artifact generation, pass Unicode paths as values instead of inline Python source, and syntax-check generated Python before execution.
+- RabbitMQ/local debugging: execute simulated inbound messages through a service-level queue so plugin-authenticated HTTP requests do not strip the `operator.write` scope required by the real subagent pipeline.
 
 ## 2026.4.15
 

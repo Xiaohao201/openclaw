@@ -4,13 +4,24 @@ import { stripInternalRefs } from "./sanitize-output.js";
 import type { ActivityStep } from "./tool-activity.js";
 import type { Citation, MercureConfig } from "./types.js";
 
+/** Narrow event surface shared by the real Mercure client and local debug recorder. */
+export interface MercureEventPusher {
+  pushText(topic: string, content: string, historyId?: number): Promise<boolean>;
+  pushProgress(topic: string, content: string, historyId?: number): Promise<boolean>;
+  pushStep(topic: string, step: ActivityStep, historyId?: number): Promise<boolean>;
+  pushCitations(topic: string, citations: Citation[], historyId?: number): Promise<boolean>;
+  pushDone(topic: string, historyId?: number): Promise<boolean>;
+  pushReportCreated(topic: string, taskId: number): Promise<boolean>;
+  pushError(topic: string, error: string, historyId?: number): Promise<boolean>;
+}
+
 /**
  * Mercure Hub push client.
  *
  * Ported from Python mercure_manager.py MercureManager.
  * Uses Node.js native fetch() to POST to the Mercure Hub.
  */
-export class MercurePusher {
+export class MercurePusher implements MercureEventPusher {
   private readonly hubUrl: string;
   private readonly jwtSecret: string;
 
@@ -87,7 +98,8 @@ export class MercurePusher {
    * Push a structured timeline step (start/end) for the frontend's collapsible
    * "工作过程" panel. Typed `step` so the frontend appends it to the assistant
    * message's step list instead of the reply body. Carries only the sanitized
-   * label/category from the narrator — never tool args.
+   * label/category plus bounded public observations from the narrator — never
+   * raw tool args, links, credentials, or internal errors.
    */
   async pushStep(topic: string, step: ActivityStep, historyId?: number): Promise<boolean> {
     return this.sendToMercure(topic, {
@@ -171,7 +183,7 @@ export class MercurePusher {
  * each LLM delta is forwarded to the frontend in near-real-time.
  */
 export class StreamingMercurePusher {
-  private readonly pusher: MercurePusher;
+  private readonly pusher: MercureEventPusher;
   private readonly topic: string;
   private readonly historyId: number | undefined;
   private readonly flushIntervalMs: number;
@@ -191,7 +203,7 @@ export class StreamingMercurePusher {
    */
   private pending: Promise<void> = Promise.resolve();
 
-  constructor(pusher: MercurePusher, topic: string, historyId?: number, flushIntervalMs = 80) {
+  constructor(pusher: MercureEventPusher, topic: string, historyId?: number, flushIntervalMs = 80) {
     this.pusher = pusher;
     this.topic = topic;
     this.historyId = historyId;

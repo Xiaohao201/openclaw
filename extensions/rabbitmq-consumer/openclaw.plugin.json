@@ -62,9 +62,27 @@
             "default": 300,
             "minimum": 60,
             "maximum": 3600,
-            "description": "How long one chat turn may run before the pipeline returns and persists the Suheng learning fallback. Keep this at or below the frontend's own request timeout. Raising it also raises worst-case unacked time (prefetch x timeout), which must stay under the broker's consumer_timeout."
+            "description": "Gateway wait polling window. When it elapses, the consumer keeps waiting; it does not cancel or fail the embedded run."
           }
         }
+      },
+      "localDebug": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable a loopback-only local RabbitMQ message simulator. It records events locally, reuses configured data connections, and writes chat history only to the isolated historyTable."
+          },
+          "historyTable": {
+            "type": "string",
+            "default": "history_test",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+            "description": "MySQL table used only for local debug chat history. It is created from history_messages when missing."
+          }
+        },
+        "required": ["enabled"]
       },
       "oss": {
         "type": "object",
@@ -82,6 +100,18 @@
         "required": ["accessKeyId", "accessKeySecret"]
       }
     },
-    "required": ["rabbitmq", "historyDb", "mercure"]
+    "anyOf": [
+      { "required": ["rabbitmq", "historyDb", "mercure"] },
+      {
+        "required": ["localDebug"],
+        "properties": {
+          "localDebug": {
+            "type": "object",
+            "properties": { "enabled": { "const": true } },
+            "required": ["enabled"]
+          }
+        }
+      }
+    ]
   }
 }

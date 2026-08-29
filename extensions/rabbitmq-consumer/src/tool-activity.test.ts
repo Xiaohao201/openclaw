@@ -206,6 +206,142 @@ describe("ToolActivityNarrator", () => {
     ]);
   });
 
+  it("turns a feed_list result into useful public data instead of a generic completion", () => {
+    const { narrator, steps, advance } = createNarrator();
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "feed_list",
+        toolCallId: "feed-1",
+        args: { topicId: 553, page: 1, size: 1, apiKey: "SECRET" },
+      },
+    });
+    advance(420);
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "feed_list",
+        toolCallId: "feed-1",
+        isError: false,
+        result: {
+          details: {
+            success: true,
+            total: 18,
+            list: [
+              {
+                title: "深圳某项目施工进展",
+                platform: "微信",
+                date: "2026-08-28",
+                level: "高",
+                emotion: "负面",
+                summary: "公众关注施工噪声及夜间作业问题。",
+                link: "https://example.com/private-link",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(steps).toEqual([
+      expect.objectContaining({
+        phase: "start",
+        publicNarrative: ["我会读取 topicId=553 的第 1 页，每页 1 条舆情。"],
+      }),
+      expect.objectContaining({
+        phase: "end",
+        status: "completed",
+        durationMs: 420,
+        publicNarrative: [
+          "我会读取 topicId=553 的第 1 页，每页 1 条舆情。",
+          "接口报告共有 18 条匹配，本次返回 1 条。",
+          "其中一条是《深圳某项目施工进展》（微信，2026-08-28，风险等级高，情感负面）。",
+          "它的摘要是：“公众关注施工噪声及夜间作业问题。”",
+        ],
+      }),
+    ]);
+    expect(JSON.stringify(steps)).not.toContain("SECRET");
+    expect(JSON.stringify(steps)).not.toContain("private-link");
+  });
+
+  it("shows bounded Milvus matches without exposing the query or collection", () => {
+    const { narrator, steps } = createNarrator();
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "milvus_search",
+        toolCallId: "milvus-1",
+        args: { query: "private search wording", collection: "internal_collection", topK: 3 },
+      },
+    });
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "milvus_search",
+        toolCallId: "milvus-1",
+        result: {
+          details: {
+            success: true,
+            collection: "internal_collection",
+            matches: [
+              { score: 0.9234, text: "历史周报先概述风险，再按事件展开事实与建议。" },
+              { score: 0.81, text: "第二条历史资料。" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(steps[1]).toMatchObject({
+      phase: "end",
+      publicNarrative: [
+        "我会检索最多 3 条相关历史资料，用来参考已有表达和事实。",
+        "语义检索返回 2 条历史资料。",
+        "最相关的资料相似度为 0.923，内容摘要是：“历史周报先概述风险，再按事件展开事实与建议。”",
+      ],
+    });
+    expect(JSON.stringify(steps)).not.toContain("private search wording");
+    expect(JSON.stringify(steps)).not.toContain("internal_collection");
+  });
+
+  it("does not expose raw tool errors in public result narration", () => {
+    const { narrator, steps } = createNarrator();
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "feed_list",
+        toolCallId: "feed-failed",
+        args: { topicId: 553, size: 1 },
+      },
+    });
+    narrator.handleAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "feed_list",
+        toolCallId: "feed-failed",
+        isError: true,
+        result: { details: { success: false, error: "token=SECRET at C:/internal/config.json" } },
+      },
+    });
+
+    expect(steps[1]).toMatchObject({
+      phase: "end",
+      status: "failed",
+      publicNarrative: [
+        "我会读取 topicId=553 的第 1 页，每页 1 条舆情。",
+        "数据接口没有返回可用结果。",
+      ],
+    });
+    expect(JSON.stringify(steps)).not.toContain("SECRET");
+    expect(JSON.stringify(steps)).not.toContain("config.json");
+  });
+
   it("uses explicit startedAt/endedAt timestamps for duration when present", () => {
     const { narrator, steps } = createNarrator();
     narrator.handleAgentEvent({

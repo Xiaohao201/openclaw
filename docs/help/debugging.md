@@ -122,6 +122,63 @@ OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
 `--reset` wipes config, credentials, sessions, and the dev workspace (using
 `trash`, not `rm`), then recreates the default dev setup.
 
+### Inherit real configuration for RabbitMQ debugging
+
+Use the dedicated launcher when the loopback RabbitMQ debug page must see the
+same configured models and plugin tools as the real environment:
+
+```bash
+pnpm build
+pnpm gateway:rabbitmq-debug
+```
+
+The launcher reads the normal config as a production baseline, overlays the dev
+Gateway credentials and agent workspace, forces the RabbitMQ local-debug mode,
+and runs the Gateway on loopback port `19001`. It keeps state and sessions under
+the dev state directory. Channels, Gmail and internal hooks, and long-lived
+plugin services are disabled so production consumers, schedulers, and
+notification workers do not start.
+
+Completed replies keep the high-level work-process panel compact. Framework-only
+initialization, progress, synthetic thinking, and answer-assembly events are
+omitted from the completed trace. A reply that did not use a tool therefore has
+one natural OpenClaw public record instead of several generic pipeline steps;
+when tools were used, only the actual operations count as work steps. Expand the
+panel to see a continuous, muted narrative based on the sanitized request,
+observable operations, outcome, and a bounded excerpt of the final response.
+Each actual operation can also be expanded into a concise first-person account
+of what OpenClaw did, why it did it, sanitized call context, and the outcome;
+status and duration remain in the collapsed step header. This record is
+generated from observable events, not hidden chain-of-thought. Raw tool
+arguments, internal errors, credentials, and hidden model reasoning are never
+included in the detail view.
+
+Read-only `feed_list` and `milvus_search` steps include bounded observations from
+their actual results instead of a generic completion sentence. Feed observations
+can show the requested topic/page/size, total and returned counts, plus a preview
+of the first item's title, platform, date, risk, emotion, and summary. Milvus
+observations can show the match count and a capped excerpt of the highest-scoring
+match. Links, collection names, search text, credentials, and raw errors remain
+excluded.
+
+The merged config exists only in a permission-restricted temporary directory and
+is deleted when the launcher exits. Config values and secrets are never printed.
+The local agent inherits the production `tools` policy, enabled extension
+surface, MySQL connections, and Milvus connection, so the simulated RabbitMQ
+turn sees the same data capabilities as the deployed channel. Development config
+values still override their production counterparts when present. Local chat
+history is the isolated `history_test` table (created from `history_messages` on
+first use), while the RabbitMQ queue setting is forced to `MessageTest`. The
+local session and agent workspace remain in the dev state directory; channels,
+Gmail/internal hooks, Mercure delivery, and long-lived plugin services remain
+disabled.
+
+Optional path overrides:
+
+- `OPENCLAW_REAL_CONFIG_PATH`: real config to inherit.
+- `OPENCLAW_DEV_CONFIG_PATH`: dev overlay config.
+- `OPENCLAW_DEV_STATE_DIR`: isolated state and sessions directory.
+
 Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
 
 ```bash

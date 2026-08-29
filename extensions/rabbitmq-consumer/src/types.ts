@@ -40,17 +40,11 @@ export interface MercureConfig {
   jwtSecret: string;
 }
 
-/** Chat turn execution limits */
+/** Chat turn wait polling configuration */
 export interface ChatTurnConfig {
   /**
-   * How long one chat turn may run before the pipeline gives up on the subagent
-   * (`waitForRun`). A turn that blows this ceiling returns and persists the
-   * standard Suheng learning fallback. Keep the value at or below the frontend's
-   * idle timeout so the terminal event arrives before the browser gives up.
-   *
-   * Raising it also raises the worst-case unacked time for a single session's
-   * queued burst (prefetch × timeout), which must remain under the broker's
-   * `consumer_timeout` (see clampPrefetch in index.ts).
+   * Duration of one Gateway `waitForRun` polling window. The consumer keeps
+   * polling after this duration until the embedded run completes or errors.
    */
   turnTimeoutMs: number;
 }

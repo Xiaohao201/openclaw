@@ -20,6 +20,8 @@
  * byte-identical: mirror any change to the other copy.
  */
 
+import { sanitizeInternalRefs } from "./sanitize-output.js";
+
 /** Sanitized step category — drives the frontend's icon, never raw content. */
 export type StepCategory =
   | "query"
@@ -51,6 +53,11 @@ export type ActivityStep = {
    * e.g. "检测 3 项" or "周报"). Never free text — see resolveStepDetail.
    */
   detail?: string;
+  /**
+   * Bounded, tool-specific public observations built from allowlisted request
+   * and result fields. Never contains raw args, links, credentials, or errors.
+   */
+  publicNarrative?: string[];
 };
 
 /** Tool name (normalized by the agent runtime) → user-facing activity label. */
@@ -101,6 +108,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   topic_list: "正在查看监测主题",
   monthly_stats: "正在统计舆情数据",
   opinion_analyze: "正在分析舆情",
+  risk_judge: "正在研判舆情风险",
   opinion_download_status: "正在确认下载进度",
   opinion_download_list: "正在获取下载列表",
   opinion_download_content: "正在读取报告正文",
@@ -135,6 +143,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   skill_list: "正在查看技能库",
   skill_get: "正在查阅技能内容",
   skill_save: "正在更新技能库",
+  milvus_search: "正在检索历史资料",
 };
 
 /** Tool name → sanitized category (icon hint only; never echoes content). */
@@ -177,6 +186,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   topic_list: "query",
   monthly_stats: "query",
   opinion_analyze: "query",
+  risk_judge: "query",
   opinion_download_status: "report",
   opinion_download_list: "report",
   opinion_download_content: "report",
@@ -205,6 +215,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   skill_list: "read",
   skill_get: "read",
   skill_save: "write",
+  milvus_search: "search",
 };
 
 const DEFAULT_LABEL = "正在执行处理步骤";
@@ -250,6 +261,153 @@ function asArgRecord(args: unknown): Record<string, unknown> {
   return args && typeof args === "object" && !Array.isArray(args)
     ? (args as Record<string, unknown>)
     : {};
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function sanitizePublicValue(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const sanitized = sanitizeInternalRefs(value)
+    .replace(/https?:\/\/\S+/giu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.length > maxLength ? `${sanitized.slice(0, maxLength)}…` : sanitized;
+}
+
+function readToolPayload(result: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(result);
+  if (!record) {
+    return undefined;
+  }
+  const details = asRecord(record.details);
+  if (details) {
+    return details;
+  }
+  if (typeof record.success === "boolean") {
+    return record;
+  }
+  if (!Array.isArray(record.content)) {
+    return undefined;
+  }
+  for (const block of record.content) {
+    const text = asRecord(block)?.text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    try {
+      const parsed = asRecord(JSON.parse(text));
+      if (parsed) {
+        return parsed;
+      }
+    } catch {
+      // Non-JSON text is intentionally ignored instead of exposed.
+    }
+  }
+  return undefined;
+}
+
+function resolveToolStartPublicNarrative(toolName: string, args: unknown): string[] {
+  const normalized = toolName.trim().toLowerCase();
+  const record = asArgRecord(args);
+  if (normalized === "feed_list") {
+    const topicId = positiveInteger(record.topicId, 0);
+    if (topicId === 0) {
+      return [];
+    }
+    const page = positiveInteger(record.page, 1);
+    const size = positiveInteger(record.size, 20);
+    return [`我会读取 topicId=${topicId} 的第 ${page} 页，每页 ${size} 条舆情。`];
+  }
+  if (normalized === "milvus_search") {
+    const topK = positiveInteger(record.topK, 5);
+    return [`我会检索最多 ${topK} 条相关历史资料，用来参考已有表达和事实。`];
+  }
+  return [];
+}
+
+function formatFeedItem(item: Record<string, unknown>): string[] {
+  const title = sanitizePublicValue(item.title, 80);
+  if (!title) {
+    return [];
+  }
+  const attributes = [
+    sanitizePublicValue(item.platform, 24),
+    sanitizePublicValue(item.date, 24),
+    sanitizePublicValue(item.level, 16)
+      ? `风险等级${sanitizePublicValue(item.level, 16)}`
+      : undefined,
+    sanitizePublicValue(item.emotion, 16)
+      ? `情感${sanitizePublicValue(item.emotion, 16)}`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const lines = [
+    attributes.length > 0
+      ? `其中一条是《${title}》（${attributes.join("，")}）。`
+      : `其中一条是《${title}》。`,
+  ];
+  const summary = sanitizePublicValue(item.summary, 140);
+  if (summary) {
+    lines.push(`它的摘要是：“${summary}”`);
+  }
+  return lines;
+}
+
+function resolveToolResultPublicNarrative(
+  toolName: string,
+  result: unknown,
+  failed: boolean,
+): string[] {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized !== "feed_list" && normalized !== "milvus_search") {
+    return [];
+  }
+  const payload = readToolPayload(result);
+  if (failed || !payload || payload.success === false) {
+    return [
+      normalized === "feed_list" ? "数据接口没有返回可用结果。" : "历史资料检索没有返回可用结果。",
+    ];
+  }
+  if (normalized === "feed_list") {
+    const list = Array.isArray(payload.list)
+      ? payload.list.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item))
+      : [];
+    const total =
+      typeof payload.total === "number" && Number.isFinite(payload.total)
+        ? Math.max(0, Math.floor(payload.total))
+        : list.length;
+    return [
+      `接口报告共有 ${total} 条匹配，本次返回 ${list.length} 条。`,
+      ...list.slice(0, 1).flatMap(formatFeedItem),
+    ];
+  }
+  const matches = Array.isArray(payload.matches)
+    ? payload.matches.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+  const lines = [`语义检索返回 ${matches.length} 条历史资料。`];
+  const topMatch = matches[0];
+  const excerpt = sanitizePublicValue(topMatch?.text, 160);
+  const score = topMatch?.score;
+  if (excerpt) {
+    lines.push(
+      typeof score === "number" && Number.isFinite(score)
+        ? `最相关的资料相似度为 ${score.toFixed(3)}，内容摘要是：“${excerpt}”`
+        : `最相关的资料内容摘要是：“${excerpt}”`,
+    );
+  }
+  return lines;
 }
 
 /** First non-negative integer among keys (array length or numeric value). */
@@ -359,8 +517,10 @@ interface RunningStep {
   index: number;
   label: string;
   category: StepCategory;
+  toolName: string;
   startedAt: number;
   detail?: string;
+  publicNarrative: string[];
 }
 
 /**
@@ -398,7 +558,7 @@ export class ToolActivityNarrator {
     const data = evt.data ?? {};
     if (data.phase === "start") {
       this.handleStart(data);
-    } else if (data.phase === "end") {
+    } else if (data.phase === "end" || data.phase === "result") {
       this.handleEnd(data);
     }
   }
@@ -409,6 +569,7 @@ export class ToolActivityNarrator {
     const category = resolveToolCategory(name);
     // Whitelisted count/enum summary only — never free-text args (see module doc).
     const detail = resolveStepDetail(name, data.args);
+    const publicNarrative = resolveToolStartPublicNarrative(name, data.args);
     const ts = this.now();
 
     // Structured step: one per tool call, never collapsed (the timeline keys
@@ -417,7 +578,15 @@ export class ToolActivityNarrator {
       this.stepSeq += 1;
       const stepId = this.startStepId(data);
       const startedAt = readNumber(data.startedAt) ?? ts;
-      this.running.set(stepId, { index: this.stepSeq, label, category, startedAt, detail });
+      this.running.set(stepId, {
+        index: this.stepSeq,
+        label,
+        category,
+        toolName: name,
+        startedAt,
+        detail,
+        publicNarrative,
+      });
       this.onStep({
         phase: "start",
         stepId,
@@ -426,6 +595,7 @@ export class ToolActivityNarrator {
         category,
         status: "running",
         ...(detail ? { detail } : {}),
+        ...(publicNarrative.length > 0 ? { publicNarrative } : {}),
       });
     }
 
@@ -454,10 +624,15 @@ export class ToolActivityNarrator {
       return;
     }
     this.running.delete(stepId);
-    const status: ActivityStep["status"] = data.status === "failed" ? "failed" : "completed";
+    const status: ActivityStep["status"] =
+      data.status === "failed" || data.isError === true ? "failed" : "completed";
     const endedAt = readNumber(data.endedAt) ?? this.now();
     const startedAt = readNumber(data.startedAt) ?? tracked.startedAt;
     const durationMs = Math.max(0, endedAt - startedAt);
+    const publicNarrative = [
+      ...tracked.publicNarrative,
+      ...resolveToolResultPublicNarrative(tracked.toolName, data.result, status === "failed"),
+    ];
     this.onStep({
       phase: "end",
       stepId,
@@ -467,6 +642,7 @@ export class ToolActivityNarrator {
       status,
       durationMs,
       ...(tracked.detail ? { detail: tracked.detail } : {}),
+      ...(publicNarrative.length > 0 ? { publicNarrative } : {}),
     });
   }
 

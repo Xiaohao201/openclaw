@@ -1,5 +1,11 @@
 import mysql from "mysql2/promise";
-import type { HistoryDbConfig, WriterDbConfig, HistoryRecord, TurnUsageRecord } from "./types.js";
+import type {
+  ChatMessage,
+  HistoryDbConfig,
+  WriterDbConfig,
+  HistoryRecord,
+  TurnUsageRecord,
+} from "./types.js";
 
 /**
  * MySQL error code for a column that does not exist. The token/cost columns are
@@ -8,6 +14,17 @@ import type { HistoryDbConfig, WriterDbConfig, HistoryRecord, TurnUsageRecord } 
  * on every turn.
  */
 const ER_BAD_FIELD_ERROR = "ER_BAD_FIELD_ERROR";
+const ER_NO_SUCH_TABLE = "ER_NO_SUCH_TABLE";
+const ER_TABLEACCESS_DENIED_ERROR = "ER_TABLEACCESS_DENIED_ERROR";
+const DEFAULT_HISTORY_TABLE = "history_messages";
+const MYSQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+function quoteTableIdentifier(tableName: string): string {
+  if (!MYSQL_IDENTIFIER.test(tableName)) {
+    throw new Error(`Invalid MySQL table identifier: ${JSON.stringify(tableName)}`);
+  }
+  return `\`${tableName}\``;
+}
 
 /** DECIMAL(16,8) in the schema — round here so MySQL never truncates silently. */
 const roundCost = (value: number): number =>
@@ -24,12 +41,18 @@ const roundTokens = (value: number): number =>
 export class HistoryManager {
   private readonly readerConfig: HistoryDbConfig;
   private readonly writerConfig: WriterDbConfig | null;
+  private readonly tableSql: string;
   private readerPool: mysql.Pool | null = null;
   private writerPool: mysql.Pool | null = null;
 
-  constructor(readerConfig: HistoryDbConfig, writerConfig?: WriterDbConfig) {
+  constructor(
+    readerConfig: HistoryDbConfig,
+    writerConfig?: WriterDbConfig,
+    tableName = DEFAULT_HISTORY_TABLE,
+  ) {
     this.readerConfig = readerConfig;
     this.writerConfig = writerConfig ?? null;
+    this.tableSql = quoteTableIdentifier(tableName);
   }
 
   private createPool(config: HistoryDbConfig | WriterDbConfig): mysql.Pool {
@@ -61,12 +84,47 @@ export class HistoryManager {
     return this.writerPool ?? this.getReaderPool();
   }
 
+  /** Create this manager's isolated table by copying the deployed history schema. */
+  async ensureTableLike(sourceTable = DEFAULT_HISTORY_TABLE): Promise<void> {
+    const sourceTableSql = quoteTableIdentifier(sourceTable);
+    const sql = `CREATE TABLE IF NOT EXISTS ${this.tableSql} LIKE ${sourceTableSql}`;
+    try {
+      await this.getReaderPool().execute(`SELECT 1 FROM ${this.tableSql} LIMIT 0`);
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== ER_NO_SUCH_TABLE) {
+        throw error;
+      }
+    }
+    try {
+      await this.getWriterPool().execute(sql);
+    } catch (error) {
+      if (!this.writerConfig || (error as { code?: string }).code !== ER_TABLEACCESS_DENIED_ERROR) {
+        throw error;
+      }
+      // Deployments commonly split DML and read credentials. Some use the
+      // reader/admin connection for one-time schema setup, so try it only when
+      // the dedicated writer was explicitly denied CREATE.
+      await this.getReaderPool().execute(sql);
+    }
+  }
+
+  /** Insert the RabbitMQ envelope before the normal pipeline updates the row. */
+  async createRecord(chatMsg: ChatMessage): Promise<void> {
+    await this.getWriterPool().execute(
+      `INSERT INTO ${this.tableSql} ` +
+        "(id, session_id, user_id, message, response, tools_used, metadata, created_at) " +
+        "VALUES (?, ?, ?, ?, NULL, NULL, NULL, NOW())",
+      [chatMsg.historyId, chatMsg.sessionId, chatMsg.userId, chatMsg.message],
+    );
+  }
+
   /** Fetch a history record by ID. Returns null if not found. */
   async getRecord(historyId: number): Promise<HistoryRecord | null> {
     const pool = this.getReaderPool();
     const [rows] = await pool.execute<mysql.RowDataPacket[]>(
       `SELECT id, session_id, user_id, message, response, tools_used, metadata, created_at
-       FROM history_messages WHERE id = ?`,
+       FROM ${this.tableSql} WHERE id = ?`,
       [historyId],
     );
 
@@ -90,7 +148,7 @@ export class HistoryManager {
   /** Update the response field for a history record. */
   async updateResponse(historyId: number, response: string): Promise<void> {
     const pool = this.getWriterPool();
-    await pool.execute("UPDATE history_messages SET response = ? WHERE id = ?", [
+    await pool.execute(`UPDATE ${this.tableSql} SET response = ? WHERE id = ?`, [
       response,
       historyId,
     ]);
@@ -110,7 +168,7 @@ export class HistoryManager {
     const pool = this.getWriterPool();
     let existing: Record<string, unknown> = {};
     const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-      "SELECT metadata FROM history_messages WHERE id = ?",
+      `SELECT metadata FROM ${this.tableSql} WHERE id = ?`,
       [historyId],
     );
     const raw = rows?.[0]?.metadata;
@@ -131,7 +189,7 @@ export class HistoryManager {
       }
     }
     const merged = { ...existing, ...patch };
-    await pool.execute("UPDATE history_messages SET metadata = ? WHERE id = ?", [
+    await pool.execute(`UPDATE ${this.tableSql} SET metadata = ? WHERE id = ?`, [
       JSON.stringify(merged),
       historyId,
     ]);
@@ -155,7 +213,7 @@ export class HistoryManager {
     const pool = this.getWriterPool();
     try {
       await pool.execute(
-        `UPDATE history_messages SET
+        `UPDATE ${this.tableSql} SET
            input_tokens = COALESCE(input_tokens, 0) + ?,
            output_tokens = COALESCE(output_tokens, 0) + ?,
            cache_read_tokens = COALESCE(cache_read_tokens, 0) + ?,
@@ -193,7 +251,7 @@ export class HistoryManager {
       const code = (err as { code?: string }).code;
       if (code === ER_BAD_FIELD_ERROR) {
         throw new Error(
-          "history_messages is missing the token/cost columns (input_tokens, output_tokens, " +
+          `${this.tableSql} is missing the token/cost columns (input_tokens, output_tokens, ` +
             "cache_read_tokens, cache_write_tokens, total_tokens, input_cost, output_cost, " +
             "cache_read_cost, cache_write_cost, total_cost, cost_currency, llm_provider, " +
             "llm_model, llm_calls); add them before usage can be recorded",

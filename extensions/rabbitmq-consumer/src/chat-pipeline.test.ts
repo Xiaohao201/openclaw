@@ -81,8 +81,11 @@ function createRuntimeMock(options: {
   onWaitArgs?: (args: { runId: string; timeoutMs: number }) => void;
   /** Override the run outcome to exercise the timeout/error exit paths. */
   waitStatus?: "ok" | "timeout" | "error";
+  /** Sequence multiple wait windows without treating an elapsed window as a run failure. */
+  waitStatuses?: Array<"ok" | "timeout" | "error">;
 }): PluginRuntime {
   let listener: AgentEventListener | undefined;
+  let waitIndex = 0;
   return {
     events: {
       onAgentEvent: (fn: AgentEventListener) => {
@@ -101,7 +104,9 @@ function createRuntimeMock(options: {
       waitForRun: async (args: { runId: string; timeoutMs: number }) => {
         options.onWaitArgs?.(args);
         options.onWait?.(listener);
-        return { status: options.waitStatus ?? ("ok" as const) };
+        return {
+          status: options.waitStatuses?.[waitIndex++] ?? options.waitStatus ?? ("ok" as const),
+        };
       },
       getSessionMessages: async () => ({ messages: options.sessionMessages ?? [] }),
     },
@@ -1533,7 +1538,7 @@ describe("processChatMessage", () => {
     expect(capturedMessage).not.toContain("启用了以下自定义技能");
   });
 
-  describe("turn timeout", () => {
+  describe("turn wait window", () => {
     function runWithTimeout(turnTimeoutMs?: number) {
       const seen: Array<{ runId: string; timeoutMs: number }> = [];
       const runtime = createRuntimeMock({
@@ -1560,22 +1565,22 @@ describe("processChatMessage", () => {
       ).then(() => seen);
     }
 
-    it("keeps the historical 5-minute ceiling when unconfigured", async () => {
+    it("uses a five-minute wait window when unconfigured", async () => {
       const seen = await runWithTimeout();
       expect(seen[0]?.timeoutMs).toBe(300_000);
     });
 
-    it("applies a configured ceiling", async () => {
+    it("applies a configured polling window", async () => {
       const seen = await runWithTimeout(900_000);
       expect(seen[0]?.timeoutMs).toBe(900_000);
     });
 
-    it("clamps a too-small ceiling up to the minimum", async () => {
+    it("clamps a too-small polling window up to the minimum", async () => {
       const seen = await runWithTimeout(5_000);
       expect(seen[0]?.timeoutMs).toBe(60_000);
     });
 
-    it("clamps a too-large ceiling down to the maximum", async () => {
+    it("clamps a too-large polling window down to the maximum", async () => {
       const seen = await runWithTimeout(7_200_000);
       expect(seen[0]?.timeoutMs).toBe(3_600_000);
     });
@@ -1585,11 +1590,14 @@ describe("processChatMessage", () => {
       expect((await runWithTimeout(Number.NaN))[0]?.timeoutMs).toBe(300_000);
     });
 
-    it("persists and returns the Suheng learning fallback when the turn times out", async () => {
+    it("continues waiting after an elapsed window and returns the completed report", async () => {
+      const waits: Array<{ runId: string; timeoutMs: number }> = [];
       const runtime = createRuntimeMock({
         workspaceDir,
         onRun: () => {},
-        waitStatus: "timeout",
+        onWaitArgs: (args) => waits.push(args),
+        waitStatuses: ["timeout", "ok"],
+        sessionMessages: [{ role: "assistant", content: "最终报告正文" }],
       });
       const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
 
@@ -1601,15 +1609,15 @@ describe("processChatMessage", () => {
         logger,
       );
 
-      const timeoutReply = "这个任务暂时无法完成，但是夙衡已经自动学习，争取尽早完善。";
-      expect(result).toBe(timeoutReply);
-      expect(updateResponse).toHaveBeenCalledWith(1, timeoutReply);
+      expect(result).toBe("最终报告正文");
+      expect(waits).toHaveLength(2);
+      expect(updateResponse).toHaveBeenCalledWith(1, "最终报告正文");
       const metadataPatches = updateMetadata.mock.calls as unknown as Array<
         [number, { steps?: Array<{ status: string }> }]
       >;
       const steps = metadataPatches.findLast(([, patch]) => Array.isArray(patch?.steps))?.[1]
         ?.steps;
-      expect(steps?.some((step) => step.status === "failed")).toBe(true);
+      expect(steps?.some((step) => step.status === "failed")).toBe(false);
     });
   });
 });
