@@ -4,10 +4,9 @@ import { resolveAgentWorkspaceDir, type OpenClawConfig, type PluginLogger } from
 import type { AttachmentRef } from "./types.js";
 
 /**
- * Materialize large-sheet attachments (originals uploaded by the frontend to
- * OSS) into the user's agent workspace, so the agent's file/code tools — which
- * are contained to the workspace — can read full row-level data on demand
- * instead of estimating from the inline 15-row sample.
+ * Materialize original attachments uploaded by the frontend to OSS into the
+ * user's agent workspace. This preserves full spreadsheets and evidence files
+ * such as stamped PDFs whose layout and images are lost during text extraction.
  *
  * Transfer is plan A2: the frontend and this consumer run on different hosts
  * (no shared filesystem), so the file travels via OSS. The frontend uploads the
@@ -17,8 +16,8 @@ import type { AttachmentRef } from "./types.js";
 
 /** A file now sitting in the agent workspace, ready for the agent to read. */
 export interface MaterializedAttachment {
-  /** What the file is: a data spreadsheet, or a 证件 image for 投诉建档. */
-  kind: "spreadsheet" | "image";
+  /** What the file is: a data spreadsheet, original document, or 证件 image. */
+  kind: "spreadsheet" | "document" | "image";
   /** Original filename, for the prompt. */
   filename: string;
   /** Path relative to the workspace root (what the agent reads), e.g. uploads/<id>-<name>. */
@@ -89,9 +88,12 @@ export async function materializeAttachments(
 
   const results: MaterializedAttachment[] = [];
   for (const att of attachments) {
-    // Both spreadsheet (full-data reads) and image (证件 auto-recognition) land
-    // in the workspace; anything else / non-OSS is skipped.
-    if ((att.kind !== "spreadsheet" && att.kind !== "image") || att.storage !== "oss") {
+    // Spreadsheets, original documents, and images all land in the workspace;
+    // anything else / non-OSS is skipped.
+    if (
+      (att.kind !== "spreadsheet" && att.kind !== "document" && att.kind !== "image") ||
+      att.storage !== "oss"
+    ) {
       continue;
     }
     // Prefix with fileId to avoid collisions when two uploads share a name.

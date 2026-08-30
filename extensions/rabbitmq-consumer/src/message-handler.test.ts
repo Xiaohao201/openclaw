@@ -160,6 +160,23 @@ describe("parseMessage", () => {
     expect(msg?.attachments?.[0].ref).toContain("abc.xlsx");
   });
 
+  it("keeps an original PDF document ref so the consumer can materialize it", () => {
+    const att = {
+      fileId: "pdf-1",
+      filename: "大恒哥.pdf",
+      ext: "pdf",
+      kind: "document",
+      storage: "oss",
+      ref: "https://oss.leadingnews.cn/ibtai/lobster/attachments/2026/08/pdf-1.pdf",
+    };
+
+    const msg = parseMessage(
+      buf({ id: 6, message: "用这份盖章材料发起企业投诉", user_id: 42, attachments: [att] }),
+    );
+
+    expect(msg?.attachments).toEqual([att]);
+  });
+
   it("drops a malformed/stale attachment WITHOUT failing the whole message", () => {
     // Old inbox-format ref (storage:'inbox', non-url ref) must not drop the turn.
     const stale = {

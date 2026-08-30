@@ -64,12 +64,11 @@ export interface RabbitMqPluginConfig {
 }
 
 /**
- * Large-sheet attachment reference. The frontend uploads an oversized Excel
- * (rows beyond the inline threshold) to OSS and sends only this lightweight
- * reference — never the full table — so the message body stays small. The
- * consumer (on a different host) downloads the file via HTTP into the user's
- * agent workspace, letting the agent read full row-level data on demand (code
- * execution / Excel skill) instead of estimating from a 15-row sample.
+ * Portable attachment reference. The frontend uploads the original file to OSS
+ * and sends this lightweight reference alongside any extracted text. The
+ * consumer (on a different host) downloads it into the user's agent workspace,
+ * preserving originals such as stamped PDFs whose layout/images cannot be
+ * represented faithfully by text extraction alone.
  * Shape must match the frontend attachment-store.
  */
 export interface AttachmentRef {
@@ -78,11 +77,12 @@ export interface AttachmentRef {
   ext: string;
   /**
    * `spreadsheet` — oversized Excel materialized for full-data reads.
+   * `document` — original PDF/Word/etc. materialized for evidence/layout reads.
    * `image` — 证件图片（投诉建档用）：身份证/营业执照/公章/委托书等。The agent reads
    * the materialized file to auto-recognize the doc type, then stores its
    * `ossKey` into the matching 主体档案 field via `infringe_profile_save`.
    */
-  kind: "spreadsheet" | "image";
+  kind: "spreadsheet" | "document" | "image";
   storage: "oss";
   /** OSS public direct link the consumer downloads from. */
   ref: string;
@@ -124,10 +124,10 @@ export interface ChatMessage {
    */
   hasAttachment?: boolean;
   /**
-   * Large-sheet file references (originals persisted to the shared inbox). The
-   * pipeline materializes these into the agent workspace so the agent can read
-   * full data on demand. Small files/non-spreadsheets carry no ref (their text
-   * is already inlined in `message`).
+   * Original file references persisted by the frontend. The pipeline
+   * materializes these into the agent workspace so the agent can inspect full
+   * data, document layout, embedded images, stamps, and other evidence that the
+   * extracted text in `message` cannot preserve.
    */
   attachments?: AttachmentRef[];
   /**

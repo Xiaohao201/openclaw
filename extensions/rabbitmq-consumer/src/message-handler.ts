@@ -69,10 +69,10 @@ const attachmentRefSchema = z
     fileId: z.string().min(1),
     filename: z.string().min(1),
     ext: z.string().min(1),
-    kind: z.enum(["spreadsheet", "image"]),
+    kind: z.enum(["spreadsheet", "document", "image"]),
     storage: z.literal("oss"),
     ref: z.string().url(),
-    totalDataRows: z.number().int().nonnegative().default(0),
+    totalDataRows: z.number().int().nonnegative().optional(),
     ossKey: z.string().min(1).optional(),
   })
   .refine((a) => a.kind !== "image" || !!a.ossKey, {
