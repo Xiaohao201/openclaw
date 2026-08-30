@@ -168,6 +168,7 @@ describe("parseMessage", () => {
       kind: "document",
       storage: "oss",
       ref: "https://oss.leadingnews.cn/ibtai/lobster/attachments/2026/08/pdf-1.pdf",
+      ossKey: "ibtai/lobster/attachments/2026/08/pdf-1.pdf",
     };
 
     const msg = parseMessage(
@@ -175,6 +176,7 @@ describe("parseMessage", () => {
     );
 
     expect(msg?.attachments).toEqual([att]);
+    expect(msg?.attachments?.[0].ossKey).toBe("ibtai/lobster/attachments/2026/08/pdf-1.pdf");
   });
 
   it("drops a malformed/stale attachment WITHOUT failing the whole message", () => {

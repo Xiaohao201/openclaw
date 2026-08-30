@@ -1350,6 +1350,7 @@ describe("processChatMessage", () => {
             kind: "document",
             storage: "oss",
             ref: "https://oss.example.test/complaint.pdf",
+            ossKey: "ibtai/lobster/attachments/2026/08/pdf-1.pdf",
           },
         ],
       },
@@ -1369,9 +1370,66 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain("[原始附件]");
     expect(capturedMessage).toContain("大恒哥.pdf");
     expect(capturedMessage).toContain("uploads/pdf-1-大恒哥.pdf");
+    expect(capturedMessage).toContain("ossKey=ibtai/lobster/attachments/2026/08/pdf-1.pdf");
+    expect(capturedMessage).toContain("直接作为 infringe_complaint_submit.stampedComplaint");
+    expect(capturedMessage).not.toContain("仍需网页端上传的盖章《投诉通知书》");
     await expect(
       readFile(path.join(workspaceDir, "uploads/pdf-1-大恒哥.pdf"), "utf8"),
     ).resolves.toBe("%PDF-original");
+  });
+
+  it("exposes the original OSS URL when an older PDF attachment has no ossKey", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new TextEncoder().encode("%PDF-legacy"), { status: 200 })),
+    );
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "已提交旧版附件" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const config = {
+      agents: { list: [{ id: `rabbitmq-${USER_ID}`, workspace: workspaceDir }] },
+    } as OpenClawConfig;
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        message: "提交这份盖章投诉函",
+        hasAttachment: true,
+        attachments: [
+          {
+            fileId: "pdf-legacy",
+            filename: "盖章投诉函.pdf",
+            ext: "pdf",
+            kind: "document",
+            storage: "oss",
+            ref: "https://oss.ibtai.com/ibtai/lobster/attachments/legacy.pdf",
+          },
+        ],
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      config,
+    );
+
+    expect(capturedMessage).toContain(
+      "ossUrl=https://oss.ibtai.com/ibtai/lobster/attachments/legacy.pdf",
+    );
+    expect(capturedMessage).toContain("旧消息则用 ossUrl");
   });
 
   it("keeps a selected template as a format guide (no internal-DB report) when a file is attached", async () => {

@@ -414,6 +414,18 @@ describe("infringe_complaint_submit", () => {
     expect(res).toMatchObject({ success: true, submitted: true, taskId: 55, count: 1 });
   });
 
+  it("passes a file_share OSS URL through as stampedComplaint", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6084, link: "https://weibo.com/x" }] });
+    mockPostForm.mockResolvedValue({ code: "success", message: "ok" });
+    const stampedComplaint =
+      "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/08/stamped.pdf";
+
+    await tool().execute("i-url", { profileId: 12, stampedComplaint });
+
+    const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(fields.stampedComplaint).toBe(stampedComplaint);
+  });
+
   it("auto-selects the sole profile when profileId is omitted", async () => {
     mockGetJson.mockImplementation((...args: unknown[]) =>
       args[1] === "/infringe-complaint/fetch-profiles"
@@ -494,6 +506,9 @@ describe("infringe_complaint_submit", () => {
     const res = parse(await tool().execute("i5", { profileId: 12 }));
     expect(res.success).toBe(false);
     expect(String(res.error)).toContain("盖章");
+    expect(String(res.error)).toContain("file_share");
+    expect(String(res.error)).toContain("OSS key 或 URL");
+    expect(String(res.error)).not.toContain("网页端");
     expect(mockGetJson).not.toHaveBeenCalled();
     expect(mockPostForm).not.toHaveBeenCalled();
   });
@@ -513,6 +528,23 @@ describe("infringe_complaint_submit", () => {
       success: false,
       error: "代理投诉需先在该主体档案上传「授权委托书」",
     });
+  });
+
+  it("turns the misleading agent-profile backend error into actionable prerequisites", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 6083, link: "https://www.douyin.com/v/2" }] });
+    mockPostForm.mockResolvedValue({
+      code: "danger",
+      message: "代理人档案不存在或无权限",
+    });
+
+    const res = parse(
+      await tool().execute("i7", { profileId: 12, stampedComplaint: "oss/s.pdf", agentId: 4 }),
+    );
+
+    expect(String(res.error)).toContain("代理人档案不可用");
+    expect(String(res.error)).toContain("身份证明");
+    expect(String(res.error)).toContain("授权委托书");
+    expect(String(res.error)).toContain("代理人档案不存在或无权限");
   });
 });
 
@@ -550,6 +582,9 @@ describe("infringe_profile_save", () => {
     });
     expect(res).toMatchObject({ success: true, profileId: 77 });
     expect(res.missingDocs).toEqual(["身份证正面", "身份证反面"]);
+    expect(String(res.agentInstruction)).toContain("聊天附件");
+    expect(String(res.agentInstruction)).toContain("ossKey");
+    expect(String(res.agentInstruction)).not.toContain("网页端");
   });
 
   it("reports enterprise docs and passes id when updating", async () => {

@@ -1107,9 +1107,18 @@ export async function processChatMessage(
       const materializedDocuments = materializedAttachments.filter((a) => a.kind === "document");
       const originalDocumentDirective = materializedDocuments.length
         ? "[原始附件] 完整原文件已存入 workspace：" +
-          materializedDocuments.map((a) => `「${a.filename}」→ ${a.workspacePath}`).join("；") +
+          materializedDocuments
+            .map(
+              (a) =>
+                `「${a.filename}」→ ${a.workspacePath}` +
+                (a.ossKey ? `（ossKey=${a.ossKey}）` : `（ossUrl=${a.ossUrl}）`),
+            )
+            .join("；") +
           "。需要核验版式、公章、签名、图片或提交原始证据时，必须读取并使用上述原文件；" +
-          "不要仅凭正文中的文本提取结果判断文件不存在，也不要要求用户重复上传。 "
+          "不要仅凭正文中的文本提取结果判断文件不存在，也不要要求用户重复上传。" +
+          "若其中是已盖章《投诉通知书》，请把随附件提供的 ossKey（旧消息则用 ossUrl）" +
+          "直接作为 infringe_complaint_submit.stampedComplaint 提交；" +
+          "仅当附件没有任何 OSS 引用时，才对 workspace 原文件调用 file_share 获取 OSS URL。 "
         : "";
 
       // 证件图片（投诉建档）：图片已落到 workspace，且各自带回 OSS objectKey。
@@ -1129,7 +1138,7 @@ export async function processChatMessage(
           "（身份证正面→idCardFront，反面→idCardBack，手持→idCardHold，营业执照→businessLicense，公章→sealImage，委托书→powerOfAttorney）；" +
           "③主体类型 subjectType：出现营业执照按 Enterprise，否则 Personal；" +
           "④名称 name / 证件号 idNumber 等文本字段，图中能清晰读到就据实填写，读不到就简要询问用户后再建档，切勿编造；" +
-          "⑤建档成功后用返回的 missingDocs 告知用户还缺哪些证件，以及提交投诉时仍需网页端上传的盖章《投诉通知书》。" +
+          "⑤建档成功后用返回的 missingDocs 告知用户还缺哪些证件；缺失证件和盖章《投诉通知书》都可让用户直接作为聊天附件补充，无需跳转网页端。" +
           "若这些只是普通图片、与投诉无关，则忽略本条，按用户实际问题正常处理。 "
         : "";
 

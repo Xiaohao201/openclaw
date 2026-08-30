@@ -50,6 +50,7 @@ describe("materializeAttachments Unicode paths", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.workspacePath).toBe("uploads/file-1-八月舆情“摘要”.xlsx");
+    expect(result[0]?.ossUrl).toBe("https://oss.example.test/report.xlsx");
     await expect(readFile(path.join(workspace, result[0].workspacePath), "utf8")).resolves.toBe(
       "sheet-data",
     );
@@ -79,6 +80,7 @@ describe("materializeAttachments Unicode paths", () => {
           kind: "document",
           storage: "oss",
           ref: "https://oss.example.test/complaint.pdf",
+          ossKey: "ibtai/lobster/attachments/2026/08/pdf-1.pdf",
         },
       ],
       "rabbitmq-42",
@@ -95,6 +97,8 @@ describe("materializeAttachments Unicode paths", () => {
         kind: "document",
         filename: "大恒哥.pdf",
         workspacePath: "uploads/pdf-1-大恒哥.pdf",
+        ossKey: "ibtai/lobster/attachments/2026/08/pdf-1.pdf",
+        ossUrl: "https://oss.example.test/complaint.pdf",
       },
     ]);
     await expect(readFile(path.join(workspace, "uploads/pdf-1-大恒哥.pdf"), "utf8")).resolves.toBe(

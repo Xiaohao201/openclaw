@@ -61,9 +61,11 @@ const builtinSkillNameSchema = z
 // parseAttachments (NOT inline in the message schema) so a malformed/old-format
 // attachment is dropped — degrading to overview+sample — and never fails the
 // whole message parse (which would silently drop the user's turn).
-// `spreadsheet` carries totalDataRows; `image` (证件图片，投诉建档) carries the OSS
-// object key so the agent can store it via infringe_profile_save — an image
-// without an ossKey is useless for that, so it's refined out.
+// `spreadsheet` carries totalDataRows. Any attachment may carry the original
+// OSS object key: document keys feed stampedComplaint directly, while image
+// keys feed infringe_profile_save. An image without an ossKey is unusable for
+// profile persistence, so it is refined out; documents retain their public ref
+// as a backward-compatible stampedComplaint fallback.
 const attachmentRefSchema = z
   .object({
     fileId: z.string().min(1),

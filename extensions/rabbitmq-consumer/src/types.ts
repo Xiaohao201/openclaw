@@ -89,9 +89,10 @@ export interface AttachmentRef {
   /** SheetJS-computed total data rows (excluding headers); spreadsheet only. */
   totalDataRows?: number;
   /**
-   * OSS object key (e.g. `ibtai/upload/2026/07/…jpg`) for `image` attachments.
-   * This is the exact string 投诉后端 save-profile stores into idCardFront /
-   * businessLicense / sealImage / powerOfAttorney and the engine later fetches.
+   * OSS object key (e.g. `ibtai/upload/2026/07/…pdf`) for any attachment.
+   * Images use it for profile document fields; stamped complaint documents use
+   * it directly as `infringe_complaint_submit.stampedComplaint`. Optional for
+   * compatibility with older producers, whose public `ref` remains usable.
    */
   ossKey?: string;
 }
