@@ -24,8 +24,10 @@ export interface MaterializedAttachment {
   workspacePath: string;
   /** SheetJS-computed total data rows (excluding headers); spreadsheet only. */
   totalDataRows?: number;
-  /** OSS object key; image (证件) only — passed to infringe_profile_save after recognition. */
+  /** OSS object key supplied by the producer, usable by complaint/profile tools. */
   ossKey?: string;
+  /** Original public OSS URL, retained as a fallback when an older producer omitted ossKey. */
+  ossUrl: string;
 }
 
 /** Subdirectory under the workspace where uploads land. */
@@ -108,6 +110,7 @@ export async function materializeAttachments(
         workspacePath: `${UPLOADS_SUBDIR}/${destName}`,
         totalDataRows: att.totalDataRows,
         ossKey: att.ossKey,
+        ossUrl: att.ref,
       });
       logger.info(
         `[ATTACHMENT] Downloaded ${att.kind} "${att.filename}" -> ${UPLOADS_SUBDIR}/${destName} ` +

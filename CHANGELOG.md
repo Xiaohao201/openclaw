@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - Browser/SSRF: add a narrow RFC2544 benchmark-range opt-in so trusted Clash/Surge fake-IP environments can navigate public websites without enabling access to other private networks.
 - RabbitMQ/Suheng workspaces: preserve Chinese directory and file names during artifact generation, pass Unicode paths as values instead of inline Python source, and syntax-check generated Python before execution.
 - RabbitMQ/local debugging: execute simulated inbound messages through a service-level queue so plugin-authenticated HTTP requests do not strip the `operator.write` scope required by the real subagent pipeline.
+- RabbitMQ/leading-v2 complaints: preserve OSS keys and URLs for original chat attachments so stamped complaint PDFs can be submitted directly or through `file_share`, remove stale webpage-only guidance, and clarify agent-profile prerequisite errors.
 
 ## 2026.4.15
 

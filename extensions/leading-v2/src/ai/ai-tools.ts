@@ -527,7 +527,8 @@ const InfringeComplaintSubmitSchema = Type.Object(
     stampedComplaint: Type.Optional(
       Type.String({
         description:
-          "盖章《投诉通知书》的 OSS object key（投诉前置，必需）。用户须先在网页端下载投诉函、盖章后上传取得该路径；缺失则无法提交。",
+          "盖章《投诉通知书》的 OSS object key 或可访问的 OSS URL（投诉前置，必需）。" +
+          "优先使用聊天附件注入的 ossKey/ossUrl；旧消息只有 workspace 路径时，先用 file_share 上传并使用其返回 URL。",
       }),
     ),
     links: Type.Optional(
@@ -653,7 +654,8 @@ export function createInfringeComplaintSubmitToolFactory(
       description:
         "发起涉企侵权投诉：可直接使用夙衡本轮研判，或兼容复用最近一次内容检测任务。" +
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope=Enterprise、judgment 和 links，不要创建或查询内容检测任务。" +
-        "两个前置：① 投诉主体档案 profileId（用 infringe_profile_list 获取；仅 1 个档案时自动选用）；② 盖章《投诉通知书》 stampedComplaint（OSS key，用户须先在网页端下载投诉函、盖章后上传）。缺任一前置会返回提示，请照提示引导用户补齐。" +
+        "两个前置：① 投诉主体档案 profileId（用 infringe_profile_list 获取；仅 1 个档案时自动选用）；② 盖章《投诉通知书》 stampedComplaint（OSS key 或 URL）。" +
+        "聊天附件已提供 ossKey/ossUrl 时直接使用；只有 workspace 路径时先调用 file_share。缺任一前置会返回提示，请照提示引导用户补齐。" +
         "默认复用检测任务提交的原始链接；如需投诉其他链接可传 links。" +
         `仅支持 ${INFRINGE_PLATFORMS}，其他平台链接会被过滤。` +
         "异步执行——提交成功后告知用户「投诉任务已提交」，无需再调用任何工具。",
@@ -682,7 +684,7 @@ export function createInfringeComplaintSubmitToolFactory(
               success: false,
               error:
                 "尚无投诉主体档案。请先用 infringe_profile_save 采集用户主体信息（个人/企业名称、证件号、联系方式等）创建档案；" +
-                "其中身份证/营业执照/公章/委托书等证件图片需用户在网页端上传（聊天附件无法生成所需 OSS objectKey）。建好档案后再发起投诉。",
+                "身份证/营业执照/公章/委托书等证件可由用户直接上传为聊天附件，并把附件携带的 ossKey 填入对应字段。建好档案后再发起投诉。",
             });
           }
           if (profiles.length > 1) {
@@ -701,7 +703,9 @@ export function createInfringeComplaintSubmitToolFactory(
           return jsonResult({
             success: false,
             error:
-              "缺少「盖章投诉函」。请引导用户在网页端下载《投诉通知书》、盖章后上传，取得其 OSS 路径后作为 stampedComplaint 传入再提交。",
+              "缺少「盖章投诉函」。请让用户直接在聊天中上传已盖章《投诉通知书》PDF；" +
+              "附件带有 ossKey/ossUrl 时，将该 OSS key 或 URL 作为 stampedComplaint。" +
+              "若当前仅有 workspace 文件路径，先调用 file_share 上传并使用其返回 URL，然后重试提交。",
           });
         }
 
@@ -775,9 +779,18 @@ export function createInfringeComplaintSubmitToolFactory(
         }
         if (res.code !== "success") {
           // 后端门槛（代理投诉缺委托书、平台不支持、档案无权限等）直接回传
+          const backendMessage = asString(res.message) ?? "后端拒绝了投诉请求。";
+          const error =
+            Number.isInteger(agentId) &&
+            agentId > 0 &&
+            backendMessage.includes("代理人档案不存在或无权限")
+              ? "代理人档案不可用：请确认该档案属于当前账号，并已补齐代理人身份证明；" +
+                "同时确认投诉主体档案已上传授权委托书。" +
+                `后端原始提示：${backendMessage}`
+              : backendMessage;
           return jsonResult({
             success: false,
-            error: asString(res.message) ?? "后端拒绝了投诉请求。",
+            error,
           });
         }
         return jsonResult({
@@ -796,7 +809,7 @@ export function createInfringeComplaintSubmitToolFactory(
 
 const SUBJECT_TYPES = ["Personal", "Enterprise"] as const;
 
-/** 主体档案上的「证件单件」列（OSS object key）。聊天附件拿不到 objectKey，需网页端上传。 */
+/** 主体档案上的「证件单件」列（聊天附件携带的 OSS object key）。 */
 const PROFILE_DOC_KEYS = [
   "idCardFront",
   "idCardBack",
@@ -838,7 +851,7 @@ const InfringeProfileSaveSchema = Type.Object(
     ),
     memo: Type.Optional(Type.String({ description: "备注。" })),
     idCardFront: Type.Optional(
-      Type.String({ description: "身份证正面 OSS object key（网页端上传取得）。" }),
+      Type.String({ description: "身份证正面 OSS object key（可从聊天附件 ossKey 取得）。" }),
     ),
     idCardBack: Type.Optional(Type.String({ description: "身份证反面 OSS object key。" })),
     idCardHold: Type.Optional(Type.String({ description: "手持身份证 OSS object key。" })),
@@ -892,8 +905,8 @@ export function createInfringeProfileSaveToolFactory(
         "新建或更新「投诉主体资料库」档案（个人/企业资质），供 infringe_complaint_submit 使用。" +
         "把用户口述的主体信息（名称、证件类型/号码、联系人/电话/邮箱、企业法定代表人等）落成一条档案并返回 profileId——" +
         "无需再让用户去网页端从零建档。" +
-        "但身份证/营业执照/公章/委托书等「证件图片」需 OSS object key（网页端 /api/upload-oss 上传取得），聊天里的图片附件拿不到该 key；" +
-        "缺这些证件时仍会建档成功，并在 missingDocs 里列出引擎实际投诉前用户需在网页端补传的证件。",
+        "身份证/营业执照/公章/委托书等证件字段使用聊天附件携带的 OSS object key；" +
+        "缺这些证件时仍会建档成功，并在 missingDocs 里列出引擎实际投诉前需要用户继续作为聊天附件补充的证件。",
       parameters: InfringeProfileSaveSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         const keyed = await resolveKeyOrError(api, resolver, userId, "infringe_profile_save");
@@ -965,8 +978,8 @@ export function createInfringeProfileSaveToolFactory(
           message: asString(res.message) ?? "档案已保存",
           agentInstruction:
             missingDocs.length > 0
-              ? `档案已建好，可用于发起投诉。但引擎实际投诉前，用户还需在网页端上传：${missingDocs.join("、")}，以及提交时的盖章《投诉通知书》。请如实告知用户这几项需网页端补传（聊天附件无法生成所需 OSS objectKey）。`
-              : "档案已建好，可用于发起投诉。提交投诉时仍需盖章《投诉通知书》（网页端上传）。",
+              ? `档案已建好，但引擎实际投诉前仍缺：${missingDocs.join("、")}。请让用户直接作为聊天附件补充，识别后把附件的 ossKey 写入档案；盖章《投诉通知书》PDF 也可直接在聊天中上传并提交其 ossKey/ossUrl。`
+              : "档案已建好，可用于发起投诉。盖章《投诉通知书》PDF 可直接在聊天中上传，并用附件的 ossKey/ossUrl 提交。",
         });
       },
     };
