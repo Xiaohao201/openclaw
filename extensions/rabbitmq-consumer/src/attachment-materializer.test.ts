@@ -54,4 +54,51 @@ describe("materializeAttachments Unicode paths", () => {
       "sheet-data",
     );
   });
+
+  it("downloads an original PDF document into the agent workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "rabbitmq-pdf-workspace-"));
+    roots.push(root);
+    const workspace = path.join(root, "企业投诉工作区");
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as PluginLogger;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new TextEncoder().encode("%PDF-original"), { status: 200 })),
+    );
+
+    const result = await materializeAttachments(
+      [
+        {
+          fileId: "pdf-1",
+          filename: "大恒哥.pdf",
+          ext: "pdf",
+          kind: "document",
+          storage: "oss",
+          ref: "https://oss.example.test/complaint.pdf",
+        },
+      ],
+      "rabbitmq-42",
+      {
+        agents: {
+          list: [{ id: "rabbitmq-42", workspace }],
+        },
+      } as OpenClawConfig,
+      logger,
+    );
+
+    expect(result).toEqual([
+      {
+        kind: "document",
+        filename: "大恒哥.pdf",
+        workspacePath: "uploads/pdf-1-大恒哥.pdf",
+      },
+    ]);
+    await expect(readFile(path.join(workspace, "uploads/pdf-1-大恒哥.pdf"), "utf8")).resolves.toBe(
+      "%PDF-original",
+    );
+  });
 });

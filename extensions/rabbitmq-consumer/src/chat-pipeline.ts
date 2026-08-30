@@ -820,10 +820,10 @@ export async function processChatMessage(
     const agentId = `rabbitmq-${userId}`;
     const sessionKey = `agent:${agentId}:rabbitmq:${userId}:${sessionId}`;
 
-    // Large-sheet attachments: copy the originals (persisted by the frontend to
-    // the shared inbox) into this agent's workspace so the agent can read full
-    // row-level data on demand. Best-effort — failures degrade to the inline
-    // overview+sample already in `userMessage`. Prefer the passed-in config
+    // Original attachments: copy the OSS-backed files into this agent's
+    // workspace so the agent can read full tables and inspect evidence such as
+    // stamped PDFs. Best-effort — failures degrade to the extracted text already
+    // in `userMessage`. Prefer the passed-in config
     // (api.config); the process-global snapshot is a fallback only.
     const attachmentConfig = config ?? getRuntimeConfigSnapshot();
     let materializedAttachments: Awaited<ReturnType<typeof materializeAttachments>> = [];
@@ -1111,6 +1111,18 @@ export async function processChatMessage(
           "总数与占比一律以上方概览为准，不要从样本估算。 "
         : "";
 
+      // Original documents retain layout, embedded images, signatures, and
+      // stamps that text extraction cannot represent. Give the agent an exact
+      // workspace-relative path so complaint/evidence workflows can inspect and
+      // upload the real file instead of falsely reporting that it never landed.
+      const materializedDocuments = materializedAttachments.filter((a) => a.kind === "document");
+      const originalDocumentDirective = materializedDocuments.length
+        ? "[原始附件] 完整原文件已存入 workspace：" +
+          materializedDocuments.map((a) => `「${a.filename}」→ ${a.workspacePath}`).join("；") +
+          "。需要核验版式、公章、签名、图片或提交原始证据时，必须读取并使用上述原文件；" +
+          "不要仅凭正文中的文本提取结果判断文件不存在，也不要要求用户重复上传。 "
+        : "";
+
       // 证件图片（投诉建档）：图片已落到 workspace，且各自带回 OSS objectKey。
       // 让 agent 先 read 逐张「看」图自主识别证件类型，再把对应 ossKey 填进
       // infringe_profile_save 的字段——用户无需手工标注每张是什么证件。
@@ -1166,6 +1178,7 @@ export async function processChatMessage(
             "请【仅依据附件中的数据】进行分析与撰写，不要查询或编造系统内部舆情库的数据；" +
             "若附件数据不足以回答某一点，如实说明而非以内部数据补足。" +
             largeSheetDirective +
+            originalDocumentDirective +
             reportOutputDirective +
             " "
           : "";

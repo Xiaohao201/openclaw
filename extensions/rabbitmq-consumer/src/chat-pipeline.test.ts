@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginLogger, PluginRuntime } from "../api.js";
+import type { OpenClawConfig, PluginLogger, PluginRuntime } from "../api.js";
 import {
   DEFAULT_TURN_TIMEOUT_MS,
   processChatMessage,
@@ -1321,6 +1321,62 @@ describe("processChatMessage", () => {
     // The agent is steered to use the attachment, not the internal 舆情库.
     expect(capturedMessage).toContain("analyze-attachment");
     expect(capturedMessage).toContain("仅依据附件中的数据");
+  });
+
+  it("materializes an original PDF and tells the agent its workspace path", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new TextEncoder().encode("%PDF-original"), { status: 200 })),
+    );
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "已读取盖章 PDF" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const config = {
+      agents: { list: [{ id: `rabbitmq-${USER_ID}`, workspace: workspaceDir }] },
+    } as OpenClawConfig;
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        message: "请根据盖章 PDF 发起企业投诉",
+        hasAttachment: true,
+        attachments: [
+          {
+            fileId: "pdf-1",
+            filename: "大恒哥.pdf",
+            ext: "pdf",
+            kind: "document",
+            storage: "oss",
+            ref: "https://oss.example.test/complaint.pdf",
+          },
+        ],
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      config,
+    );
+
+    expect(capturedMessage).toContain("[原始附件]");
+    expect(capturedMessage).toContain("大恒哥.pdf");
+    expect(capturedMessage).toContain("uploads/pdf-1-大恒哥.pdf");
+    await expect(
+      readFile(path.join(workspaceDir, "uploads/pdf-1-大恒哥.pdf"), "utf8"),
+    ).resolves.toBe("%PDF-original");
   });
 
   it("keeps a selected template as a format guide (no internal-DB report) when a file is attached", async () => {
