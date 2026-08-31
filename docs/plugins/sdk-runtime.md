@@ -98,6 +98,9 @@ const { runId } = await api.runtime.subagent.run({
   provider: "openai", // optional override
   model: "gpt-4.1-mini", // optional override
   skillFilter: ["github"], // optional per-run skill allowlist
+  toolsAllow: ["web_search", "web_fetch"], // optional narrowing tool allowlist
+  systemPromptMode: "minimal", // optional compact system prompt
+  bootstrapContextMode: "lightweight", // optional omission of workspace bootstrap files
   deliver: false,
 });
 
@@ -125,6 +128,12 @@ await api.runtime.subagent.deleteSession({
 `skillFilter` limits the run's available skills to the named entries. OpenClaw
 intersects this list with the target agent's configured skill filter, so a
 plugin cannot use it to widen the agent's existing access.
+
+`toolsAllow` similarly narrows the tools that already pass the target agent's
+normal policy; it cannot grant a tool the agent does not have. Trusted in-process
+plugins can use `systemPromptMode: "minimal"` and
+`bootstrapContextMode: "lightweight"` for bounded classifier or domain-agent
+runs that do not need the general OpenClaw guidance or workspace bootstrap files.
 
 ### `api.runtime.taskFlow`
 

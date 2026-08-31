@@ -38,7 +38,7 @@ Blank files are skipped. Large files are trimmed and truncated with a marker so 
 
 If a file is missing, OpenClaw injects a single “missing file” marker line (and `openclaw setup` will create a safe default template).
 
-`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.
+`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present) whose packaged `IDENTITY.md` template does not already define a name. A preconfigured identity marks setup complete immediately and skips the identity ritual. If you delete `BOOTSTRAP.md` after completing the ritual, it should not be recreated on later restarts.
 
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 

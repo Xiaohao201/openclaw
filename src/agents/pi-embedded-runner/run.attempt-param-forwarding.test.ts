@@ -26,6 +26,12 @@ const forwardingCases = [
     expected: { toolsAllow: ["exec", "read"] },
   },
   {
+    name: "forwards systemPromptMode so trusted plugin runs can request a compact prompt",
+    runId: "forward-systemPromptMode",
+    params: { systemPromptMode: "minimal" },
+    expected: { systemPromptMode: "minimal" },
+  },
+  {
     name: "forwards bootstrapContextMode so lightContext cron jobs strip workspace bootstrap files",
     runId: "forward-bootstrapContextMode",
     params: { bootstrapContextMode: "lightweight" },

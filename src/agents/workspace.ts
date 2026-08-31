@@ -102,6 +102,28 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
+function templateDefinesIdentity(content: string): boolean {
+  return /^\s*-\s*(?:\*\*)?Name(?:\*\*)?\s*:\s*\S+/imu.test(content);
+}
+
+function isLegacyBlankSuhengIdentity(content: string): boolean {
+  const body = stripFrontMatter(content);
+  return (
+    body.includes("# IDENTITY.md - 我是谁？") &&
+    body.includes("_在第一次对话中填写这份文件。让它成为你自己的。_") &&
+    /^\s*-\s*\*\*名字：\*\*\s*$/mu.test(body)
+  );
+}
+
+function isLegacySuhengBootstrap(content: string): boolean {
+  const body = stripFrontMatter(content);
+  return (
+    body.includes("# BOOTSTRAP.md - 你好，世界") &&
+    body.includes("_你刚刚上线。是时候认清自己了。_") &&
+    body.includes("ibtai")
+  );
+}
+
 async function loadTemplate(name: string): Promise<string> {
   const cached = workspaceTemplateCache.get(name);
   if (cached) {
@@ -387,6 +409,21 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
+  if (templateDefinesIdentity(identityTemplate)) {
+    if (!identityPathCreated) {
+      const existingIdentity = await fs.readFile(identityPath, "utf-8");
+      if (isLegacyBlankSuhengIdentity(existingIdentity)) {
+        await fs.writeFile(identityPath, identityTemplate, "utf-8");
+      }
+    }
+    if (await fileExists(bootstrapPath)) {
+      const existingBootstrap = await fs.readFile(bootstrapPath, "utf-8");
+      if (isLegacySuhengBootstrap(existingBootstrap)) {
+        await fs.unlink(bootstrapPath);
+      }
+    }
+  }
+
   let state = await readWorkspaceSetupState(statePath);
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
@@ -405,43 +442,47 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (!state.bootstrapSeededAt && !state.setupCompletedAt && !bootstrapExists) {
-    // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
-    // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
-    // already-configured workspaces.
-    const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
-    ]);
-    const hasUserContent = await (async () => {
-      const indicators = [
-        path.join(dir, "memory"),
-        path.join(dir, DEFAULT_MEMORY_FILENAME),
-        path.join(dir, ".git"),
-      ];
-      for (const indicator of indicators) {
-        try {
-          await fs.access(indicator);
-          return true;
-        } catch {
-          // continue
-        }
-      }
-      return false;
-    })();
-    const legacySetupCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
-    if (legacySetupCompleted) {
+    if (templateDefinesIdentity(identityTemplate)) {
       markState({ setupCompletedAt: nowIso() });
     } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
-      const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
-      if (!wroteBootstrap) {
-        bootstrapExists = await fileExists(bootstrapPath);
+      // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
+      // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
+      // already-configured workspaces.
+      const [identityContent, userContent] = await Promise.all([
+        fs.readFile(identityPath, "utf-8"),
+        fs.readFile(userPath, "utf-8"),
+      ]);
+      const hasUserContent = await (async () => {
+        const indicators = [
+          path.join(dir, "memory"),
+          path.join(dir, DEFAULT_MEMORY_FILENAME),
+          path.join(dir, ".git"),
+        ];
+        for (const indicator of indicators) {
+          try {
+            await fs.access(indicator);
+            return true;
+          } catch {
+            // continue
+          }
+        }
+        return false;
+      })();
+      const legacySetupCompleted =
+        identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
+      if (legacySetupCompleted) {
+        markState({ setupCompletedAt: nowIso() });
       } else {
-        bootstrapExists = true;
-      }
-      if (bootstrapExists && !state.bootstrapSeededAt) {
-        markState({ bootstrapSeededAt: nowIso() });
+        const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+        const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+        if (!wroteBootstrap) {
+          bootstrapExists = await fileExists(bootstrapPath);
+        } else {
+          bootstrapExists = true;
+        }
+        if (bootstrapExists && !state.bootstrapSeededAt) {
+          markState({ bootstrapSeededAt: nowIso() });
+        }
       }
     }
   }

@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { QWEN_38_FLASH_ALIAS, QWEN_38_FLASH_MODEL_ID } from "./models.js";
+import {
+  QWEN_36_PLUS_ALIAS,
+  QWEN_36_PLUS_MODEL_ID,
+  QWEN_38_FLASH_ALIAS,
+  QWEN_38_FLASH_MODEL_ID,
+} from "./models.js";
 import { applyQwenConfig, applyQwenStandardConfig } from "./onboard.js";
 
 describe("qwen onboarding", () => {
   const modelRef = `qwen/${QWEN_38_FLASH_MODEL_ID}`;
+
+  it("maps Suheng3.0 to qwen3.6-plus on Standard endpoints", () => {
+    const config = applyQwenStandardConfig({});
+
+    expect(config.agents?.defaults?.models?.[`qwen/${QWEN_36_PLUS_MODEL_ID}`]?.alias).toBe(
+      QWEN_36_PLUS_ALIAS,
+    );
+  });
 
   it("adds the Suheng alias for qwen3.8-flash on Standard endpoints", () => {
     const config = applyQwenStandardConfig({});

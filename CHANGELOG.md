@@ -15,7 +15,10 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng design: inject the compact OpenKnot design guidance only for visual-artifact requests and align generated Markdown, images, and standalone HTML delivery with the ai-assistant chat renderer.
 - RabbitMQ/Suheng video links: add an optional short-video parsing tool backed by the Qiyun API, returning direct media and metadata for follow-up `video_understand` analysis while keeping credentials in environment configuration.
 - Feed search: return an exact total for every monitoring-data search, read result sets up to 100 items in full, and use a bounded deterministic sample for larger matches.
-- Qwen/models: add the Standard-endpoint `qwen3.8-flash` catalog entry with text and image input, reasoning, 1M context, CNY usage pricing, and the `Suheng 3.2mini` alias.
+- Qwen/models: add the Standard-endpoint `qwen3.8-flash` catalog entry with text and image input, reasoning, 1M context, CNY usage pricing, and the `Suheng3.2mini` alias.
+- Suheng/identity and Qwen models: preconfigure the shared `夙衡` Public Opinion Guardian identity, skip first-run identity onboarding for preconfigured workspaces, expose canonical Qwen targets for Suheng aliases, and remove the unused MiniMax model from the Qwen catalog.
+- Suheng/runtime prompts: remove residual first-run and model-disclosure instructions, run website turns with compact context and intent-scoped tools, replace placeholder data-source claims, and require evidence-backed facts and external-action status reporting.
+- RabbitMQ/Suheng collaboration diagnostics: restrict ordinary users to their own chat history, allow cross-user diagnosis only after server-side administrator verification, and align attachment-report file claims with confirmed export tool results.
 
 ### Fixes
 

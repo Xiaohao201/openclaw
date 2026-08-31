@@ -8,6 +8,7 @@ export {
   isQwenCodingPlanBaseUrl,
   isQwenStandardEndpointBaseUrl,
   isQwenStandardOnlyModel,
+  QWEN_36_PLUS_ALIAS,
   QWEN_36_PLUS_MODEL_ID,
   QWEN_38_FLASH_ALIAS,
   QWEN_38_FLASH_COST,

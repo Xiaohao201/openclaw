@@ -20,7 +20,6 @@ const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
   "IDENTITY.md",
   "USER.md",
   "HEARTBEAT.md",
-  "BOOTSTRAP.md",
 ];
 
 function collectMissingBootstrapWorkspaceFiles(workspaceDir) {

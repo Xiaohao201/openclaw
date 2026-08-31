@@ -124,7 +124,6 @@ import {
   shouldAllowProviderOwnedThinkingReplay,
 } from "../../transcript-policy.js";
 import { derivePromptTokens, normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -502,15 +501,6 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
-    const workspaceNotes = hookAdjustedBootstrapFiles.some(
-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-      ? [
-          "If BOOTSTRAP.md is present in Project Context, it overrides the normal first greeting. Read it and follow its instructions first, then update or delete it when complete.",
-          "Reminder: commit your changes in this workspace after edits.",
-        ]
-      : undefined;
-
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
     const { defaultAgentId } = resolveSessionAgentIds({
@@ -761,9 +751,11 @@ export async function runEmbeddedAttempt(
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode = resolvePromptModeForSession(params.sessionKey);
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    // Tool narrowing defaults to the compact prompt used by jobs. Trusted callers can
+    // retain the full skill catalog while still exposing only an intent-scoped toolset.
+    const effectivePromptMode =
+      params.systemPromptMode ?? (params.toolsAllow?.length ? ("minimal" as const) : promptMode);
+    const effectiveSkillsPrompt = effectivePromptMode === "minimal" ? undefined : skillsPrompt;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -820,7 +812,6 @@ export async function runEmbeddedAttempt(
         skillsPrompt: effectiveSkillsPrompt,
         docsPath: docsPath ?? undefined,
         ttsHint,
-        workspaceNotes,
         reactionGuidance,
         promptMode: effectivePromptMode,
         acpEnabled: params.config?.acp?.enabled !== false,

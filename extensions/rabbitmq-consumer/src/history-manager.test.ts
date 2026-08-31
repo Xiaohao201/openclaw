@@ -219,3 +219,97 @@ describe("HistoryManager.addUsage", () => {
     await expect(manager.addUsage(42, USAGE)).rejects.toThrow(/Deadlock found/);
   });
 });
+
+describe("HistoryManager.queryCollaborationHistory", () => {
+  let manager: InstanceType<typeof HistoryManager>;
+
+  beforeEach(() => {
+    manager = new HistoryManager(DB_CONFIG);
+  });
+
+  afterEach(async () => {
+    await manager.close();
+    vi.clearAllMocks();
+  });
+
+  it("lets a user read only their own rows without an administrator lookup", async () => {
+    mockExecute.mockResolvedValueOnce([
+      [
+        {
+          id: 8,
+          session_id: "session-a",
+          message: "问题",
+          response: "回答",
+          created_at: new Date("2026-08-01T00:00:00.000Z"),
+        },
+      ],
+      undefined,
+    ]);
+
+    const result = await manager.queryCollaborationHistory({
+      requesterUserId: "42",
+      targetUserId: "42",
+      limit: 20,
+    });
+
+    expect(result).toMatchObject({ status: "ok", access: "self", targetUserId: "42" });
+    expect(mockExecute).toHaveBeenCalledOnce();
+    expect(mockExecute.mock.calls[0]?.[0]).toContain("WHERE user_id = ?");
+    expect(mockExecute.mock.calls[0]?.[1]).toEqual(["42", 21]);
+  });
+
+  it("denies cross-user reads before querying history when requester is not an administrator", async () => {
+    mockExecute.mockResolvedValueOnce([[{ su: 0 }], undefined]);
+
+    const result = await manager.queryCollaborationHistory({
+      requesterUserId: "42",
+      targetUserId: "99",
+      limit: 20,
+    });
+
+    expect(result).toEqual({ status: "forbidden" });
+    expect(mockExecute).toHaveBeenCalledOnce();
+    expect(mockExecute).toHaveBeenCalledWith("SELECT su FROM legal_user_role WHERE id = ?", ["42"]);
+  });
+
+  it("allows a database-confirmed administrator to query another user's rows", async () => {
+    mockExecute.mockResolvedValueOnce([[{ su: 1 }], undefined]);
+    mockExecute.mockResolvedValueOnce([
+      [
+        {
+          id: 18,
+          session_id: "session-b",
+          message: "别人的问题",
+          response: "别人的回答",
+          created_at: new Date("2026-08-02T00:00:00.000Z"),
+        },
+      ],
+      undefined,
+    ]);
+
+    const result = await manager.queryCollaborationHistory({
+      requesterUserId: "1",
+      targetUserId: "99",
+      startAt: "2026-08-01T00:00:00.000Z",
+      endAt: "2026-09-01T00:00:00.000Z",
+      beforeId: 30,
+      limit: 10,
+    });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      access: "administrator",
+      targetUserId: "99",
+    });
+    expect(mockExecute.mock.calls[1]?.[0]).toContain("created_at >= ?");
+    expect(mockExecute.mock.calls[1]?.[0]).toContain("created_at < ?");
+    expect(mockExecute.mock.calls[1]?.[0]).toContain("id < ?");
+    expect(mockExecute.mock.calls[1]?.[1]).toEqual([
+      "99",
+      "2026-08-01T00:00:00.000Z",
+      "2026-09-01T00:00:00.000Z",
+      30,
+      11,
+    ]);
+  });
+});

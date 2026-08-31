@@ -387,6 +387,8 @@ export function runAgentAttempt(params: {
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
+    toolsAllow: params.opts.toolsAllow,
+    systemPromptMode: params.opts.systemPromptMode,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     internalEvents: params.opts.internalEvents,

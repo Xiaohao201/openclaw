@@ -25,6 +25,8 @@ import { computeDateScope, detectReportRequest, type ReportPeriod } from "./repo
 import { sanitizeInternalRefs } from "./sanitize-output.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
+import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
+import { resolveSuhengToolsAllow } from "./suheng-tool-profile.js";
 import { buildSuhengWorkspaceContext } from "./suheng-workspace-context.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
@@ -1165,8 +1167,9 @@ export async function processChatMessage(
         ? "本轮是报告撰写请求：请在本次回复里【直接输出完整的报告正文】，按章节逐节完整展开" +
           "（标题、各板块、数据分析、结论与建议全部写全），不要只给摘要、目录或要点列表。" +
           (selectedTemplate ? `结构与文风遵循所选模板《${selectedTemplate.name}》。` : "") +
-          "本系统不会把报告另存为文件，也没有 Word/PDF 导出能力——你这次输出的正文就是最终交付物。" +
-          "因此严禁出现“完整报告已保存”“原文已存档”“可导出为Word/PDF”“全文约X字”等说法，" +
+          "默认在本次回复中直接交付完整正文。只有实际调用文件生成或导出工具并明确返回成功，" +
+          "才能补充说明已生成对应文件；否则严禁出现“完整报告已保存”“原文已存档”" +
+          "“已导出为Word/PDF”“全文约X字”等说法，" +
           "更不要用一段摘要替代正文。 "
         : "";
 
@@ -1187,6 +1190,11 @@ export async function processChatMessage(
       const citationDirective = buildCitationDirective();
       const suhengWorkspaceContext = buildSuhengWorkspaceContext(userMessage);
       const suhengDesignContext = buildSuhengDesignContext(userMessage);
+      const toolsAllow = resolveSuhengToolsAllow(userMessage, {
+        hasAttachments: materializedAttachments.length > 0,
+        hasCustomSkills: selectedSkills.length > 0,
+        builtinSkillName,
+      });
 
       // Open the accounting window BEFORE the run: every assistant message the
       // agent appends from here on (one per tool-loop iteration) belongs to this
@@ -1196,6 +1204,10 @@ export async function processChatMessage(
       const runResult = await runtime.subagent.run({
         sessionKey,
         message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        extraSystemPrompt: SUHENG_RUNTIME_SYSTEM_PROMPT,
+        ...(toolsAllow ? { toolsAllow } : {}),
+        systemPromptMode: builtinSkillName ? "full" : "minimal",
+        bootstrapContextMode: "lightweight",
         ...(builtinSkillName ? { skillFilter: [builtinSkillName] } : {}),
         deliver: false,
       });

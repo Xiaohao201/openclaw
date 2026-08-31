@@ -28,13 +28,15 @@ describe("qwen provider catalog", () => {
     expect(standard.models?.find((model) => model.id === "qwen3.6-plus")).toBeTruthy();
     expect(coding.models?.find((model) => model.id === QWEN_38_FLASH_MODEL_ID)).toBeFalsy();
     expect(standard.models?.find((model) => model.id === QWEN_38_FLASH_MODEL_ID)).toMatchObject({
-      name: "Suheng 3.2mini",
+      name: "Suheng3.2mini",
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 1.12, output: 3.29, cacheRead: 0.224, cacheWrite: 0 },
       contextWindow: 1_000_000,
       maxTokens: 65_536,
     });
+    expect(coding.models?.find((model) => model.id === "MiniMax-M2.5")).toBeUndefined();
+    expect(standard.models?.find((model) => model.id === "MiniMax-M2.5")).toBeUndefined();
   });
 
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {

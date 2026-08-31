@@ -318,6 +318,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       lane?: string;
       extraSystemPrompt?: string;
       skillFilter?: string[];
+      toolsAllow?: string[];
+      systemPromptMode?: "full" | "minimal";
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       internalEvents?: AgentInternalEvent[];
@@ -879,6 +881,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
         skillFilter: request.skillFilter,
+        toolsAllow: request.toolsAllow,
+        systemPromptMode: request.systemPromptMode,
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,
         internalEvents: request.internalEvents,

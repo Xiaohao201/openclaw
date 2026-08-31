@@ -726,7 +726,6 @@ export function describeModelStudioProviderDiscoveryContract() {
           models: expect.arrayContaining([
             expect.objectContaining({ id: "qwen3.5-plus" }),
             expect.objectContaining({ id: "qwen3-max-2026-01-23" }),
-            expect.objectContaining({ id: "MiniMax-M2.5" }),
           ]),
         },
       });

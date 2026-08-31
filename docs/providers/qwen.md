@@ -154,18 +154,17 @@ OpenClaw currently ships this bundled Qwen catalog. The configured catalog is
 endpoint-aware: Coding Plan configs omit models that are only known to work on
 the Standard endpoint.
 
-| Model ref                   | Input       | Context   | Notes                                              |
-| --------------------------- | ----------- | --------- | -------------------------------------------------- |
-| `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
-| `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
-| `qwen/qwen3.8-flash`        | text, image | 1,000,000 | Standard only; alias: `Suheng 3.2mini`             |
-| `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
-| `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
-| `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
-| `qwen/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                  |
-| `qwen/glm-5`                | text        | 202,752   | GLM                                                |
-| `qwen/glm-4.7`              | text        | 202,752   | GLM                                                |
-| `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+| Model ref                   | Input       | Context   | Notes                                 |
+| --------------------------- | ----------- | --------- | ------------------------------------- |
+| `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                         |
+| `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Standard only; alias: `Suheng3.0`     |
+| `qwen/qwen3.8-flash`        | text, image | 1,000,000 | Standard only; alias: `Suheng3.2mini` |
+| `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                         |
+| `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                |
+| `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                |
+| `qwen/glm-5`                | text        | 202,752   | GLM                                   |
+| `qwen/glm-4.7`              | text        | 202,752   | GLM                                   |
+| `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba               |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is

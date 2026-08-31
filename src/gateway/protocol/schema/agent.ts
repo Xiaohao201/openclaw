@@ -148,6 +148,8 @@ export const AgentParamsSchema = Type.Object(
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
     skillFilter: Type.Optional(Type.Array(NonEmptyString, { maxItems: 200 })),
+    toolsAllow: Type.Optional(Type.Array(NonEmptyString, { maxItems: 200 })),
+    systemPromptMode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("minimal")])),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
     ),

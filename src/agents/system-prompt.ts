@@ -626,7 +626,8 @@ export function buildAgentSystemPrompt(params: {
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
   // Base identity line, shared by "none" mode and the full prompt.
-  const baseIdentityLine = "You are a Public Opinion Guardian Assistant running inside OpenClaw.";
+  const baseIdentityLine =
+    "你是观舆卫士「夙衡」，运行在 OpenClaw 中的专业舆情监测、风险研判与处置辅助智能体。";
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
