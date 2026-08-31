@@ -143,6 +143,65 @@ describe("processChatMessage", () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
 
+  it("runs ordinary Suheng turns with compact context and an intent-scoped toolset", async () => {
+    let captured: SubagentRunParams | undefined;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        captured = args;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    expect(captured).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      systemPromptMode: "minimal",
+    });
+    expect(captured?.toolsAllow).toEqual(
+      expect.arrayContaining(["feed_query", "full_text_search", "web_search"]),
+    );
+    expect(captured?.toolsAllow).not.toContain("schedule_create");
+    expect(captured?.extraSystemPrompt).toContain("已知事实、分析推断、处置建议");
+  });
+
+  it("keeps full skill instructions while narrowing tools for a bundled skill", async () => {
+    let captured: SubagentRunParams | undefined;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        captured = args;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        message: "请生成正式政务舆情分析报告",
+        builtinSkillName: "gov-public-opinion-analysis-agent",
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(captured).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      systemPromptMode: "full",
+      skillFilter: ["gov-public-opinion-analysis-agent"],
+    });
+    expect(captured?.toolsAllow).toEqual(
+      expect.arrayContaining(["chart_render", "feed_query", "file_share", "read", "write"]),
+    );
+  });
+
   it("forwards only assistant deltas matching this run's sessionKey", async () => {
     // Regression: the listener used to forward EVERY assistant delta in the
     // gateway process; concurrent runs (report subagent, other sessions)
@@ -1494,6 +1553,9 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain("analyze-attachment");
     expect(capturedMessage).toContain("卫健委舆情专报");
     expect(capturedMessage).toContain("舆情专报模板");
+    expect(capturedMessage).toContain("默认在本次回复中直接交付完整正文");
+    expect(capturedMessage).toContain("只有实际调用文件生成或导出工具并明确返回成功");
+    expect(capturedMessage).not.toContain("没有 Word/PDF 导出能力");
     // It must NOT use the report-acknowledgement directive (that path is skipped).
     expect(capturedMessage).not.toContain("acknowledge-and-report");
   });
@@ -1503,11 +1565,13 @@ describe("processChatMessage", () => {
     // its instructions are APPENDED to the agent context — after the user's text —
     // so the chat bubble never shows the raw instructions.
     let capturedMessage = "";
+    let capturedToolsAllow: string[] | undefined;
     const runtime = createRuntimeMock({
       workspaceDir,
       onRun: () => {},
       onRunArgs: (args) => {
         capturedMessage = args.message;
+        capturedToolsAllow = args.toolsAllow;
       },
       sessionMessages: [{ role: "assistant", content: "ok" }],
     });
@@ -1545,16 +1609,19 @@ describe("processChatMessage", () => {
     const skillIdx = capturedMessage.indexOf("启用了以下自定义技能");
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(skillIdx).toBeGreaterThan(userIdx);
+    expect(capturedToolsAllow).toBeUndefined();
   });
 
   it("runs with only the selected bundled skill and ignores custom skill ids", async () => {
     let capturedSkillFilter: string[] | undefined;
+    let capturedToolsAllow: string[] | undefined;
     let capturedMessage = "";
     const runtime = createRuntimeMock({
       workspaceDir,
       onRun: () => {},
       onRunArgs: (args) => {
         capturedSkillFilter = args.skillFilter;
+        capturedToolsAllow = args.toolsAllow;
         capturedMessage = args.message;
       },
       sessionMessages: [{ role: "assistant", content: "ok" }],
@@ -1584,6 +1651,9 @@ describe("processChatMessage", () => {
     );
 
     expect(capturedSkillFilter).toEqual(["ai-collaboration-diagnostic"]);
+    expect(capturedToolsAllow).toContain("collaboration_history_query");
+    expect(capturedToolsAllow).not.toContain("sessions_history");
+    expect(capturedToolsAllow).not.toContain("sessions_list");
     expect(resolveMany).not.toHaveBeenCalled();
     expect(capturedMessage).not.toContain("启用了以下自定义技能");
     expect(capturedMessage).not.toContain("不应注入");

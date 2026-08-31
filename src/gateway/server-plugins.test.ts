@@ -575,6 +575,28 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("forwards per-run tool and system-prompt narrowing", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("runtime-narrowing-forward"));
+
+    await runtime.run({
+      sessionKey: "s-runtime-narrowing",
+      message: "analyze the current topic",
+      toolsAllow: ["feed_query", "web_search"],
+      systemPromptMode: "minimal",
+      bootstrapContextMode: "lightweight",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-runtime-narrowing",
+      toolsAllow: ["feed_query", "web_search"],
+      systemPromptMode: "minimal",
+      bootstrapContextMode: "lightweight",
+    });
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

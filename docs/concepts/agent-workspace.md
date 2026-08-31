@@ -81,7 +81,7 @@ These are the standard files OpenClaw expects inside the workspace:
 
 - `IDENTITY.md`
   - The agent's name, vibe, and emoji.
-  - Created/updated during the bootstrap ritual.
+  - May be preconfigured by the packaged template or updated during the bootstrap ritual.
 
 - `TOOLS.md`
   - Notes about your local tools and conventions.
@@ -97,7 +97,7 @@ These are the standard files OpenClaw expects inside the workspace:
 
 - `BOOTSTRAP.md`
   - One-time first-run ritual.
-  - Only created for a brand-new workspace.
+  - Only created for a brand-new workspace whose identity template is not already configured.
   - Delete it after the ritual is complete.
 
 - `memory/YYYY-MM-DD.md`

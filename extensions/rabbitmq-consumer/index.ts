@@ -1,5 +1,6 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { processChatMessage, resolveTurnTimeoutMs, warmupAgent } from "./src/chat-pipeline.js";
+import { createCollaborationHistoryToolFactory } from "./src/collaboration-history-tool.js";
 import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
@@ -120,6 +121,13 @@ export default definePluginEntry({
   description: "Consume chat messages from RabbitMQ and process them via OpenClaw subagent.",
   register(api: OpenClawPluginApi) {
     api.registerTool(createVideoLinkParseToolFactory(api), { name: "video_link_parse" });
+    api.registerTool(
+      createCollaborationHistoryToolFactory({
+        getStore: () => historyRef,
+        logger: api.logger,
+      }),
+      { name: "collaboration_history_query", optional: true },
+    );
 
     const localDebug = api.pluginConfig?.localDebug as
       | { enabled?: unknown; historyTable?: unknown }

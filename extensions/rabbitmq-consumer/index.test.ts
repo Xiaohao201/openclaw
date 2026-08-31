@@ -29,6 +29,11 @@ describe("rabbitmq-consumer local debug registration", () => {
 
     rabbitMqConsumerPlugin.register(api);
 
+    expect(api.registerTool).toHaveBeenCalledWith(expect.any(Function), {
+      name: "collaboration_history_query",
+      optional: true,
+    });
+
     expect(api.registerHttpRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/plugins/rabbitmq-consumer/debug",

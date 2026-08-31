@@ -13,6 +13,12 @@ export type SubagentRunParams = {
   extraSystemPrompt?: string;
   /** Optional per-run skill allowlist, intersected with the target agent's configured filter. */
   skillFilter?: string[];
+  /** Optional per-run tool allowlist. This can only narrow the target agent's tool policy. */
+  toolsAllow?: string[];
+  /** Optional system-prompt profile override for trusted in-process runs. */
+  systemPromptMode?: "full" | "minimal";
+  /** Optional workspace bootstrap-context mode for this run. */
+  bootstrapContextMode?: "full" | "lightweight";
   lane?: string;
   deliver?: boolean;
   idempotencyKey?: string;

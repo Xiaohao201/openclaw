@@ -4,6 +4,8 @@ import {
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
   QWEN_CN_BASE_URL,
+  QWEN_36_PLUS_ALIAS,
+  QWEN_36_PLUS_MODEL_ID,
   QWEN_38_FLASH_ALIAS,
   QWEN_38_FLASH_MODEL_ID,
   QWEN_DEFAULT_MODEL_REF,
@@ -26,6 +28,7 @@ const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
   resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
     const provider = buildQwenProvider({ baseUrl });
     const models = provider.models ?? [];
+    const hasQwen36Plus = models.some((model) => model.id === QWEN_36_PLUS_MODEL_ID);
     const hasQwen38Flash = models.some((model) => model.id === QWEN_38_FLASH_MODEL_ID);
     return {
       providerId: "qwen",
@@ -34,6 +37,14 @@ const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
       catalogModels: models,
       aliases: [
         ...models.flatMap((model) => [`qwen/${model.id}`, `modelstudio/${model.id}`]),
+        ...(hasQwen36Plus
+          ? [
+              {
+                modelRef: `qwen/${QWEN_36_PLUS_MODEL_ID}`,
+                alias: QWEN_36_PLUS_ALIAS,
+              },
+            ]
+          : []),
         ...(hasQwen38Flash
           ? [
               {

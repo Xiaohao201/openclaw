@@ -10,17 +10,18 @@ sidebarTitle: "Bootstrapping"
 
 # Agent Bootstrapping
 
-Bootstrapping is the **first‑run** ritual that prepares an agent workspace and
-collects identity details. It happens after onboarding, when the agent starts
-for the first time.
+Bootstrapping is the **first-run** ritual that prepares an agent workspace and
+collects identity details when the packaged identity template is blank. It
+happens after onboarding, when the agent starts for the first time. Deployments
+that ship a named identity template skip the ritual and mark setup complete.
 
 ## What bootstrapping does
 
 On the first agent run, OpenClaw bootstraps the workspace (default
 `~/.openclaw/workspace`):
 
-- Seeds `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`.
-- Runs a short Q&A ritual (one question at a time).
+- Seeds `AGENTS.md`, `IDENTITY.md`, and `USER.md`.
+- Creates `BOOTSTRAP.md` and runs a short Q&A ritual only when `IDENTITY.md` is not preconfigured.
 - Writes identity + preferences to `IDENTITY.md`, `USER.md`, `SOUL.md`.
 - Removes `BOOTSTRAP.md` when finished so it only runs once.
 

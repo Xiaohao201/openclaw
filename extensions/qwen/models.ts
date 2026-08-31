@@ -16,8 +16,9 @@ export const QWEN_STANDARD_GLOBAL_BASE_URL =
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
+export const QWEN_36_PLUS_ALIAS = "Suheng3.0";
 export const QWEN_38_FLASH_MODEL_ID = "qwen3.8-flash";
-export const QWEN_38_FLASH_ALIAS = "Suheng 3.2mini";
+export const QWEN_38_FLASH_ALIAS = "Suheng3.2mini";
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -84,15 +85,6 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     id: "qwen3-coder-plus",
     name: "qwen3-coder-plus",
     reasoning: false,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: "MiniMax-M2.5",
-    name: "MiniMax-M2.5",
-    reasoning: true,
     input: ["text"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 1_000_000,

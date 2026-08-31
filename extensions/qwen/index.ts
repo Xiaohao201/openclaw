@@ -115,7 +115,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: coding.dashscope.aliyuncs.com",
-          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+          "Models: qwen3.5-plus, glm-5, kimi-k2.5, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Coding Plan (China)",
         wizard: {
@@ -138,7 +138,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: coding-intl.dashscope.aliyuncs.com",
-          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+          "Models: qwen3.5-plus, glm-5, kimi-k2.5, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Coding Plan (Global/Intl)",
         wizard: {

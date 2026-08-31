@@ -1,6 +1,7 @@
 import mysql from "mysql2/promise";
 import type {
   ChatMessage,
+  CollaborationHistoryQueryResult,
   HistoryDbConfig,
   WriterDbConfig,
   HistoryRecord,
@@ -142,6 +143,83 @@ export class HistoryManager {
       toolsUsed: row.tools_used ?? null,
       metadata: row.metadata ?? null,
       createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Read chat records for an AI collaboration diagnostic with authorization
+   * enforced before history access. A user may always read their own rows;
+   * cross-user access requires the authoritative legal_user_role.su flag.
+   */
+  async queryCollaborationHistory(params: {
+    requesterUserId: string;
+    targetUserId: string;
+    startAt?: string;
+    endAt?: string;
+    beforeId?: number;
+    limit?: number;
+  }): Promise<CollaborationHistoryQueryResult> {
+    const requesterUserId = params.requesterUserId.trim();
+    const targetUserId = params.targetUserId.trim();
+    if (!requesterUserId || !targetUserId) {
+      return { status: "forbidden" };
+    }
+
+    const pool = this.getReaderPool();
+    const isSelf = requesterUserId === targetUserId;
+    if (!isSelf) {
+      const [roleRows] = await pool.execute<mysql.RowDataPacket[]>(
+        "SELECT su FROM legal_user_role WHERE id = ?",
+        [requesterUserId],
+      );
+      if (Number(roleRows?.[0]?.su) !== 1) {
+        return { status: "forbidden" };
+      }
+    }
+
+    const clauses = ["user_id = ?"];
+    const values: Array<string | number> = [targetUserId];
+    if (params.startAt) {
+      clauses.push("created_at >= ?");
+      values.push(params.startAt);
+    }
+    if (params.endAt) {
+      clauses.push("created_at < ?");
+      values.push(params.endAt);
+    }
+    if (params.beforeId && Number.isInteger(params.beforeId) && params.beforeId > 0) {
+      clauses.push("id < ?");
+      values.push(params.beforeId);
+    }
+
+    const limit = Math.min(100, Math.max(1, Math.floor(params.limit ?? 50)));
+    values.push(limit + 1);
+    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      `SELECT id, session_id, message, response, created_at
+       FROM ${this.tableSql}
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY id DESC
+       LIMIT ?`,
+      values,
+    );
+    const selectedRows = rows ?? [];
+    const hasMore = selectedRows.length > limit;
+    const pageRows = selectedRows.slice(0, limit);
+    const records = pageRows.map((row) => ({
+      id: Number(row.id),
+      sessionId: typeof row.session_id === "string" ? row.session_id : "",
+      message: typeof row.message === "string" ? row.message : "",
+      response: typeof row.response === "string" ? row.response : null,
+      createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+    }));
+    const nextBeforeId = hasMore ? records.at(-1)?.id : undefined;
+    return {
+      status: "ok",
+      access: isSelf ? "self" : "administrator",
+      targetUserId,
+      records,
+      hasMore,
+      ...(nextBeforeId ? { nextBeforeId } : {}),
     };
   }
 

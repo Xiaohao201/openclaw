@@ -45,12 +45,6 @@ async function readWorkspaceState(dir: string): Promise<{
   };
 }
 
-async function expectBootstrapSeeded(dir: string) {
-  await expect(fs.access(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME))).resolves.toBeUndefined();
-  const state = await readWorkspaceState(dir);
-  expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
-}
-
 async function expectCompletedWithoutBootstrap(dir: string) {
   await expect(fs.access(path.join(dir, DEFAULT_IDENTITY_FILENAME))).resolves.toBeUndefined();
   await expect(fs.access(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
@@ -73,22 +67,78 @@ function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
 }
 
 describe("ensureAgentWorkspace", () => {
-  it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
+  it("seeds the fixed Suheng identity without a first-run identity ritual", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expectBootstrapSeeded(tempDir);
-    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
+    const identity = await fs.readFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), "utf-8");
+    const tools = await fs.readFile(path.join(tempDir, DEFAULT_TOOLS_FILENAME), "utf-8");
+    expect(identity).toContain("- Name: 夙衡");
+    expect(identity).toContain("- Creature: 观舆卫士");
+    expect(tools).not.toContain("人民日报/新华社 → 已接入");
+    expect(tools).toContain("真实能力只以本轮工具列表和工具返回结果为准");
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
-  it("recovers partial initialization by creating BOOTSTRAP.md when marker is missing", async () => {
+  it("recovers partial initialization without restarting identity onboarding", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "existing" });
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expectBootstrapSeeded(tempDir);
+    await expectCompletedWithoutBootstrap(tempDir);
+  });
+
+  it("migrates the legacy blank identity and Suheng bootstrap for existing workspaces", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content:
+        "# IDENTITY.md - 我是谁？\n\n_在第一次对话中填写这份文件。让它成为你自己的。_\n\n- **名字：**\n  _起一个有辨识度的名字。_\n",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      content:
+        "# BOOTSTRAP.md - 你好，世界\n\n_你刚刚上线。是时候认清自己了。_\n\n我是 ibtai 的舆情智能体。\n",
+    });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const identity = await fs.readFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), "utf-8");
+    expect(identity).toContain("- Name: 夙衡");
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("preserves custom identity and bootstrap files during Suheng migration", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "# Custom identity\n\nThis workspace has an intentional local identity.\n",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      content: "# Custom bootstrap\n\nRun the deployment-specific setup.\n",
+    });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(
+      fs.readFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), "utf-8"),
+    ).resolves.toContain("Custom identity");
+    await expect(
+      fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf-8"),
+    ).resolves.toContain("Custom bootstrap");
   });
 
   it("does not recreate BOOTSTRAP.md after completion, even when a core file is recreated", async () => {
@@ -96,7 +146,6 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
-    await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_TOOLS_FILENAME));
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });

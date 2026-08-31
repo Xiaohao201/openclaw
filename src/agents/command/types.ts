@@ -80,6 +80,10 @@ export type AgentCommandOpts = {
   extraSystemPrompt?: string;
   /** Optional per-run skill allowlist, intersected with the agent's configured filter. */
   skillFilter?: string[];
+  /** Optional per-run tool allowlist; only tools that also pass normal policy are exposed. */
+  toolsAllow?: string[];
+  /** Optional system-prompt profile override for trusted in-process runs. */
+  systemPromptMode?: "full" | "minimal";
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for bootstrap context behavior. */

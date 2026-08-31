@@ -338,6 +338,9 @@ implemented in `src/gateway/server-methods/*.ts`.
   bootstrap workspace files exposed for an agent.
 - `agent.identity.get` returns the effective assistant identity for an agent or
   session.
+- `agent` accepts optional per-run narrowing fields such as `skillFilter`,
+  `toolsAllow`, `systemPromptMode`, and `bootstrapContextMode`; these do not
+  widen the configured agent policy.
 - `agent.wait` waits for a run to finish and returns the terminal snapshot when
   available.
 

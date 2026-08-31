@@ -194,3 +194,23 @@ export interface HistoryRecord {
   metadata: string | null;
   createdAt: Date;
 }
+
+/** Sanitized source row used by the permission-scoped collaboration diagnostic tool. */
+export interface CollaborationHistoryRecord {
+  id: number;
+  sessionId: string;
+  message: string;
+  response: string | null;
+  createdAt: Date;
+}
+
+export type CollaborationHistoryQueryResult =
+  | { status: "forbidden" }
+  | {
+      status: "ok";
+      access: "self" | "administrator";
+      targetUserId: string;
+      records: CollaborationHistoryRecord[];
+      hasMore: boolean;
+      nextBeforeId?: number;
+    };

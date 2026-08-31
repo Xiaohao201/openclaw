@@ -25,10 +25,13 @@ describe("bundled AI collaboration diagnostic skill", () => {
     expect(content).toContain("新的工作使用场景");
     expect(content).toContain("高价值提问");
     expect(content).toContain("夙衡赠言");
-    expect(content).toContain("不得输出任何信息安全、保密");
+    expect(content).toContain("不主动添加泛化的信息安全、保密或隐私套话");
+    expect(content).toContain("普通用户只能诊断自己的记录");
+    expect(content).toContain("服务端权限系统确认的管理员");
     expect(content).toContain("只能依据可见对话记录");
-    expect(content).toContain("sessions_list");
-    expect(content).toContain("sessions_history");
+    expect(content).toContain("collaboration_history_query");
+    expect(content).not.toContain("sessions_list");
+    expect(content).not.toContain("sessions_history");
 
     const metadata = await fs.readFile(path.join(skillDir, "agents/openai.yaml"), "utf8");
     expect(metadata).toContain('display_name: "AI协作力诊断"');
