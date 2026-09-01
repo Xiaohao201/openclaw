@@ -71,7 +71,9 @@ export class MercurePusher {
 }
 
 /** Resolve Mercure config from plugin config or env; undefined when not configured. */
-export function resolveMercureConfig(pluginConfig: Record<string, unknown>): MercureConfig | undefined {
+export function resolveMercureConfig(
+  pluginConfig: Record<string, unknown>,
+): MercureConfig | undefined {
   const block = pluginConfig.mercure as Record<string, unknown> | undefined;
   const hubUrl = (block?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "";
   const jwtSecret = (block?.jwtSecret as string) ?? process.env.MERCURE_JWT_SECRET ?? "";

@@ -66,6 +66,18 @@ const DirectJudgmentProperties = {
   ),
 };
 
+const ComplaintClassificationSchema = Type.Object(
+  {
+    link: Type.String({ description: "必须与 links 中的一条举报链接完全一致。" }),
+    taxonomyVersionId: Type.Integer({ minimum: 1, description: "分类目录返回的版本 ID。" }),
+    categoryCode: Type.String({ minLength: 1, description: "分类目录中的一级分类稳定代码。" }),
+    subCategoryCode: Type.Optional(
+      Type.String({ minLength: 1, description: "所选一级分类下的二级分类稳定代码。" }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 type DirectJudgment = {
   source: typeof AGENT_JUDGMENT_SOURCE;
   subjectScope: "Institution" | "Enterprise";
@@ -122,6 +134,13 @@ const ComplaintSubmitSchema = Type.Object(
     role: Type.Optional(
       Type.Union([Type.Literal("Personal"), Type.Literal("Enterprise")], {
         description: "举报主体身份：Personal=个人，Enterprise=企业。默认 Personal。",
+      }),
+    ),
+    classifications: Type.Optional(
+      Type.Array(ComplaintClassificationSchema, {
+        description:
+          "逐链接的平台举报分类。直接使用夙衡研判时，首次省略本字段会返回当前分类目录；" +
+          "根据研判为每条链接选择目录中的稳定代码后，使用相同参数再次调用。",
       }),
     ),
   },
@@ -392,6 +411,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
       description:
         "一键举报：可直接使用夙衡本轮研判，或兼容复用最近一次内容检测任务。" +
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
+        "直接研判首次调用不要猜分类、不要传 classifications；工具会返回当前平台分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
         `仅支持 ${COMPLAINT_PLATFORMS}，其他平台链接会被过滤。` +
         "异步执行——提交成功后告知用户「举报任务已提交」，无需再调用任何工具。",
@@ -438,6 +458,67 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           });
         }
 
+        const classifications = Array.isArray(rawParams.classifications)
+          ? rawParams.classifications.filter((item): item is Record<string, unknown> =>
+              Boolean(item && typeof item === "object"),
+            )
+          : [];
+        if (direct.code === "valid") {
+          const classifiedLinks = new Set(
+            classifications.map((item) => asString(item.link)).filter((link) => Boolean(link)),
+          );
+          const missingLinks = links.filter((link) => !classifiedLinks.has(link));
+          if (missingLinks.length > 0) {
+            let taxonomyResponse: Record<string, unknown>;
+            try {
+              taxonomyResponse = await getJson(
+                config,
+                "/legal/fetch-complaint-taxonomy",
+                { links: missingLinks },
+                keyed.apiKey,
+              );
+            } catch (error) {
+              return failure(api, "complaint_submit", userId, error);
+            }
+            const taxonomies = Array.isArray(taxonomyResponse.taxonomies)
+              ? taxonomyResponse.taxonomies
+              : [];
+            const catalogLinks = new Set(
+              taxonomies
+                .map((item) =>
+                  item && typeof item === "object"
+                    ? asString((item as Record<string, unknown>).link)
+                    : undefined,
+                )
+                .filter((link): link is string => Boolean(link)),
+            );
+            const unavailableLinks = Array.from(
+              new Set(missingLinks.filter((link) => !catalogLinks.has(link))),
+            );
+            if (unavailableLinks.length > 0) {
+              return jsonResult({
+                success: false,
+                classificationRequired: false,
+                unsupportedLinks: unavailableLinks,
+                error:
+                  "部分链接没有当前已发布且允许自动选择的举报分类目录，已停止提交，避免生成空分类举报记录。",
+              });
+            }
+            return jsonResult({
+              success: false,
+              classificationRequired: true,
+              retryable: true,
+              missingLinks,
+              taxonomies,
+              unsupportedLinks: Array.isArray(taxonomyResponse.unsupportedLinks)
+                ? taxonomyResponse.unsupportedLinks
+                : [],
+              instruction:
+                "请根据夙衡研判为每条链接选择 taxonomyVersionId、categoryCode 和适用的 subCategoryCode，然后用原参数及 classifications 再次调用 complaint_submit；不要再次询问用户。",
+            });
+          }
+        }
+
         const role =
           direct.code === "valid"
             ? direct.basis.subjectScope === "Enterprise"
@@ -456,6 +537,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           fields.confirmed = 1;
           fields.subjectScope = direct.basis.subjectScope;
           fields.judgment = direct.basis.judgment;
+          fields.classifications = JSON.stringify(classifications);
         }
         let res: Record<string, unknown>;
         try {

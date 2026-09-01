@@ -7,7 +7,12 @@ import { PendingTaskRegistry } from "./pending-store.js";
 import type { PendingTask, PollAdapter } from "./types.js";
 
 const logger: PluginLogger = { info() {}, warn() {}, error() {}, debug() {} } as PluginLogger;
-const config = { baseUrl: "https://x", timeoutMs: 1000, siteId: "legal", apiKeys: {} } as BackendConfig;
+const config = {
+  baseUrl: "https://x",
+  timeoutMs: 1000,
+  siteId: "legal",
+  apiKeys: {},
+} as BackendConfig;
 
 function task(overrides: Partial<PendingTask> = {}): PendingTask {
   const now = Date.now();
@@ -28,7 +33,10 @@ function task(overrides: Partial<PendingTask> = {}): PendingTask {
   };
 }
 
-function makeNotifier(adapter: PollAdapter, deliver: DeliverFn = vi.fn().mockResolvedValue(undefined)) {
+function makeNotifier(
+  adapter: PollAdapter,
+  deliver: DeliverFn = vi.fn().mockResolvedValue(undefined),
+) {
   const registry = new PendingTaskRegistry();
   const resolver = new ApiKeyResolver({ "1749": "sk_x" }, undefined);
   const notifier = new CompletionNotifier({
@@ -45,7 +53,9 @@ function makeNotifier(adapter: PollAdapter, deliver: DeliverFn = vi.fn().mockRes
 
 describe("CompletionNotifier.tick", () => {
   it("delivers and removes the task when the adapter reports terminal", async () => {
-    const adapter: PollAdapter = vi.fn().mockResolvedValue({ terminal: true, summary: "done: 转10" });
+    const adapter: PollAdapter = vi
+      .fn()
+      .mockResolvedValue({ terminal: true, summary: "done: 转10" });
     const deliver = vi.fn().mockResolvedValue(undefined);
     const { registry, notifier } = makeNotifier(adapter, deliver);
     registry.add(task());

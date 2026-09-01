@@ -20,7 +20,10 @@ export const crawlRefreshAction: ScheduleActionType = {
     const links = normalizeLinks(params.links);
     const feeds = normalizeFeeds(params.feeds);
     if (links.length === 0 && feeds.length === 0) {
-      return { ok: false, error: "crawl_refresh 需要有效的 links(http(s) 链接) 或 feeds(监测方案条目)。" };
+      return {
+        ok: false,
+        error: "crawl_refresh 需要有效的 links(http(s) 链接) 或 feeds(监测方案条目)。",
+      };
     }
     // Keep the original shapes; the runner's submitCrawlRefresh re-normalizes them.
     const out: Record<string, unknown> = {};

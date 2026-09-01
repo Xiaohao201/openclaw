@@ -99,10 +99,7 @@ export function splitCitations(
  * is never touched. Also eats spaces/tabs immediately before a removed marker
  * so "fact [1]." collapses to "fact." rather than "fact .".
  */
-export function stripDanglingCitationMarkers(
-  text: string,
-  citations: readonly Citation[],
-): string {
+export function stripDanglingCitationMarkers(text: string, citations: readonly Citation[]): string {
   if (typeof text !== "string" || !text || !/\[\d{1,3}\]/.test(text)) {
     return text;
   }
@@ -115,9 +112,7 @@ export function stripDanglingCitationMarkers(
       if (i % 2 === 1) {
         return seg;
       }
-      return seg.replace(/[ \t]*\[(\d{1,3})\]/g, (m, n: string) =>
-        valid.has(Number(n)) ? m : "",
-      );
+      return seg.replace(/[ \t]*\[(\d{1,3})\]/g, (m, n: string) => (valid.has(Number(n)) ? m : ""));
     })
     .join("");
 }

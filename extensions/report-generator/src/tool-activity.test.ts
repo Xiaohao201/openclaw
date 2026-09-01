@@ -78,7 +78,9 @@ describe("resolveStepDetail", () => {
       resolveStepDetail("feed_query", { sql: "SELECT secret FROM users", keyword: "内部代号X" }),
     ).toBeUndefined();
     // An enum field carrying arbitrary text is not in the fixed map → dropped.
-    expect(resolveStepDetail("report_create", { period: "internal-codename-leak" })).toBeUndefined();
+    expect(
+      resolveStepDetail("report_create", { period: "internal-codename-leak" }),
+    ).toBeUndefined();
   });
 });
 
@@ -158,7 +160,14 @@ describe("ToolActivityNarrator", () => {
       },
     });
     expect(steps).toEqual([
-      { phase: "start", stepId: "tc-1", index: 1, label: "正在查询分析数据", category: "query", status: "running" },
+      {
+        phase: "start",
+        stepId: "tc-1",
+        index: 1,
+        label: "正在查询分析数据",
+        category: "query",
+        status: "running",
+      },
     ]);
     expect(JSON.stringify(steps)).not.toContain("secret");
   });
@@ -175,7 +184,14 @@ describe("ToolActivityNarrator", () => {
       data: { phase: "end", name: "read", toolCallId: "tc-9", status: "completed" },
     });
     expect(steps).toEqual([
-      { phase: "start", stepId: "tc-9", index: 1, label: "正在查阅资料", category: "read", status: "running" },
+      {
+        phase: "start",
+        stepId: "tc-9",
+        index: 1,
+        label: "正在查阅资料",
+        category: "read",
+        status: "running",
+      },
       {
         phase: "end",
         stepId: "tc-9",

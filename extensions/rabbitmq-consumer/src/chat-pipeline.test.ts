@@ -168,6 +168,35 @@ describe("processChatMessage", () => {
     expect(captured?.extraSystemPrompt).toContain("已知事实、分析推断、处置建议");
   });
 
+  it("exposes autonomous video evidence fallbacks for a link judgment turn", async () => {
+    let captured: SubagentRunParams | undefined;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        captured = args;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        message: "请夙衡研判这个链接：https://weibo.com/tv/show/1034:123456",
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(captured?.toolsAllow).toEqual(
+      expect.arrayContaining(["web_fetch", "video_link_parse", "video_understand"]),
+    );
+    expect(captured?.extraSystemPrompt).toContain("video_link_parse");
+  });
+
   it("keeps full skill instructions while narrowing tools for a bundled skill", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({

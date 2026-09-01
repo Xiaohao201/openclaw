@@ -7,7 +7,11 @@ const DEFAULT_SITE_ID = "legal";
 /** Resolve config from plugin config, falling back to env then defaults. */
 export function resolveConfig(pluginConfig: Record<string, unknown>): BackendConfig {
   const block = pluginConfig.backend as Record<string, unknown> | undefined;
-  const baseUrl = ((block?.baseUrl as string) ?? process.env.LEADING_API_BASE_URL ?? DEFAULT_BASE_URL)
+  const baseUrl = (
+    (block?.baseUrl as string) ??
+    process.env.LEADING_API_BASE_URL ??
+    DEFAULT_BASE_URL
+  )
     .trim()
     .replace(/\/+$/, "");
   const timeoutMs = Number(

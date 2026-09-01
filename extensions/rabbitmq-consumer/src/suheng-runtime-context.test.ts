@@ -13,4 +13,11 @@ describe("SUHENG_RUNTIME_SYSTEM_PROMPT", () => {
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("不得声称“系统会持续监测”");
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("提交成功、平台受理、审核中、已处置");
   });
+
+  it("requires autonomous video parsing fallback for failed link evidence", () => {
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("web_fetch");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("video_link_parse");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("video_understand");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("无需再次询问用户");
+  });
 });

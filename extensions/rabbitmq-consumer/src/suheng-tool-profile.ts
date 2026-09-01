@@ -63,6 +63,7 @@ const MEDIA_TOOLS = [
   "video_link_parse",
   "video_understand",
 ] as const;
+const VIDEO_EVIDENCE_TOOLS = ["video_link_parse", "video_understand"] as const;
 
 const SKILL_TOOLS = ["skill_get", "skill_list", "skill_save"] as const;
 const JOB_CONTROL_TOOLS = ["job_list", "job_stop", "report_status", "report_stop"] as const;
@@ -81,6 +82,8 @@ const REPORT_INTENT =
 const COMPLAINT_INTENT = /(?:侵权|投诉|举报|维权|投诉函|投诉通知|主体档案|证件|盖章|下架|固证)/iu;
 const SCHEDULE_INTENT = /(?:定时|计划任务|提醒|每天|每周|每月|定期|周期|几点|定时任务)/iu;
 const MEDIA_INTENT = /(?:生成|制作|解析|理解|分析).{0,16}(?:图片|海报|音乐|音频|视频|短视频)/iu;
+const EXTERNAL_HTTP_LINK = /https?:\/\/[^\s]+/iu;
+const LINK_EVIDENCE_INTENT = /(?:研判|分析|核查|核实|判断|评估|看看|查看|读取|理解)/iu;
 const SKILL_INTENT =
   /(?:技能|skill).{0,16}(?:创建|新建|保存|修改|更新|查看|列出|管理)|(?:创建|新建|保存|修改|更新|查看|列出|管理).{0,16}(?:技能|skill)/iu;
 const JOB_CONTROL_INTENT = /(?:任务|报告).{0,12}(?:状态|进度|停止|取消|终止|列表)/iu;
@@ -150,6 +153,9 @@ export function resolveSuhengToolsAllow(
   }
   if (MEDIA_INTENT.test(message)) {
     addTools(tools, MEDIA_TOOLS);
+  }
+  if (EXTERNAL_HTTP_LINK.test(message) && LINK_EVIDENCE_INTENT.test(message)) {
+    addTools(tools, VIDEO_EVIDENCE_TOOLS);
   }
   if (SKILL_INTENT.test(message)) {
     addTools(tools, SKILL_TOOLS);

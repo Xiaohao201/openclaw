@@ -22,7 +22,10 @@ describe("crawlRefreshAction.validate", () => {
   });
 
   it("accepts feeds with a valid feedId", () => {
-    const r = crawlRefreshAction.validate({ feeds: [{ feedId: 12, url: "https://a.com/x" }], topicId: 3 });
+    const r = crawlRefreshAction.validate({
+      feeds: [{ feedId: 12, url: "https://a.com/x" }],
+      topicId: 3,
+    });
     expect(r.ok).toBe(true);
   });
 });

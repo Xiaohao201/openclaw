@@ -61,8 +61,12 @@ const CreateSchema = Type.Object(
           "监测方案条目 to refresh (typically from feed_list). Requires topicId. Their urls are crawled automatically.",
       }),
     ),
-    topicId: Type.Optional(Type.Number({ description: "监测方案 id — required when feeds is given." })),
-    name: Type.Optional(Type.String({ description: "Task name; auto-named with a timestamp if omitted." })),
+    topicId: Type.Optional(
+      Type.Number({ description: "监测方案 id — required when feeds is given." }),
+    ),
+    name: Type.Optional(
+      Type.String({ description: "Task name; auto-named with a timestamp if omitted." }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -71,7 +75,8 @@ const StatusSchema = Type.Object(
   {
     uuid: Type.Optional(
       Type.String({
-        description: "Internal — leave unset. Polls the most recent 互动量刷新 task for this account.",
+        description:
+          "Internal — leave unset. Polls the most recent 互动量刷新 task for this account.",
       }),
     ),
   },
@@ -80,7 +85,9 @@ const StatusSchema = Type.Object(
 
 const ListSchema = Type.Object(
   {
-    status: Type.Optional(Type.String({ description: "Filter by status (pending/running/done/failed)." })),
+    status: Type.Optional(
+      Type.String({ description: "Filter by status (pending/running/done/failed)." }),
+    ),
     q: Type.Optional(Type.String({ description: "Keyword filter on task name." })),
     page: Type.Optional(Type.Number({ description: "Page number, 1-based. Default 1." })),
     size: Type.Optional(Type.Number({ description: "Page size. Default 20." })),
@@ -116,7 +123,9 @@ export function createCrawlRefreshCreateToolFactory(
         // exposed, reconstruct the chat-pipeline key.
         const sessionKey =
           ctx.sessionKey ??
-          (ctx.sessionId ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}` : undefined);
+          (ctx.sessionId
+            ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}`
+            : undefined);
         const willNotify = notify.enabled && Boolean(sessionKey);
 
         const result = await submitCrawlRefresh({
@@ -215,11 +224,18 @@ export function createCrawlRefreshStatusToolFactory(
         if (done) {
           let records: Record<string, unknown>;
           try {
-            records = await getJson(config, "/link-data-crawler/fetch-records", { uuid }, keyed.apiKey);
+            records = await getJson(
+              config,
+              "/link-data-crawler/fetch-records",
+              { uuid },
+              keyed.apiKey,
+            );
           } catch (error) {
             return failure(api, "crawl_refresh_status", userId, error);
           }
-          const rows = Array.isArray(records.list) ? (records.list as Record<string, unknown>[]) : [];
+          const rows = Array.isArray(records.list)
+            ? (records.list as Record<string, unknown>[])
+            : [];
           list = rows.map((r) => {
             const rs = (asString(r.status) ?? "").toLowerCase();
             return {
@@ -255,7 +271,10 @@ export function createCrawlRefreshStatusToolFactory(
   };
 }
 
-export function createCrawlRefreshListToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
+export function createCrawlRefreshListToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
 
   return (ctx: { agentId?: string }) => {
