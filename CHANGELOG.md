@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Suheng/identity and Qwen models: preconfigure the shared `夙衡` Public Opinion Guardian identity, skip first-run identity onboarding for preconfigured workspaces, expose canonical Qwen targets for Suheng aliases, and remove the unused MiniMax model from the Qwen catalog.
 - Suheng/runtime prompts: remove residual first-run and model-disclosure instructions, run website turns with compact context and intent-scoped tools, replace placeholder data-source claims, and require evidence-backed facts and external-action status reporting.
 - RabbitMQ/Suheng collaboration diagnostics: restrict ordinary users to their own chat history, allow cross-user diagnosis only after server-side administrator verification, and align attachment-report file claims with confirmed export tool results.
+- RabbitMQ/local debugging: replace the inline simulator with a Control UI-backed debug mode while preserving the loopback session boundary, sourcing selectable Skills exclusively from each user's enabled MySQL `skills` rows, and providing a `pnpm suheng:debug` one-command launcher that builds missing artifacts automatically.
 
 ### Fixes
 
@@ -46,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng workspaces: preserve Chinese directory and file names during artifact generation, pass Unicode paths as values instead of inline Python source, and syntax-check generated Python before execution.
 - RabbitMQ/local debugging: execute simulated inbound messages through a service-level queue so plugin-authenticated HTTP requests do not strip the `operator.write` scope required by the real subagent pipeline.
 - RabbitMQ/leading-v2 complaints: preserve OSS keys and URLs for original chat attachments so stamped complaint PDFs can be submitted directly or through `file_share`, remove stale webpage-only guidance, and clarify agent-profile prerequisite errors.
+- RabbitMQ/Suheng reports: resolve each confirmed direct report against the current published platform taxonomy and submit stable category codes so `legal_complaint.category` and `subCategory` retain the selected platform labels and version snapshot.
 
 ## 2026.4.15
 

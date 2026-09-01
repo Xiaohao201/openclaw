@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginLogger, PluginRuntime } from "../api.js";
 import { processChatMessage } from "./chat-pipeline.js";
 import type { HistoryManager } from "./history-manager.js";
-import { renderLocalDebugPage } from "./local-debug-page.js";
 import type { MercureEventPusher } from "./mercure-pusher.js";
 import { parseMessage } from "./message-handler.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
@@ -14,6 +13,7 @@ import type { ChatMessage, Citation } from "./types.js";
 const DEBUG_ROOT = "/plugins/rabbitmq-consumer/debug";
 const DEBUG_RUN_PATH = `${DEBUG_ROOT}/run`;
 const DEBUG_SKILLS_PATH = `${DEBUG_ROOT}/skills`;
+const DEBUG_CONTROL_UI_PATH = "/?mode=rabbitmq-debug";
 const DEBUG_SESSION_COOKIE = "openclaw.rabbitmq_debug";
 const DEBUG_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -511,15 +511,16 @@ export function createLocalDebugHttpHandler(params: {
       return true;
     }
     if (pathname === DEBUG_ROOT && req.method === "GET") {
-      res.statusCode = 200;
-      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.statusCode = 302;
       res.setHeader("cache-control", "no-store");
+      res.setHeader("location", DEBUG_CONTROL_UI_PATH);
+      res.setHeader("referrer-policy", "no-referrer");
       res.setHeader(
         "set-cookie",
         `${DEBUG_SESSION_COOKIE}=${debugSession}; HttpOnly; SameSite=Strict; ` +
           `Path=${DEBUG_ROOT}; Max-Age=${DEBUG_SESSION_MAX_AGE_SECONDS}`,
       );
-      res.end(renderLocalDebugPage(DEBUG_RUN_PATH, DEBUG_SKILLS_PATH));
+      res.end();
       return true;
     }
     if (!matchesDebugSession(req, debugSession)) {

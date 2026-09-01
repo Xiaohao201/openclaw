@@ -563,9 +563,10 @@ describe("rabbitmq local debug HTTP surface", () => {
   }
 
   async function openDebugSession(baseUrl: string): Promise<string> {
-    const response = await fetch(`${baseUrl}${debugRoot}`);
+    const response = await fetch(`${baseUrl}${debugRoot}`, { redirect: "manual" });
     const setCookie = response.headers.get("set-cookie");
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/?mode=rabbitmq-debug");
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Strict");
     expect(setCookie).toContain(`Path=${debugRoot}`);
@@ -576,47 +577,16 @@ describe("rabbitmq local debug HTTP surface", () => {
     return cookie;
   }
 
-  it("serves an OpenClaw-style chat page backed by the RabbitMQ ingress", async () => {
+  it("redirects the loopback debug entry to the Control UI debug mode", async () => {
     const baseUrl = await startHandler(async () => ({ response: "ok", events: [] }));
-    const response = await fetch(`${baseUrl}/plugins/rabbitmq-consumer/debug`);
-    const html = await response.text();
+    const response = await fetch(`${baseUrl}/plugins/rabbitmq-consumer/debug`, {
+      redirect: "manual",
+    });
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/?mode=rabbitmq-debug");
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
-    expect(html).toContain("<title>OpenClaw · RabbitMQ 本地通道</title>");
-    expect(html).toContain("通过 RabbitMQ 管道进入");
-    expect(html).toContain('id="messages"');
-    expect(html).toContain('id="composer"');
-    expect(html).toContain('id="send"');
-    expect(html).toContain('id="new-chat"');
-    expect(html).toContain('id="session-id"');
-    expect(html).toContain('class="trace"');
-    expect(html).toContain('data-panel="skills"');
-    expect(html).toContain('id="skills-panel"');
-    expect(html).toContain('data-skill="ai-public-opinion-brief"');
-    expect(html).toContain('id="mysql-user-id"');
-    expect(html).toContain('id="mysql-skills"');
-    expect(html).toContain('id="refresh-mysql-skills"');
-    expect(html).toContain("/plugins/rabbitmq-consumer/debug/skills");
-    expect(html).toContain('id="active-skill"');
-    expect(html).toContain("builtin_skill_name:selectedSkill");
-    expect(html).toContain("skill_ids:selectedCustomSkillIds");
-    expect(html).toContain('data-panel="schedule"');
-    expect(html).toContain('id="schedule-panel"');
-    expect(html).toContain('id="schedule-name"');
-    expect(html).toContain('id="schedule-prompt"');
-    expect(html).toContain('id="schedule-draft"');
-    expect(html).toContain('id="schedule-list"');
-    expect(html).toContain("请创建一个定时任务");
-    expect(html).toContain("const prepareScheduledTask=");
-    expect(html).toContain("clearSkillSelection();composer.value");
-    expect(html).toContain("nextHistoryId");
-    expect(html).toContain("session_id:sessionId");
-    expect(html).toContain("/plugins/rabbitmq-consumer/debug/run");
-    expect(html).not.toContain("sessionStorage");
-    expect(html).not.toContain("authorization");
-    expect(html).not.toContain('id="payload"');
+    expect(response.headers.get("set-cookie")).toContain("SameSite=Strict");
   });
 
   it("rejects API requests without the path-scoped debug session", async () => {

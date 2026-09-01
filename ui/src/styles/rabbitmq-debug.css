@@ -1,0 +1,426 @@
+suheng-rabbitmq-debug-app {
+  display: block;
+  min-height: 100vh;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.suheng-debug-shell {
+  min-height: 100vh;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-areas:
+    "nav topbar"
+    "nav content";
+  overflow: hidden;
+}
+
+.suheng-debug-nav {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 18px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg, var(--bg-elevated));
+}
+
+.suheng-debug-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 2px 6px 22px;
+}
+
+.suheng-debug-brand__mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: white;
+  font-weight: 800;
+  background: linear-gradient(
+    135deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 68%, #ffb078)
+  );
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.suheng-debug-brand strong,
+.suheng-debug-brand small {
+  display: block;
+}
+
+.suheng-debug-brand small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.suheng-debug-nav__items {
+  display: grid;
+  gap: 6px;
+}
+
+.suheng-debug-nav__items button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.suheng-debug-nav__items button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.suheng-debug-nav__items button:hover,
+.suheng-debug-nav__items button.active {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.suheng-debug-identity {
+  display: grid;
+  gap: 7px;
+  margin-top: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.suheng-debug-identity label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.suheng-debug-identity input {
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg);
+}
+
+.suheng-debug-identity button {
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg-hover);
+  cursor: pointer;
+}
+
+.suheng-debug-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.suheng-debug-topbar > div:first-child {
+  min-width: 0;
+}
+
+.suheng-debug-topbar strong,
+.suheng-debug-topbar span {
+  display: block;
+}
+
+.suheng-debug-topbar > div:first-child span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.suheng-debug-topbar__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.suheng-debug-topbar__meta code {
+  max-width: 320px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suheng-debug-content {
+  grid-area: content;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.suheng-debug-chat-grid {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 16px;
+}
+
+.suheng-debug-chat-grid > .chat {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.suheng-debug-chat-grid .agent-chat__file-input,
+.suheng-debug-chat-grid .agent-chat__input-btn[title="Attach file"] {
+  display: none;
+}
+
+.suheng-debug-trace {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.suheng-debug-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.suheng-debug-panel-head h1,
+.suheng-debug-panel-head h2,
+.suheng-debug-panel-head p {
+  margin: 0;
+}
+
+.suheng-debug-panel-head h1 {
+  margin-top: 3px;
+  font-size: 24px;
+}
+
+.suheng-debug-panel-head h2 {
+  margin-top: 3px;
+  font-size: 17px;
+}
+
+.suheng-debug-panel-head p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.suheng-debug-empty {
+  padding: 26px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  text-align: center;
+}
+
+.suheng-debug-trace-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suheng-debug-trace-list li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  padding-bottom: 18px;
+}
+
+.suheng-debug-trace-list li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 15px;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: var(--border);
+}
+
+.suheng-debug-trace-dot {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  margin-top: 4px;
+  border: 2px solid var(--bg-elevated);
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 28%, transparent);
+}
+
+.suheng-debug-trace-list li.failed .suheng-debug-trace-dot {
+  background: var(--danger);
+}
+
+.suheng-debug-trace-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.suheng-debug-trace-title strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.suheng-debug-trace-title span,
+.suheng-debug-trace-list small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.suheng-debug-trace-list details {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.suheng-debug-trace-list details p {
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+
+.suheng-debug-skills {
+  max-width: 1040px;
+  min-height: calc(100vh - 90px);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.suheng-debug-skill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.suheng-debug-skill {
+  min-height: 150px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  text-align: left;
+}
+
+.suheng-debug-skill:hover,
+.suheng-debug-skill.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
+}
+
+.suheng-debug-skill__icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.suheng-debug-skill__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.suheng-debug-skill strong,
+.suheng-debug-skill small {
+  display: block;
+}
+
+.suheng-debug-skill strong {
+  margin-top: 14px;
+}
+
+.suheng-debug-skill p {
+  min-height: 38px;
+  margin: 6px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.suheng-debug-skill small {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+@media (max-width: 980px) {
+  .suheng-debug-chat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .suheng-debug-trace {
+    max-height: 320px;
+  }
+}
+
+@media (max-width: 720px) {
+  .suheng-debug-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "topbar"
+      "nav"
+      "content";
+  }
+
+  .suheng-debug-nav {
+    padding: 9px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .suheng-debug-brand,
+  .suheng-debug-identity {
+    display: none;
+  }
+
+  .suheng-debug-nav__items {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .suheng-debug-topbar {
+    min-height: 58px;
+    padding: 8px 14px;
+  }
+
+  .suheng-debug-topbar__meta code {
+    display: none;
+  }
+
+  .suheng-debug-content {
+    padding: 10px;
+  }
+}
