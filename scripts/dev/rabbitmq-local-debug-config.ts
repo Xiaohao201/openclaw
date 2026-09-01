@@ -2,8 +2,23 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 type JsonObject = Record<string, unknown>;
+export type RabbitMqDebugBuildTarget = "gateway" | "control-ui";
 
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+export function planRabbitMqDebugBuilds(params: {
+  hasGatewayEntry: boolean;
+  hasControlUiIndex: boolean;
+}): RabbitMqDebugBuildTarget[] {
+  const targets: RabbitMqDebugBuildTarget[] = [];
+  if (!params.hasGatewayEntry) {
+    targets.push("gateway");
+  }
+  if (!params.hasControlUiIndex) {
+    targets.push("control-ui");
+  }
+  return targets;
+}
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -9,8 +9,32 @@ import { resolveConfigIncludes } from "../../src/config/includes.js";
 import {
   buildInheritedLocalDebugConfig,
   buildRabbitMqDebugLaunchSpec,
+  planRabbitMqDebugBuilds,
+  type RabbitMqDebugBuildTarget,
   writeTemporaryInheritedConfig,
 } from "./rabbitmq-local-debug-config.js";
+
+async function runBuildTarget(repoRoot: string, target: RabbitMqDebugBuildTarget): Promise<void> {
+  const args =
+    target === "gateway"
+      ? [path.join(repoRoot, "scripts", "build-all.mjs")]
+      : [path.join(repoRoot, "scripts", "ui.js"), "build"];
+  const label = target === "gateway" ? "Gateway" : "Control UI";
+  process.stdout.write(`${label} build is missing; building it now.\n`);
+  const child = spawn(process.execPath, args, {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code ?? 1));
+  });
+  if (exitCode !== 0) {
+    throw new Error(`${label} build failed with exit code ${exitCode}.`);
+  }
+}
 
 function parseConfig(raw: string, configPath: string): Record<string, unknown> {
   const parsed: unknown = JSON5.parse(raw);
@@ -36,9 +60,17 @@ async function main(): Promise<void> {
     process.env.OPENCLAW_DEV_CONFIG_PATH?.trim() || path.join(developmentStateDir, "openclaw.json");
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const entryPath = path.join(repoRoot, "dist", "entry.js");
+  const controlUiIndexPath = path.join(repoRoot, "dist", "control-ui", "index.html");
 
-  if (!existsSync(entryPath)) {
-    throw new Error("Built Gateway entry is missing. Run `pnpm build` first.");
+  const buildTargets = planRabbitMqDebugBuilds({
+    hasGatewayEntry: existsSync(entryPath),
+    hasControlUiIndex: existsSync(controlUiIndexPath),
+  });
+  for (const target of buildTargets) {
+    await runBuildTarget(repoRoot, target);
+  }
+  if (!existsSync(entryPath) || !existsSync(controlUiIndexPath)) {
+    throw new Error("Suheng debug build artifacts are still missing after the build completed.");
   }
 
   const [production, development] = await Promise.all([

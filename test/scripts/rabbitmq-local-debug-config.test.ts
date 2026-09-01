@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { buildRabbitMqDebugLaunchSpec } from "../../scripts/dev/rabbitmq-local-debug-config.js";
+import {
+  buildRabbitMqDebugLaunchSpec,
+  planRabbitMqDebugBuilds,
+} from "../../scripts/dev/rabbitmq-local-debug-config.js";
+
+describe("planRabbitMqDebugBuilds", () => {
+  it("builds both artifacts on a clean checkout", () => {
+    expect(planRabbitMqDebugBuilds({ hasGatewayEntry: false, hasControlUiIndex: false })).toEqual([
+      "gateway",
+      "control-ui",
+    ]);
+  });
+
+  it("builds only the missing artifact", () => {
+    expect(planRabbitMqDebugBuilds({ hasGatewayEntry: true, hasControlUiIndex: false })).toEqual([
+      "control-ui",
+    ]);
+  });
+
+  it("starts immediately when both artifacts exist", () => {
+    expect(planRabbitMqDebugBuilds({ hasGatewayEntry: true, hasControlUiIndex: true })).toEqual([]);
+  });
+});
 
 describe("buildRabbitMqDebugLaunchSpec", () => {
   it("starts plugin services while keeping external messaging channels disabled", () => {
