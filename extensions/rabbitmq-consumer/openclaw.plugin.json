@@ -2,6 +2,9 @@
   "id": "rabbitmq-consumer",
   "name": "RabbitMQ Consumer",
   "description": "Consume chat messages from RabbitMQ, process them via OpenClaw subagent, and push responses via Mercure.",
+  "contracts": {
+    "tools": ["video_link_parse"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,9 +1,41 @@
+import { readFileSync } from "node:fs";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginLogger, PluginRuntime } from "./api.js";
 import rabbitMqConsumerPlugin from "./index.js";
 
-describe("rabbitmq-consumer local debug registration", () => {
+describe("rabbitmq-consumer registration", () => {
+  it("declares and registers the video_link_parse tool", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { contracts?: { tools?: string[] } };
+    const registerTool = vi.fn();
+    const api = {
+      id: "rabbitmq-consumer",
+      name: "RabbitMQ Consumer",
+      source: "test",
+      config: {},
+      pluginConfig: {},
+      runtime: {} as PluginRuntime,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      } as unknown as PluginLogger,
+      registerTool,
+      registerHttpRoute: vi.fn(),
+      registerService: vi.fn(),
+    } as unknown as OpenClawPluginApi;
+
+    rabbitMqConsumerPlugin.register(api);
+
+    expect(manifest.contracts?.tools).toContain("video_link_parse");
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
+      name: "video_link_parse",
+    });
+  });
+
   it("registers the local page while hard-disabling remote services", async () => {
     let service: OpenClawPluginService | undefined;
     const logger = {
