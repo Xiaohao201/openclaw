@@ -199,7 +199,8 @@ export function createVideoLinkParseTool(options: {
     label: "视频链接解析",
     description:
       "解析抖音、快手、小红书、视频号、B站、微博等平台的短视频分享链接，返回无水印视频直链、封面、标题、作者和图集。" +
-      "收到平台分享链接且需要读取视频时先调用本工具；如需理解视频内容，再把返回的 video_url 交给 video_understand。",
+      "收到平台分享链接且需要读取视频时先调用本工具；当 web_fetch 失败、只返回页面外壳或没有取得视频媒体时，应自主调用本工具兜底，无需询问用户。" +
+      "如需理解视频口播、字幕或画面，再把返回的 video_url 交给 video_understand。",
     parameters: VideoLinkParseSchema,
     async execute(_toolCallId, rawParams) {
       const targetUrl = extractPublicVideoUrl((rawParams as Record<string, unknown>).url);

@@ -15,6 +15,9 @@ describe("detectReportRequest", () => {
       ["出个周报", "周报"],
       ["帮我生成一份日报", "日报"],
       ["月报", "月报"],
+      ["写日报", "日报"],
+      ["做周报", "周报"],
+      ["出月报", "月报"],
       ["麻烦做份本周舆情", "周报"],
       ["今日舆情整理一下", "日报"],
     ])("treats %s as a %s request", (message, period) => {
@@ -45,6 +48,47 @@ describe("detectReportRequest", () => {
         logger,
       );
       expect(result.isReportRequest).toBe(false);
+    });
+
+    it("ignores an unlisted outlet followed by an article reference", () => {
+      const result = detectReportRequest("帮我分析湄洲日报这篇文章的倾向性", logger);
+      expect(result.verdict).toBe("none");
+      expect(result.isReportRequest).toBe(false);
+      expect(result.period).toBeNull();
+    });
+  });
+
+  describe("history_messages #4418 regression", () => {
+    const message = [
+      "关于“湄洲日报一文章标题审核问题”网络舆情专报",
+      "一、舆情概况",
+      ...Array.from(
+        { length: 30 },
+        (_, i) => `${i + 1}. 这里是用户粘贴的舆情专报模板正文和线下核实、处置情况。`,
+      ),
+      "四、风险研判及建议",
+      "学习并写一篇",
+    ].join("\n");
+
+    it("keeps the pasted special-report template in normal chat", () => {
+      const result = detectReportRequest(message, logger);
+      expect(result.verdict).toBe("none");
+      expect(result.isReportRequest).toBe(false);
+      expect(result.period).toBeNull();
+    });
+
+    it("does not reinterpret a special-report template as a periodic report", () => {
+      const result = detectReportRequest("请按照这份日报舆情专报模板写一篇", logger);
+      expect(result.verdict).toBe("none");
+      expect(result.isReportRequest).toBe(false);
+    });
+
+    it("still honors an explicit periodic-report request at the end of a long paste", () => {
+      const explicitMessage = `${message}\n请据此生成一份日报`;
+      const result = detectReportRequest(explicitMessage, logger);
+      expect(result.verdict).toBe("confident");
+      expect(result.isReportRequest).toBe(true);
+      expect(result.period).toBe("日报");
     });
   });
 
@@ -127,6 +171,13 @@ describe("extractInstruction", () => {
     const instruction = extractInstruction(message);
     expect(instruction).toContain("以下是本月素材");
     expect(instruction).toContain("请据此出一份周报");
+  });
+
+  it("keeps a template-learning ask at the end of a long paste", () => {
+    const message = `关于某事件的网络舆情专报\n${"素材正文".repeat(200)}\n学习并写一篇`;
+    const instruction = extractInstruction(message);
+    expect(instruction).toContain("关于某事件的网络舆情专报");
+    expect(instruction).toContain("学习并写一篇");
   });
 
   it("drops a long trailing body paragraph", () => {

@@ -80,7 +80,9 @@ export class Scheduler {
         if (task.failCount > 0) {
           store.update(task.id, { failCount: 0 });
         }
-        logger.info(`[LEADING_V2_SCHED] Ran ${task.id} (${task.title}); next ${new Date(nextRunAt).toISOString()}`);
+        logger.info(
+          `[LEADING_V2_SCHED] Ran ${task.id} (${task.title}); next ${new Date(nextRunAt).toISOString()}`,
+        );
       } else {
         this.recordFail(task, result.note ?? "runner returned ok=false");
       }

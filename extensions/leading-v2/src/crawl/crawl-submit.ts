@@ -82,7 +82,8 @@ export async function submitCrawlRefresh(args: {
 
   const feeds = normalizeFeeds(params.feeds);
   const explicitLinks = normalizeLinks(params.links);
-  const links = explicitLinks.length > 0 ? explicitLinks : feeds.map((f) => String(f.url)).filter(Boolean);
+  const links =
+    explicitLinks.length > 0 ? explicitLinks : feeds.map((f) => String(f.url)).filter(Boolean);
   const uniqueLinks = [...new Set(links)];
 
   if (uniqueLinks.length === 0 && feeds.length === 0) {
@@ -99,7 +100,10 @@ export async function submitCrawlRefresh(args: {
     return { ok: false, error: "topicId is required when refreshing 监测方案条目 (feeds)." };
   }
   if (uniqueLinks.length === 0) {
-    return { ok: false, error: "No crawlable URL found; each feed needs a url, or pass links directly." };
+    return {
+      ok: false,
+      error: "No crawlable URL found; each feed needs a url, or pass links directly.",
+    };
   }
 
   const name = asString(params.name)?.slice(0, 255);
@@ -143,7 +147,9 @@ export async function submitCrawlRefresh(args: {
       notified: false,
       expiresAt: now + notify.ttlMs,
     });
-    debugLog(`submitCrawlRefresh uuid=${uuid} registered notify mercureTopic=${notify.mercureTopic}`);
+    debugLog(
+      `submitCrawlRefresh uuid=${uuid} registered notify mercureTopic=${notify.mercureTopic}`,
+    );
   }
 
   return {

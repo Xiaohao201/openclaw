@@ -33,7 +33,10 @@ describe("Notifier", () => {
   });
 
   it("a throwing transport does not block the others", async () => {
-    const boom: NotificationTransport = { id: "boom", deliver: vi.fn().mockRejectedValue(new Error("x")) };
+    const boom: NotificationTransport = {
+      id: "boom",
+      deliver: vi.fn().mockRejectedValue(new Error("x")),
+    };
     const ok = transport("ok", { ok: true });
     const n = new Notifier([boom, ok]);
     expect(await n.notify(note, {})).toBe(true);
@@ -52,7 +55,10 @@ describe("MercureNotificationTransport", () => {
     const pusher = { sendNotification } as unknown as MercurePusher;
     const t = new MercureNotificationTransport(pusher);
 
-    const res = await t.deliver({ ...note, link: "https://oss/x" }, { mercureTopic: "lobster/user/1749" });
+    const res = await t.deliver(
+      { ...note, link: "https://oss/x" },
+      { mercureTopic: "lobster/user/1749" },
+    );
 
     expect(res.ok).toBe(true);
     const [topic, data] = sendNotification.mock.calls[0];

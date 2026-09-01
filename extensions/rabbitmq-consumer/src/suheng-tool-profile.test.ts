@@ -66,6 +66,24 @@ describe("resolveSuhengToolsAllow", () => {
     expect(tools).not.toContain("schedule_create");
   });
 
+  it("makes video evidence fallbacks available when judging an external link", () => {
+    const tools = resolveSuhengToolsAllow(
+      "请夙衡研判这个链接：https://weibo.com/tv/show/1034:123456",
+    );
+
+    expect(tools).toEqual(
+      expect.arrayContaining(["web_fetch", "video_link_parse", "video_understand"]),
+    );
+    expect(tools).not.toContain("video_generate");
+  });
+
+  it("does not add video fallbacks for an unrelated plain link", () => {
+    const tools = resolveSuhengToolsAllow("把官网地址改成 https://example.com");
+
+    expect(tools).not.toContain("video_link_parse");
+    expect(tools).not.toContain("video_understand");
+  });
+
   it("adds local inspection tools when the turn includes materialized attachments", () => {
     const tools = resolveSuhengToolsAllow("请分析一下", { hasAttachments: true });
 

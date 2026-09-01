@@ -8,7 +8,10 @@ import type { ActionRunnerDeps, ScheduleActionType } from "./types.js";
  * recurring capability — schedule_create enumerates these, and the Scheduler
  * dispatches to the runner built from the matching entry. Nothing else changes.
  */
-export const SCHEDULE_ACTIONS: readonly ScheduleActionType[] = [crawlRefreshAction, agentPromptAction];
+export const SCHEDULE_ACTIONS: readonly ScheduleActionType[] = [
+  crawlRefreshAction,
+  agentPromptAction,
+];
 
 /** Agent-facing action names, for the schedule_create enum. */
 export function actionNames(): string[] {

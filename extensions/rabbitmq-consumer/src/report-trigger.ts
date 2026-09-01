@@ -41,69 +41,16 @@ const REPORT_KEYWORDS: Array<{ period: ReportPeriod; pattern: RegExp }> = [
   { period: "月报", pattern: /月报|本月舆情|上月舆情/ },
 ];
 
-/**
- * Named outlets and programs whose titles embed a period keyword. Seeing
- * "时代周报" inside pasted source material is a citation, never a request —
- * masking them first keeps the common case off the LLM path. The list is a
- * latency optimization, not a correctness boundary: anything it misses still
- * has to clear the intent-verb rule below.
- */
-const OUTLET_NAMES = [
-  "时代周报",
-  "每周质量报告",
-  "人民日报",
-  "光明日报",
-  "经济日报",
-  "科技日报",
-  "法治日报",
-  "工人日报",
-  "农民日报",
-  "中国日报",
-  "青年日报",
-  "证券日报",
-  "解放日报",
-  "南方日报",
-  "广州日报",
-  "北京日报",
-  "天津日报",
-  "重庆日报",
-  "新华日报",
-  "湖北日报",
-  "河南日报",
-  "河北日报",
-  "大众日报",
-  "四川日报",
-  "浙江日报",
-  "江西日报",
-  "安徽日报",
-  "福建日报",
-  "湖南日报",
-  "海南日报",
-  "辽宁日报",
-  "吉林日报",
-  "黑龙江日报",
-  "山西日报",
-  "陕西日报",
-  "甘肃日报",
-  "青海日报",
-  "宁夏日报",
-  "新疆日报",
-  "西藏日报",
-  "云南日报",
-  "贵州日报",
-  "广西日报",
-  "内蒙古日报",
-];
-
 /** Verbs that turn a period keyword into an actual ask. */
 const ACTION_VERB =
   /生成|出具|出个|出份|出一|撰写|编写|写一|写个|写份|写篇|来一|来个|来份|做一|做个|做份|制作|编制|整理|汇总|总结|导出|需要|要一|要个|要份|给我|帮我|发我|发一|拉一|跑一|提供|产出|形成|安排|准备|看看|查下|查一下/;
 
 /** Citation context: the keyword sits in a list of sources, not in an ask. */
-const CITATION_AFTER = /^[、，,。；;）)\]】]?\s*(等|社|网|记者|报道|刊发|头版|客户端|新媒体)?/;
+const CITATION_AFTER =
+  /^[、，,。；;）)\]】]?\s*(等|社|网|记者|报道|刊发|头版|客户端|新媒体|这篇文章|该篇文章|此篇文章|的一篇文章|的文章|一文章标题|一文章|文章|稿件|标题|内容)?/;
 
 /** Markers that make a trailing line an instruction rather than body text. */
-const TRAILING_ASK = /请|帮我|给我|麻烦|需要|以上|上面|据此|按此|参照/;
+const TRAILING_ASK = /请|帮我|给我|麻烦|需要|以上|上面|据此|按此|按照|参照|仿照|照着|学习/;
 
 /**
  * Meta-question markers. "月报的口径是不是变了？" mentions a period keyword in a
@@ -127,11 +74,17 @@ const SHORT_MESSAGE_CHARS = 400;
 const MAX_HEAD_CHARS = 240;
 /** A trailing line longer than this is body text, not a closing ask. */
 const MAX_TAIL_CHARS = 120;
-/** An instruction this short with a keyword in it is unambiguous ("出周报"). */
-const STANDALONE_INSTRUCTION_CHARS = 40;
 /** How far around a keyword we look for an intent verb. */
 const VERB_WINDOW_BEFORE = 16;
 const VERB_WINDOW_AFTER = 12;
+const DIRECT_ACTION_BEFORE = /[写做出]\s*$/;
+
+/** A bare period command is intentional; a short title merely containing one is not. */
+const BARE_PERIOD_REQUEST =
+  /^(日报|周报|月报|今日舆情|当日舆情|昨日舆情|本周舆情|上周舆情|本月舆情|上月舆情)[。！!]?$/;
+
+/** One-off document types must not be reinterpreted as a periodic report. */
+const SPECIAL_REPORT_NOUN = /专报|转报|首报|续报/;
 
 /**
  * Reduce a message to the part that carries intent.
@@ -163,15 +116,6 @@ export function extractInstruction(message: string): string {
   return isClosingAsk ? `${head}\n${last}` : head;
 }
 
-/** Blank out known outlet names so their embedded keywords can't match. */
-function maskOutlets(text: string): string {
-  let masked = text;
-  for (const name of OUTLET_NAMES) {
-    masked = masked.split(name).join("＊".repeat(name.length));
-  }
-  return masked;
-}
-
 interface KeywordHit {
   period: ReportPeriod;
   index: number;
@@ -181,9 +125,13 @@ interface KeywordHit {
 function findKeywordHits(text: string): KeywordHit[] {
   const hits: KeywordHit[] = [];
   for (const { period, pattern } of REPORT_KEYWORDS) {
-    const match = pattern.exec(text);
-    if (match) {
-      hits.push({ period, index: match.index, length: match[0].length });
+    // A fresh global matcher finds both a cited outlet and a later real ask,
+    // without carrying RegExp state between messages.
+    const matcher = new RegExp(pattern.source, `${pattern.flags.replaceAll("g", "")}g`);
+    for (const match of text.matchAll(matcher)) {
+      if (match.index !== undefined) {
+        hits.push({ period, index: match.index, length: match[0].length });
+      }
     }
   }
   return hits.toSorted((a, b) => a.index - b.index);
@@ -191,9 +139,14 @@ function findKeywordHits(text: string): KeywordHit[] {
 
 /** Is there an intent verb close enough to this keyword to make it an ask? */
 function hasNearbyVerb(text: string, hit: KeywordHit): boolean {
-  const before = text.slice(Math.max(0, hit.index - VERB_WINDOW_BEFORE), hit.index);
   const after = text.slice(hit.index + hit.length, hit.index + hit.length + VERB_WINDOW_AFTER);
-  return ACTION_VERB.test(before) || ACTION_VERB.test(after);
+  return hasPrecedingVerb(text, hit) || ACTION_VERB.test(after);
+}
+
+/** A special-report reference can only be overridden by an explicit verb before the period. */
+function hasPrecedingVerb(text: string, hit: KeywordHit): boolean {
+  const before = text.slice(Math.max(0, hit.index - VERB_WINDOW_BEFORE), hit.index);
+  return ACTION_VERB.test(before) || DIRECT_ACTION_BEFORE.test(before);
 }
 
 /** Does the keyword read as an item in a source list ("…周报、…网等媒体")? */
@@ -240,16 +193,17 @@ function build(
  *
  * Layered, cheapest first:
  *   1. Shrink the message to its instruction (head + closing ask).
- *   2. Mask outlet names that embed a period keyword.
- *   3. A keyword in a short instruction, or next to an intent verb -> confident.
- *   4. A keyword in citation position with no verb -> none.
+ *   2. Remove keyword hits that are structurally citations or article references.
+ *   3. An exact bare command, or a keyword next to an intent verb -> confident.
+ *   4. A one-off 专报/转报/首报/续报 stays in normal chat unless the user
+ *      explicitly asks for a periodic report after it.
  *   5. Anything else with a keyword, or a period hint plus a report noun plus a
  *      verb -> ambiguous, for the caller's LLM arbiter to settle.
  */
 export function detectReportRequest(message: string, logger: PluginLogger): ReportTriggerResult {
   const requirement = message.trim();
   const instruction = extractInstruction(requirement);
-  const scanned = maskOutlets(instruction);
+  const scanned = instruction;
   const hits = findKeywordHits(scanned);
 
   if (hits.length === 0) {
@@ -262,18 +216,8 @@ export function detectReportRequest(message: string, logger: PluginLogger): Repo
     return build("none", null, requirement, instruction, "no-keyword");
   }
 
-  const standalone =
-    instruction.length <= STANDALONE_INSTRUCTION_CHARS && !META_QUESTION.test(instruction);
-  const confident = hits.find((hit) => standalone || hasNearbyVerb(scanned, hit));
-  if (confident) {
-    logger.info(
-      `[REPORT_TRIGGER] Detected ${confident.period} report request: ${JSON.stringify(instruction.slice(0, 120))}`,
-    );
-    return build("confident", confident.period, requirement, instruction, "keyword+intent");
-  }
-
-  const allCited = hits.every((hit) => looksLikeCitation(scanned, hit));
-  if (allCited) {
+  const actionableHits = hits.filter((hit) => !looksLikeCitation(scanned, hit));
+  if (actionableHits.length === 0) {
     logger.info(
       `[REPORT_TRIGGER] Keyword(s) ${hits.map((h) => h.period).join("/")} look like citations, ` +
         `not a request; handling as normal chat`,
@@ -281,10 +225,37 @@ export function detectReportRequest(message: string, logger: PluginLogger): Repo
     return build("none", null, requirement, instruction, "citation-context");
   }
 
+  const bareRequest =
+    BARE_PERIOD_REQUEST.test(instruction.trim()) && !META_QUESTION.test(instruction);
+  if (
+    SPECIAL_REPORT_NOUN.test(scanned) &&
+    !bareRequest &&
+    !actionableHits.some((hit) => hasPrecedingVerb(scanned, hit))
+  ) {
+    logger.info(
+      `[REPORT_TRIGGER] Period keyword belongs to a one-off report/template; handling as normal chat`,
+    );
+    return build("none", null, requirement, instruction, "special-report-context");
+  }
+
+  const confident = actionableHits.find((hit) => bareRequest || hasNearbyVerb(scanned, hit));
+  if (confident) {
+    logger.info(
+      `[REPORT_TRIGGER] Detected ${confident.period} report request: ${JSON.stringify(instruction.slice(0, 120))}`,
+    );
+    return build("confident", confident.period, requirement, instruction, "keyword+intent");
+  }
+
   logger.info(
-    `[REPORT_TRIGGER] Keyword ${hits[0].period} present without a clear ask; deferring to LLM`,
+    `[REPORT_TRIGGER] Keyword ${actionableHits[0].period} present without a clear ask; deferring to LLM`,
   );
-  return build("ambiguous", hits[0].period, requirement, instruction, "keyword-without-verb");
+  return build(
+    "ambiguous",
+    actionableHits[0].period,
+    requirement,
+    instruction,
+    "keyword-without-verb",
+  );
 }
 
 /**

@@ -64,6 +64,14 @@ describe("resolveVideoParserConfig", () => {
 });
 
 describe("video_link_parse tool", () => {
+  it("tells the agent to use it autonomously after web fetching cannot read a video", () => {
+    const tool = createVideoLinkParseTool({ config: CONFIG, fetchImpl: vi.fn() });
+
+    expect(tool.description).toContain("web_fetch");
+    expect(tool.description).toContain("无需询问用户");
+    expect(tool.description).toContain("video_understand");
+  });
+
   it("posts credentials in JSON instead of leaking them in the request URL", async () => {
     const fetchImpl = vi.fn<FetchStub>(async () =>
       jsonResponse({

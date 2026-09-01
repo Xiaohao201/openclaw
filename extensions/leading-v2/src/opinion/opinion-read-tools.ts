@@ -31,21 +31,29 @@ const FeedListSchema = Type.Object(
   {
     topicId: Type.Number({ description: "主监测方案 ID (required). Get it from topic_list." }),
     slaveTopicId: Type.Optional(Type.Number({ description: "子监测方案 ID (optional)." })),
-    q: Type.Optional(Type.String({ description: "Full-text keyword over title/author/summary/content." })),
+    q: Type.Optional(
+      Type.String({ description: "Full-text keyword over title/author/summary/content." }),
+    ),
     page: Type.Optional(Type.Number({ description: "Page number. Default 1." })),
     size: Type.Optional(Type.Number({ description: "Page size. Default 20." })),
     from: Type.Optional(Type.Number({ description: "Start time, UNIX seconds." })),
     to: Type.Optional(Type.Number({ description: "End time, UNIX seconds." })),
-    platforms: Type.Optional(Type.Array(stringEnum(PLATFORMS, "Platform filter."), { description: "Platform filter." })),
+    platforms: Type.Optional(
+      Type.Array(stringEnum(PLATFORMS, "Platform filter."), { description: "Platform filter." }),
+    ),
     riskLevels: Type.Optional(
       Type.Array(stringEnum(RISK_LEVELS, "Risk level."), {
         description: "Risk filter: Red=重大, Orange=较大, Yellow=一般, Blue=小微.",
       }),
     ),
     emotions: Type.Optional(
-      Type.Array(stringEnum(EMOTIONS, "Emotion."), { description: "Emotion: Positive/Neutral/Negative." }),
+      Type.Array(stringEnum(EMOTIONS, "Emotion."), {
+        description: "Emotion: Positive/Neutral/Negative.",
+      }),
     ),
-    offlineOnly: Type.Optional(Type.Boolean({ description: "Only 失效 (offline) items. Default false." })),
+    offlineOnly: Type.Optional(
+      Type.Boolean({ description: "Only 失效 (offline) items. Default false." }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -55,7 +63,9 @@ const TopicListSchema = Type.Object(
     reportId: Type.Union([Type.Number(), Type.String()], {
       description: "智脑项目 id or slug (required).",
     }),
-    active: Type.Optional(Type.Boolean({ description: "Only schemes with analysis enabled. Default false." })),
+    active: Type.Optional(
+      Type.Boolean({ description: "Only schemes with analysis enabled. Default false." }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -73,7 +83,10 @@ const ReanalyzeSchema = Type.Object(
       },
     ),
     mode: Type.Optional(
-      stringEnum(["active", "test"] as const, "Rule variant applied to each ruleType: active(default) or test."),
+      stringEnum(
+        ["active", "test"] as const,
+        "Rule variant applied to each ruleType: active(default) or test.",
+      ),
     ),
   },
   { additionalProperties: false },
@@ -82,8 +95,12 @@ const ReanalyzeSchema = Type.Object(
 const MonthlySchema = Type.Object(
   {
     clusterId: Type.Number({ description: "聚类/集群 ID (required)." }),
-    months: Type.Array(Type.String(), { description: "Months as YYYYMM, e.g. ['202510','202511']." }),
-    label: Type.Optional(Type.Boolean({ description: "Query the event-cluster table (flag=label). Default false." })),
+    months: Type.Array(Type.String(), {
+      description: "Months as YYYYMM, e.g. ['202510','202511'].",
+    }),
+    label: Type.Optional(
+      Type.Boolean({ description: "Query the event-cluster table (flag=label). Default false." }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -122,9 +139,15 @@ export function createFeedListToolFactory(api: OpenClawPluginApi, resolver: ApiK
           size: Math.min(100, Math.max(1, Number(rawParams.size ?? 20) || 20)),
           from: Number.isInteger(Number(rawParams.from)) ? Number(rawParams.from) : undefined,
           to: Number.isInteger(Number(rawParams.to)) ? Number(rawParams.to) : undefined,
-          platforms: Array.isArray(rawParams.platforms) ? (rawParams.platforms as string[]) : undefined,
-          riskLevels: Array.isArray(rawParams.riskLevels) ? (rawParams.riskLevels as string[]) : undefined,
-          emotions: Array.isArray(rawParams.emotions) ? (rawParams.emotions as string[]) : undefined,
+          platforms: Array.isArray(rawParams.platforms)
+            ? (rawParams.platforms as string[])
+            : undefined,
+          riskLevels: Array.isArray(rawParams.riskLevels)
+            ? (rawParams.riskLevels as string[])
+            : undefined,
+          emotions: Array.isArray(rawParams.emotions)
+            ? (rawParams.emotions as string[])
+            : undefined,
           offlineOnly: rawParams.offlineOnly ? 1 : undefined,
         };
 
@@ -184,7 +207,10 @@ export function createTopicListToolFactory(api: OpenClawPluginApi, resolver: Api
               ? String(rawReportId)
               : undefined;
         if (!reportId) {
-          return jsonResult({ success: false, error: "reportId is required (智脑项目 id or slug)." });
+          return jsonResult({
+            success: false,
+            error: "reportId is required (智脑项目 id or slug).",
+          });
         }
         const params: Record<string, FieldValue> = {
           reportId,
@@ -199,7 +225,10 @@ export function createTopicListToolFactory(api: OpenClawPluginApi, resolver: Api
           return failure(api, "topic_list", userId, error);
         }
         if (res.dos === 1) {
-          return jsonResult({ success: false, error: "Not authorized to view this project's schemes." });
+          return jsonResult({
+            success: false,
+            error: "Not authorized to view this project's schemes.",
+          });
         }
         const envErr = envelopeError(res);
         if (envErr) {
@@ -242,9 +271,13 @@ export function createFeedReanalyzeToolFactory(api: OpenClawPluginApi, resolver:
         const topicId = Number(rawParams.topicId);
         const reportId = Number(rawParams.reportId);
         const ids = Array.isArray(rawParams.ids)
-          ? (rawParams.ids as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0)
+          ? (rawParams.ids as unknown[])
+              .map((x) => Number(x))
+              .filter((n) => Number.isInteger(n) && n > 0)
           : [];
-        const ruleTypes = Array.isArray(rawParams.ruleTypes) ? (rawParams.ruleTypes as string[]) : [];
+        const ruleTypes = Array.isArray(rawParams.ruleTypes)
+          ? (rawParams.ruleTypes as string[])
+          : [];
         if (!Number.isInteger(topicId) || topicId <= 0) {
           return jsonResult({ success: false, error: "topicId must be > 0." });
         }
@@ -255,7 +288,10 @@ export function createFeedReanalyzeToolFactory(api: OpenClawPluginApi, resolver:
           return jsonResult({ success: false, error: "ids must be a non-empty list of item ids." });
         }
         if (ruleTypes.length === 0) {
-          return jsonResult({ success: false, error: "ruleTypes must include at least one of Categorize/PreCheck/DoubleCheck." });
+          return jsonResult({
+            success: false,
+            error: "ruleTypes must include at least one of Categorize/PreCheck/DoubleCheck.",
+          });
         }
         const mode = rawParams.mode === "test" ? "test" : "active";
         const fields: Record<string, FieldValue> = {
@@ -280,7 +316,10 @@ export function createFeedReanalyzeToolFactory(api: OpenClawPluginApi, resolver:
           return jsonResult({ success: false, error: envErr });
         }
         if (res.code !== "success" && res.code !== "0" && res.code !== 0) {
-          return jsonResult({ success: false, error: asString(res.message) ?? "Backend rejected the request." });
+          return jsonResult({
+            success: false,
+            error: asString(res.message) ?? "Backend rejected the request.",
+          });
         }
         return jsonResult({
           success: true,
@@ -315,13 +354,18 @@ export function createMonthlyStatsToolFactory(api: OpenClawPluginApi, resolver: 
         }
         const clusterId = Number(rawParams.clusterId);
         const months = Array.isArray(rawParams.months)
-          ? (rawParams.months as unknown[]).map((m) => String(m).trim()).filter((m) => /^\d{6}$/.test(m))
+          ? (rawParams.months as unknown[])
+              .map((m) => String(m).trim())
+              .filter((m) => /^\d{6}$/.test(m))
           : [];
         if (!Number.isInteger(clusterId) || clusterId <= 0) {
           return jsonResult({ success: false, error: "clusterId is required (> 0)." });
         }
         if (months.length === 0) {
-          return jsonResult({ success: false, error: "months must be a non-empty list of YYYYMM strings." });
+          return jsonResult({
+            success: false,
+            error: "months must be a non-empty list of YYYYMM strings.",
+          });
         }
         const fields: Record<string, FieldValue> = {
           clusterId,

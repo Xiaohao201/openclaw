@@ -43,7 +43,9 @@ export class CompletionNotifier {
     }, notify.pollIntervalMs);
     // Don't keep the event loop alive solely for this timer.
     this.timer.unref?.();
-    logger.info(`[LEADING_V2_NOTIFY] Completion notifier started (every ${notify.pollIntervalMs}ms)`);
+    logger.info(
+      `[LEADING_V2_NOTIFY] Completion notifier started (every ${notify.pollIntervalMs}ms)`,
+    );
   }
 
   stop(): void {
@@ -65,7 +67,10 @@ export class CompletionNotifier {
       if (pruned > 0) {
         this.deps.logger.info(`[LEADING_V2_NOTIFY] Pruned ${pruned} expired task(s)`);
       }
-      const pending = registry.all().filter((t) => !t.notified).slice(0, notify.maxPerTick);
+      const pending = registry
+        .all()
+        .filter((t) => !t.notified)
+        .slice(0, notify.maxPerTick);
       const total = registry.all().length;
       if (total > 0) {
         debugLog(`tick total=${total} polling=${pending.length}`);

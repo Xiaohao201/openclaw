@@ -79,6 +79,9 @@ let pool: mysql.Pool | null = null;
 let cachedEntries: SkillEntry[] | null = null;
 let cacheLoadTime = 0;
 const CACHE_TTL_MS = 5000;
+const DEFAULT_SKILL_LIST_LIMIT = 50;
+const MAX_SKILL_LIST_LIMIT = 100;
+const MAX_SKILL_LIST_OFFSET = 2_147_483_647;
 let publicSkillsSeeded = false;
 
 function resolveConfig(): MySqlConfig {
@@ -288,8 +291,12 @@ export async function listSkills(
   opts?: { limit?: number; offset?: number },
 ): Promise<{ skills: SkillRow[]; total: number }> {
   const p = getPool();
-  const limit = opts?.limit ?? 50;
-  const offset = opts?.offset ?? 0;
+  const limit = Number.isFinite(opts?.limit)
+    ? Math.max(1, Math.min(MAX_SKILL_LIST_LIMIT, Math.floor(opts?.limit ?? 0)))
+    : DEFAULT_SKILL_LIST_LIMIT;
+  const offset = Number.isFinite(opts?.offset)
+    ? Math.max(0, Math.min(MAX_SKILL_LIST_OFFSET, Math.floor(opts?.offset ?? 0)))
+    : 0;
 
   const [countRows] = await p.execute<mysql.RowDataPacket[]>(
     "SELECT COUNT(*) as total FROM skills WHERE user_id = ?",
@@ -297,9 +304,12 @@ export async function listSkills(
   );
   const total = (countRows[0] as { total: number }).total ?? 0;
 
+  // MySQL 8.0.22+ can reject prepared LIMIT/OFFSET values that mysql2 sends as
+  // DOUBLE. These values are bounded integers, so inlining them is safe while
+  // keeping the user id parameterized.
   const [rows] = await p.execute<mysql.RowDataPacket[]>(
-    "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE user_id = ? ORDER BY name ASC LIMIT ? OFFSET ?",
-    [userId, limit, offset],
+    `SELECT id, user_id, name, description, content, source, category, is_enable, \`references\`, scripts, created_at, updated_at FROM skills WHERE user_id = ? ORDER BY name ASC LIMIT ${limit} OFFSET ${offset}`,
+    [userId],
   );
 
   return { skills: rows as SkillRow[], total };

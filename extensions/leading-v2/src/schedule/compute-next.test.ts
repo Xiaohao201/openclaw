@@ -34,7 +34,9 @@ describe("parseHm", () => {
 
 describe("computeNext interval", () => {
   it("adds everyMinutes", () => {
-    expect(computeNext({ kind: "interval", everyMinutes: 3 }, 1_000_000, TZ)).toBe(1_000_000 + 180_000);
+    expect(computeNext({ kind: "interval", everyMinutes: 3 }, 1_000_000, TZ)).toBe(
+      1_000_000 + 180_000,
+    );
   });
 });
 

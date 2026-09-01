@@ -48,6 +48,9 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/leading-v2 complaints: preserve OSS keys and URLs for original chat attachments so stamped complaint PDFs can be submitted directly or through `file_share`, remove stale webpage-only guidance, and clarify agent-profile prerequisite errors.
 - RabbitMQ/local debugging: execute simulated inbound messages through a service-level queue so plugin-authenticated HTTP requests do not strip the `operator.write` scope required by the real subagent pipeline.
 - RabbitMQ/Suheng reports: resolve each confirmed direct report against the current published platform taxonomy and submit stable category codes so `legal_complaint.category` and `subCategory` retain the selected platform labels and version snapshot.
+- Agents/skills: inline bounded integer pagination in MySQL skill-library list queries so `skill_list` works with MySQL versions that reject prepared `LIMIT`/`OFFSET` parameters.
+- Agents/file sharing: reject agent bootstrap, memory, configuration, credential, session, private-key, and internal-directory files at the `file_share` execution boundary, including symlink and hard-link aliases, so model tool-selection mistakes cannot publish internal workspace state to OSS.
+- RabbitMQ/Suheng report intent: keep newspaper names, article references, and one-off special-report templates out of the periodic report generator while preserving explicit daily, weekly, and monthly report commands.
 
 ## 2026.4.15
 

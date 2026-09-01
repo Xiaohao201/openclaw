@@ -274,6 +274,14 @@ describe("complaint_submit", () => {
       subjectScope: "Institution",
       judgment,
       links: ["https://www.xiaohongshu.com/a"],
+      classifications: [
+        {
+          link: "https://www.xiaohongshu.com/a",
+          taxonomyVersionId: 23,
+          categoryCode: "false_information",
+          subCategoryCode: "false_rumor",
+        },
+      ],
     });
 
     expect(mockGetJson).not.toHaveBeenCalled();
@@ -291,7 +299,82 @@ describe("complaint_submit", () => {
       judgment,
       role: "Personal",
       links: JSON.stringify(["https://www.xiaohongshu.com/a"]),
+      classifications: JSON.stringify([
+        {
+          link: "https://www.xiaohongshu.com/a",
+          taxonomyVersionId: 23,
+          categoryCode: "false_information",
+          subCategoryCode: "false_rumor",
+        },
+      ]),
     });
+  });
+
+  it("returns the current platform taxonomy before a direct judgment is submitted", async () => {
+    const judgment = "夙衡逐项研判确认该内容包含虚构事实，并对应现行规则，建议立即举报。";
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: [
+        {
+          link: "https://weibo.com/1/a",
+          platform: "Weibo",
+          taxonomyVersionId: 31,
+          categories: [
+            {
+              code: "false_information",
+              label: "不实信息",
+              children: [{ code: "false_rumor", label: "造谣传谣" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const res = parse(
+      await tool().execute("c-taxonomy", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment,
+        links: ["https://weibo.com/1/a"],
+      }),
+    );
+
+    expect(mockPostForm).not.toHaveBeenCalled();
+    expect(mockGetJson).toHaveBeenCalledWith(
+      expect.anything(),
+      "/legal/fetch-complaint-taxonomy",
+      { links: ["https://weibo.com/1/a"] },
+      "sk_test1749",
+    );
+    expect(res).toMatchObject({
+      success: false,
+      classificationRequired: true,
+      taxonomies: expect.any(Array),
+    });
+  });
+
+  it("fails closed when a direct report link has no published selectable taxonomy", async () => {
+    const link = "https://weibo.com/1/missing";
+    mockGetJson.mockResolvedValue({ code: "success", taxonomies: [], unsupportedLinks: [link] });
+
+    const res = parse(
+      await tool().execute("c-no-taxonomy", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment: "夙衡逐项研判确认该内容包含虚构事实，并对应现行规则，建议立即举报。",
+        links: [link],
+      }),
+    );
+
+    expect(mockPostForm).not.toHaveBeenCalled();
+    expect(res).toMatchObject({
+      success: false,
+      classificationRequired: false,
+      unsupportedLinks: [link],
+    });
+    expect(res.error).toContain("分类目录");
   });
 
   it("rejects an agent judgment report without explicit confirmation", async () => {

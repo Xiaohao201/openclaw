@@ -50,9 +50,66 @@ const FileShareToolSchema = Type.Object({
   ),
 });
 
+const INTERNAL_WORKSPACE_FILES = new Set([
+  "agents.md",
+  "auth-profiles.json",
+  "bootstrap.md",
+  "config.json",
+  "credentials.json",
+  "heartbeat.md",
+  "identity.md",
+  "memory.md",
+  "openclaw.json",
+  "secrets.json",
+  "session.json",
+  "session.jsonl",
+  "sessions.json",
+  "sessions.jsonl",
+  "settings.json",
+  "soul.md",
+  "tools.md",
+  "tokens.json",
+  "user.md",
+]);
+
+const INTERNAL_WORKSPACE_DIRECTORIES = new Set([
+  ".git",
+  ".openclaw",
+  ".ssh",
+  "auth",
+  "config",
+  "credentials",
+  "memory",
+  "secrets",
+  "sessions",
+]);
+
+const PRIVATE_KEY_FILE_PATTERN = /(?:^id_(?:dsa|ecdsa|ed25519|rsa)$|\.(?:key|p12|pem|pfx)$)/iu;
+
+function assertShareableWorkspacePath(relativePath: string): void {
+  const parts = relativePath
+    .split(path.sep)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  const basename = parts.at(-1) ?? "";
+  const isEnvironmentFile = basename === ".env" || basename.startsWith(".env.");
+  const isInternalDirectory = parts
+    .slice(0, -1)
+    .some((part) => INTERNAL_WORKSPACE_DIRECTORIES.has(part));
+  if (
+    INTERNAL_WORKSPACE_FILES.has(basename) ||
+    isEnvironmentFile ||
+    isInternalDirectory ||
+    PRIVATE_KEY_FILE_PATTERN.test(basename)
+  ) {
+    throw new ToolInputError("internal agent files cannot be shared");
+  }
+}
+
 /**
  * Containment check against the real workspace root: symlinks resolved on both
- * sides so a link pointing outside the workspace cannot smuggle files out.
+ * sides so a link cannot smuggle files from outside or alias a protected
+ * internal workspace file under an innocent-looking name.
  */
 async function resolveContainedPath(workspaceDir: string, requested: string): Promise<string> {
   const workspaceReal = await fs.realpath(workspaceDir);
@@ -67,6 +124,7 @@ async function resolveContainedPath(workspaceDir: string, requested: string): Pr
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new ToolInputError("path must point to a file inside the agent workspace");
   }
+  assertShareableWorkspacePath(relative);
   return fileReal;
 }
 
@@ -99,6 +157,12 @@ export function createFileShareTool(opts?: FileShareToolOptions): AnyAgentTool |
       const stat = await fs.stat(filePath);
       if (!stat.isFile()) {
         throw new ToolInputError("path must point to a regular file");
+      }
+      // A hard link can give MEMORY.md or another protected file a harmless
+      // alias that realpath cannot distinguish. Shared-link files are unusual
+      // for generated deliverables, so fail closed before reading or uploading.
+      if (stat.nlink > 1) {
+        throw new ToolInputError("internal agent files cannot be shared");
       }
       const maxBytes = config.maxFileSizeMb * 1024 * 1024;
       if (stat.size > maxBytes) {
