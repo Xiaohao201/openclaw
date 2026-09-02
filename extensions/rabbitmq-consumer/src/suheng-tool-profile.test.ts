@@ -35,6 +35,7 @@ describe("resolveSuhengToolsAllow", () => {
 
     expect(tools).toEqual(
       expect.arrayContaining([
+        "complaint_task_status",
         "infringe_complaint_submit",
         "infringe_profile_list",
         "letter_generate",
@@ -159,6 +160,7 @@ describe("resolveSuhengToolsAllow", () => {
   it.each([
     ["把这套流程保存为技能", ["skill_get", "skill_list", "skill_save"]],
     ["查看报告任务进度", ["job_list", "report_status"]],
+    ["查举报结果", ["complaint_task_status"]],
     ["生成今天的每日风险提示", ["daily_risk_tips"]],
     ["批量重新研判这些舆情", ["feed_reanalyze"]],
     ["把报告发送到我的邮箱", ["file_share", "send_email"]],

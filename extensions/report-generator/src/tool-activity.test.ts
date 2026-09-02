@@ -23,6 +23,7 @@ describe("resolveToolLabel", () => {
     expect(resolveToolLabel("feed_list")).toBe("正在浏览舆情列表");
     expect(resolveToolLabel("schedule_create")).toBe("正在创建定时任务");
     expect(resolveToolLabel("letter_generate")).toBe("正在生成维权文书");
+    expect(resolveToolLabel("complaint_task_status")).toBe("正在查询举报任务状态");
     expect(resolveToolLabel("link_batch_create")).toBe("正在发起失效链接检测");
   });
 
@@ -51,6 +52,7 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("schedule_create")).toBe("schedule");
     expect(resolveToolCategory("link_batch_create")).toBe("check");
     expect(resolveToolCategory("opinion_report_export")).toBe("report");
+    expect(resolveToolCategory("complaint_task_status")).toBe("query");
     expect(resolveToolCategory("x_search")).toBe("search");
   });
 });

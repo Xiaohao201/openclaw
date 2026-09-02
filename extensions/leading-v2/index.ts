@@ -14,6 +14,7 @@ import { closePool } from "./src/client/db-client.js";
 import { resolveConfig } from "./src/client/http-client.js";
 import { ApiKeyResolver } from "./src/client/key-resolver.js";
 import { RecentTaskStore } from "./src/client/recent-tasks.js";
+import { createComplaintTaskStatusToolFactory } from "./src/complaint/complaint-status-tool.js";
 import {
   createCrawlRefreshCreateToolFactory,
   createCrawlRefreshListToolFactory,
@@ -155,6 +156,9 @@ export default definePluginEntry({
     api.registerTool(createLetterGenerateToolFactory(api, resolver), { name: "letter_generate" });
     api.registerTool(createLetterFetchToolFactory(api, resolver), { name: "letter_fetch" });
     api.registerTool(createComplaintSubmitToolFactory(api, resolver), { name: "complaint_submit" });
+    api.registerTool(createComplaintTaskStatusToolFactory(api, resolver), {
+      name: "complaint_task_status",
+    });
 
     // --- infringe-complaint (侵权投诉，投诉方案；与举报 complaint_submit 平级) ---
     api.registerTool(createInfringeProfileListToolFactory(api, resolver), {
