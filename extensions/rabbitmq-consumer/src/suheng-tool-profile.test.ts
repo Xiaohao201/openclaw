@@ -44,6 +44,39 @@ describe("resolveSuhengToolsAllow", () => {
     expect(tools).not.toContain("schedule_create");
   });
 
+  it.each([
+    "请批量检测以下链接是否失效。\n任务名：晚间巡检\n链接（每行一个）：\nhttps://example.com/a\nhttps://example.com/b",
+    "帮我检查这些网址能否正常访问",
+    "创建一个失效链接监测任务",
+    "这些链接有没有失效",
+    "批量检查失效的链接",
+  ])("adds dedicated link-check tools for %s", (message) => {
+    const tools = resolveSuhengToolsAllow(message);
+
+    expect(tools).toEqual(
+      expect.arrayContaining(["link_batch_create", "link_batch_list", "link_batch_status"]),
+    );
+    expect(tools).not.toContain("complaint_submit");
+    expect(tools).not.toContain("infringe_complaint_submit");
+  });
+
+  it("does not treat ordinary link-content reading as a dead-link check", () => {
+    const tools = resolveSuhengToolsAllow("请读取这个链接讲了什么：https://example.com/news");
+
+    expect(tools).not.toContain("link_batch_create");
+    expect(tools).not.toContain("link_batch_status");
+  });
+
+  it("preserves link-check tools for the bundled infringement workflow", () => {
+    const tools = resolveSuhengToolsAllow("执行流程", {
+      builtinSkillName: "infringement-judgment",
+    });
+
+    expect(tools).toEqual(
+      expect.arrayContaining(["infringe_complaint_submit", "link_batch_create"]),
+    );
+  });
+
   it("adds schedule controls only for scheduled-task intent", () => {
     const tools = resolveSuhengToolsAllow("每天九点创建舆情监测提醒");
 
@@ -64,6 +97,22 @@ describe("resolveSuhengToolsAllow", () => {
     expect(tools).toEqual(expect.arrayContaining(["video_generate", "video_understand"]));
     expect(tools).not.toContain("complaint_submit");
     expect(tools).not.toContain("schedule_create");
+  });
+
+  it.each(["有没有视频解析工具", "这条短视频帮我分析一下"])(
+    "adds video tools when the media term comes before the action in %s",
+    (message) => {
+      const tools = resolveSuhengToolsAllow(message);
+
+      expect(tools).toEqual(expect.arrayContaining(["video_link_parse", "video_understand"]));
+    },
+  );
+
+  it("does not add media tools for a media mention without an action", () => {
+    const tools = resolveSuhengToolsAllow("短视频行业近期发展很快");
+
+    expect(tools).not.toContain("video_link_parse");
+    expect(tools).not.toContain("video_understand");
   });
 
   it("makes video evidence fallbacks available when judging an external link", () => {

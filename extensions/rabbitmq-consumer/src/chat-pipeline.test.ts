@@ -197,6 +197,37 @@ describe("processChatMessage", () => {
     expect(captured?.extraSystemPrompt).toContain("video_link_parse");
   });
 
+  it("routes the dead-link skill-card prompt to the dedicated batch tools", async () => {
+    let captured: SubagentRunParams | undefined;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        captured = args;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        message:
+          "请批量检测以下链接是否失效。\n任务名：晚间巡检\n链接（每行一个）：\nhttps://example.com/a\nhttps://example.com/b",
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(captured?.toolsAllow).toEqual(
+      expect.arrayContaining(["link_batch_create", "link_batch_list", "link_batch_status"]),
+    );
+    expect(captured?.toolsAllow).not.toContain("complaint_submit");
+    expect(captured?.extraSystemPrompt).toContain("不要用 web_fetch 逐条代替");
+  });
+
   it("keeps full skill instructions while narrowing tools for a bundled skill", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({
