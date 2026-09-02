@@ -18,12 +18,33 @@ export type DebugTraceItem = {
   durationMs?: number;
   repeatCount?: number;
   narrative: string[];
+  toolName?: string;
+  input?: string;
+  output?: string;
+};
+
+export type DebugUsage = {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  models: Array<{
+    provider?: string;
+    model?: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  }>;
 };
 
 export type DebugTurnResult = {
   response: string;
   events: Array<Record<string, unknown>>;
   trace: DebugTraceItem[];
+  usage?: DebugUsage;
 };
 
 export type DebugRunInput = {
@@ -154,9 +175,50 @@ function normalizeTrace(value: unknown): DebugTraceItem[] {
         narrative: Array.isArray(item.narrative)
           ? item.narrative.filter((line): line is string => typeof line === "string")
           : [],
+        ...(typeof item.toolName === "string" ? { toolName: item.toolName } : {}),
+        ...(typeof item.input === "string" ? { input: item.input } : {}),
+        ...(typeof item.output === "string" ? { output: item.output } : {}),
       },
     ];
   });
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+}
+
+function normalizeUsage(value: unknown): DebugUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const usage = value as Record<string, unknown>;
+  const models = Array.isArray(usage.models)
+    ? usage.models.flatMap((row) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) {
+          return [];
+        }
+        const model = row as Record<string, unknown>;
+        return [
+          {
+            ...(typeof model.provider === "string" ? { provider: model.provider } : {}),
+            ...(typeof model.model === "string" ? { model: model.model } : {}),
+            calls: nonNegativeInteger(model.calls),
+            inputTokens: nonNegativeInteger(model.inputTokens),
+            outputTokens: nonNegativeInteger(model.outputTokens),
+            totalTokens: nonNegativeInteger(model.totalTokens),
+          },
+        ];
+      })
+    : [];
+  return {
+    calls: nonNegativeInteger(usage.calls),
+    inputTokens: nonNegativeInteger(usage.inputTokens),
+    outputTokens: nonNegativeInteger(usage.outputTokens),
+    cacheReadTokens: nonNegativeInteger(usage.cacheReadTokens),
+    cacheWriteTokens: nonNegativeInteger(usage.cacheWriteTokens),
+    totalTokens: nonNegativeInteger(usage.totalTokens),
+    models,
+  };
 }
 
 export async function runDebugTurn(
@@ -181,6 +243,7 @@ export async function runDebugTurn(
     throw new Error("本地测试服务未返回有效回答");
   }
   const value = payload as Record<string, unknown>;
+  const usage = normalizeUsage(value.usage);
   return {
     response: value.response as string,
     events: Array.isArray(value.events)
@@ -190,6 +253,7 @@ export async function runDebugTurn(
         )
       : [],
     trace: normalizeTrace(value.trace),
+    ...(usage ? { usage } : {}),
   };
 }
 

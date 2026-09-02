@@ -5,6 +5,7 @@ import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
 import {
+  collectLocalDebugUsage,
   createLocalDebugExecutor,
   createLocalDebugHttpHandler,
   createLocalDebugRunner,
@@ -172,6 +173,7 @@ export default definePluginEntry({
           skillLookup: debugSkillLookup,
           historyManager: debugHistoryManager,
           prepareHistory: prepareLocalDebugHistory,
+          collectUsage: collectLocalDebugUsage,
         }),
       );
       const handler = createLocalDebugHttpHandler({

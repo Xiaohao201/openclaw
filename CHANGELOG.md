@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng report intent: keep newspaper names, article references, and one-off special-report templates out of the periodic report generator while preserving explicit daily, weekly, and monthly report commands.
 - RabbitMQ/Suheng media intent: recognize media-first phrases such as “视频解析” and “短视频帮我分析” so `video_link_parse` and `video_understand` remain available when the media term precedes the requested action.
 - RabbitMQ/Suheng link-check intent: route dead-link, link-validity, and batch availability checks to the dedicated `link_batch_*` workflow instead of using `web_fetch` for each URL.
+- RabbitMQ/Suheng local debug: show sanitized tool inputs and results, resolved database Skill content, and per-turn input/output/cache token usage in the work-process panel.
 
 ## 2026.4.15
 

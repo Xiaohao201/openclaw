@@ -8,6 +8,7 @@ import {
   runDebugTurn,
   type DebugDatabaseSkill,
   type DebugTraceItem,
+  type DebugUsage,
 } from "./transport.js";
 
 type DebugView = "chat" | "skills";
@@ -42,6 +43,7 @@ export class SuhengRabbitMqDebugApp extends LitElement {
   @state() private skillsLoading = false;
   @state() private skillsStatus = "输入实际用户 ID 后读取该用户在数据库中的已启用 Skills。";
   @state() private trace: DebugTraceItem[] = [];
+  @state() private usage: DebugUsage | null = null;
 
   createRenderRoot() {
     return this;
@@ -56,6 +58,7 @@ export class SuhengRabbitMqDebugApp extends LitElement {
     this.sessionId = createSessionId();
     this.messages = [];
     this.trace = [];
+    this.usage = null;
     this.error = null;
     this.draft = "";
   }
@@ -93,6 +96,7 @@ export class SuhengRabbitMqDebugApp extends LitElement {
     this.error = null;
     this.sending = true;
     this.trace = [];
+    this.usage = null;
     this.messages = [...this.messages, chatMessage("user", message)];
     try {
       const result = await runDebugTurn({
@@ -104,6 +108,7 @@ export class SuhengRabbitMqDebugApp extends LitElement {
       });
       this.messages = [...this.messages, chatMessage("assistant", result.response)];
       this.trace = result.trace;
+      this.usage = result.usage ?? null;
     } catch (error) {
       this.error = error instanceof Error ? error.message : "本地测试请求失败";
     } finally {
@@ -161,6 +166,31 @@ export class SuhengRabbitMqDebugApp extends LitElement {
           </div>
           <span class="pill">${this.trace.length} 步</span>
         </div>
+        ${this.usage
+          ? html`<section class="suheng-debug-usage" aria-label="本轮 Token 用量">
+              <div class="suheng-debug-usage__head">
+                <strong>本轮 Token</strong>
+                <span>${this.usage.calls} 次模型调用</span>
+              </div>
+              <div class="suheng-debug-usage__grid">
+                <span>输入 <strong>${this.usage.inputTokens}</strong></span>
+                <span>输出 <strong>${this.usage.outputTokens}</strong></span>
+                <span>缓存读取 <strong>${this.usage.cacheReadTokens}</strong></span>
+                <span>缓存写入 <strong>${this.usage.cacheWriteTokens}</strong></span>
+                <span>总计 <strong>${this.usage.totalTokens}</strong></span>
+              </div>
+              ${this.usage.models.length
+                ? html`<small
+                    >${this.usage.models
+                      .map(
+                        (model) =>
+                          `${model.provider ?? "?"}/${model.model ?? "?"} · ${model.calls} 次 · 输入 ${model.inputTokens} · 输出 ${model.outputTokens} · 总计 ${model.totalTokens}`,
+                      )
+                      .join("；")}</small
+                  >`
+                : nothing}
+            </section>`
+          : nothing}
         ${this.sending
           ? html`<div class="suheng-debug-empty">夙衡正在处理请求…</div>`
           : this.trace.length === 0
@@ -185,6 +215,27 @@ export class SuhengRabbitMqDebugApp extends LitElement {
                             <summary>查看事实依据</summary>
                             ${item.narrative.map((line) => html`<p>${line}</p>`)}
                           </details>`
+                        : nothing}
+                      ${item.toolName || item.input || item.output
+                        ? html`<div class="suheng-debug-tool-result">
+                            ${item.toolName
+                              ? html`<div class="suheng-debug-tool-name">
+                                  <span>工具</span><code>${item.toolName}</code>
+                                </div>`
+                              : nothing}
+                            ${item.input
+                              ? html`<section>
+                                  <strong>调用参数</strong>
+                                  <pre>${item.input}</pre>
+                                </section>`
+                              : nothing}
+                            ${item.output
+                              ? html`<section>
+                                  <strong>返回结果</strong>
+                                  <pre>${item.output}</pre>
+                                </section>`
+                              : nothing}
+                          </div>`
                         : nothing}
                     </div>
                   </li>`,

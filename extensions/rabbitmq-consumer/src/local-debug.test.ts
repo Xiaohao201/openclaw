@@ -152,6 +152,69 @@ describe("rabbitmq local debug runner", () => {
     expect(JSON.stringify(trace)).not.toContain("secret");
   });
 
+  it("adds sanitized tool inputs, outputs, and resolved skill content to the debug trace", () => {
+    const trace = buildLocalDebugTrace(
+      [
+        {
+          type: "step",
+          phase: "end",
+          stepId: "feed-1",
+          label: "正在浏览舆情列表",
+          category: "query",
+          status: "completed",
+        },
+      ],
+      {
+        toolCalls: [
+          {
+            id: "feed-1",
+            name: "feed_list",
+            status: "completed",
+            input: { topicId: 553, apiKey: "live-secret" },
+            output: { success: true, total: 1, list: [{ title: "测试舆情" }] },
+          },
+        ],
+        skills: [
+          {
+            id: 7,
+            name: "数据库研判",
+            description: "来自 skills 表",
+            content: "先查询数据，password=live-secret",
+          },
+        ],
+      },
+    );
+
+    expect(trace[0]).toMatchObject({
+      id: "skills",
+      summary: "已读取数据库 Skills",
+      status: "completed",
+    });
+    expect(trace[0]?.output).toContain("数据库研判");
+    expect(trace[1]).toMatchObject({ id: "feed-1", toolName: "feed_list" });
+    expect(trace[1]?.input).toContain('"topicId": 553');
+    expect(trace[1]?.input).toContain("[REDACTED]");
+    expect(trace[1]?.output).toContain("测试舆情");
+    expect(JSON.stringify(trace)).not.toContain("live-secret");
+  });
+
+  it("labels completed tools that have no arguments or structured result", () => {
+    const trace = buildLocalDebugTrace([], {
+      toolCalls: [
+        {
+          id: "empty-1",
+          name: "session_status",
+          status: "completed",
+        },
+      ],
+    });
+
+    expect(trace[0]).toMatchObject({
+      input: "（无调用参数）",
+      output: "（工具已完成，但没有返回内容）",
+    });
+  });
+
   it("keeps only actual tool work instead of adding a synthetic reasoning record", () => {
     const trace = buildLocalDebugTrace(
       [
@@ -420,6 +483,82 @@ describe("rabbitmq local debug runner", () => {
     expect(result.trace.some((item) => item.id.startsWith("progress-"))).toBe(false);
   });
 
+  it("captures the current run's raw tool input and result for local debugging", async () => {
+    let emitAgentEvent: ((event: Record<string, unknown>) => void) | undefined;
+    const observedRuntime = {
+      events: {
+        onAgentEvent: (listener: (event: Record<string, unknown>) => void) => {
+          emitAgentEvent = listener;
+          return () => {};
+        },
+      },
+      subagent: {
+        run: vi.fn(async () => ({ runId: "debug-run-1" })),
+      },
+    } as unknown as PluginRuntime;
+    const runPipeline = vi.fn<LocalDebugRunPipeline>(async ({ chatMsg, runtime }) => {
+      runtime.events.onAgentEvent(() => {});
+      emitAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "start",
+          toolCallId: "foreign-tool",
+          name: "web_fetch",
+          args: { url: "https://unrelated.example" },
+        },
+      });
+      await runtime.subagent.run({
+        sessionKey: `agent:rabbitmq-${chatMsg.userId}:rabbitmq:${chatMsg.userId}:${chatMsg.sessionId}`,
+        message: chatMsg.message,
+        deliver: false,
+      });
+      emitAgentEvent?.({
+        runId: "debug-run-1",
+        stream: "tool",
+        data: {
+          phase: "start",
+          toolCallId: "tool-1",
+          name: "feed_query",
+          args: { limit: 10 },
+        },
+      });
+      emitAgentEvent?.({
+        runId: "debug-run-1",
+        stream: "tool",
+        data: {
+          phase: "end",
+          toolCallId: "tool-1",
+          name: "feed_query",
+          result: { success: true, total: 3 },
+        },
+      });
+      return "查询完成";
+    });
+    const run = createLocalDebugRunner({
+      runtime: observedRuntime,
+      config: {},
+      logger,
+      runPipeline,
+    });
+
+    const result = await run({
+      id: 102,
+      message: "查询数据",
+      session_id: "tool-chat",
+      user_id: "42",
+    });
+
+    expect(result.trace).toEqual([
+      expect.objectContaining({
+        id: "tool-1",
+        toolName: "feed_query",
+        input: expect.stringContaining('"limit": 10'),
+        output: expect.stringContaining('"total": 3'),
+      }),
+    ]);
+    expect(JSON.stringify(result.trace)).not.toContain("unrelated.example");
+  });
+
   it("rejects malformed RabbitMQ envelopes without running the model", async () => {
     const runPipeline = vi.fn<LocalDebugRunPipeline>();
     const run = createLocalDebugRunner({ runtime, config: {}, logger, runPipeline });
@@ -534,6 +673,50 @@ describe("rabbitmq local debug runner", () => {
     });
 
     expect(runPipeline).toHaveBeenCalledOnce();
+  });
+
+  it("returns the collected model token usage for the debug turn", async () => {
+    const collectUsage = vi.fn(async () => ({
+      calls: 2,
+      inputTokens: 128,
+      outputTokens: 32,
+      cacheReadTokens: 16,
+      cacheWriteTokens: 4,
+      totalTokens: 180,
+      models: [
+        {
+          provider: "openai",
+          model: "GPT5.4",
+          calls: 2,
+          inputTokens: 128,
+          outputTokens: 32,
+          totalTokens: 160,
+        },
+      ],
+    }));
+    const runPipeline = vi.fn<LocalDebugRunPipeline>(async () => "已完成撰写");
+    const run = createLocalDebugRunner({
+      runtime,
+      config: {},
+      logger,
+      runPipeline,
+      collectUsage,
+    });
+
+    const result = await run({
+      id: 303,
+      message: "撰写分析",
+      session_id: "usage-chat",
+      user_id: "42",
+    });
+
+    expect(collectUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "rabbitmq-42",
+        sessionKey: "agent:rabbitmq-42:rabbitmq:42:usage-chat",
+      }),
+    );
+    expect(result.usage).toMatchObject({ inputTokens: 128, outputTokens: 32, totalTokens: 180 });
   });
 });
 

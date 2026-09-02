@@ -1636,11 +1636,13 @@ describe("processChatMessage", () => {
       sessionMessages: [{ role: "assistant", content: "ok" }],
     });
     const { historyManager } = createHistoryManagerMock();
-    const resolveMany = vi.fn(async () => [
+    const resolvedSkills = [
       { id: 3, name: "竞品负面过滤器", content: "只保留竞品相关的负面舆情", description: "过滤器" },
       { id: 5, name: "口径校准", content: "统一称谓为“本行”", description: null },
-    ]);
+    ];
+    const resolveMany = vi.fn(async () => resolvedSkills);
     const skillLookup = { resolveMany } as unknown as SkillLookup;
+    const onSkillsResolved = vi.fn();
 
     const chatMsg: ChatMessage = { ...createChatMessage(), skillIds: [3, 5] };
     const result = await processChatMessage(
@@ -1655,6 +1657,9 @@ describe("processChatMessage", () => {
       undefined,
       undefined,
       skillLookup,
+      undefined,
+      undefined,
+      { onSkillsResolved },
     );
 
     expect(resolveMany).toHaveBeenCalledWith([3, 5], USER_ID, logger);
@@ -1670,6 +1675,7 @@ describe("processChatMessage", () => {
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(skillIdx).toBeGreaterThan(userIdx);
     expect(capturedToolsAllow).toBeUndefined();
+    expect(onSkillsResolved).toHaveBeenCalledWith(resolvedSkills);
   });
 
   it("runs with only the selected bundled skill and ignores custom skill ids", async () => {
