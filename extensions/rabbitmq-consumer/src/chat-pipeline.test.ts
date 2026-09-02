@@ -617,6 +617,32 @@ describe("processChatMessage", () => {
     expect(updateResponse).toHaveBeenCalledWith(1, "full canonical answer");
   });
 
+  it("persists Chinese prose with paired full-width quotation marks", async () => {
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      sessionMessages: [
+        {
+          role: "assistant",
+          content: '弱势群体叙事自带燃点，"残疾夫妻""脑瘫女孩住桥洞两年"。',
+        },
+      ],
+    });
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    const expected = "弱势群体叙事自带燃点，“残疾夫妻”“脑瘫女孩住桥洞两年”。";
+    expect(result).toBe(expected);
+    expect(updateResponse).toHaveBeenCalledWith(1, expected);
+  });
+
   it("extracts text from array-form (block) assistant content without throwing", async () => {
     // Regression: tool-using sessions return content as content blocks, not a
     // string. The pipeline used to assign the raw array to fullResponse, which

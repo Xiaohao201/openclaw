@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng link-check intent: route dead-link, link-validity, and batch availability checks to the dedicated `link_batch_*` workflow instead of using `web_fetch` for each URL.
 - RabbitMQ/Suheng local debug: show sanitized tool inputs and results, resolved database Skill content, and per-turn input/output/cache token usage in the work-process panel.
 - Windows/exec: default Python child-process stdio to UTF-8 when no explicit `PYTHONIOENCODING` is configured so Chinese paths and analysis output are not decoded as mojibake.
+- RabbitMQ/Suheng typography: render paired straight quotes as Chinese quotation marks in live replies and generated reports, including copied and downloaded content, while preserving code, structured data, HTML attributes, and Markdown links.
 
 ## 2026.4.15
 

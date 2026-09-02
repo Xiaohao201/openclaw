@@ -26,7 +26,7 @@ import { classifyReportIntent } from "./report-intent-llm.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
-import { sanitizeInternalRefs } from "./sanitize-output.js";
+import { normalizeChineseProseQuotes, sanitizeInternalRefs } from "./sanitize-output.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
@@ -1304,7 +1304,9 @@ export async function processChatMessage(
       // Then turn `MEDIA:<url>` attachment directives into inline markdown: this
       // channel has no attachment surface, so an unconverted directive reaches
       // the customer as literal text and the image is never delivered.
-      const safeResponse = mediaLinesToMarkdown(sanitizeInternalRefs(visibleResponse));
+      const safeResponse = mediaLinesToMarkdown(
+        normalizeChineseProseQuotes(sanitizeInternalRefs(visibleResponse)),
+      );
 
       // Step 7: Update history record
       await historyManager.updateResponse(chatMsg.historyId, safeResponse);
@@ -1401,7 +1403,9 @@ export async function processChatMessage(
           // plus inline [n] markers left dangling by the lost sources block.
           const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
           const safePartial = mediaLinesToMarkdown(
-            sanitizeInternalRefs(stripDanglingCitationMarkers(partialVisible, partialCites)),
+            normalizeChineseProseQuotes(
+              sanitizeInternalRefs(stripDanglingCitationMarkers(partialVisible, partialCites)),
+            ),
           );
           await historyManager.updateResponse(chatMsg.historyId, safePartial);
           logger.info(

@@ -1,6 +1,6 @@
 import { CITATIONS_MARKER } from "./citations.js";
 import { mediaLinesToMarkdown, pendingMediaLineLen } from "./media-lines.js";
-import { stripInternalRefs } from "./sanitize-output.js";
+import { normalizeChineseProseQuotes, stripInternalRefs } from "./sanitize-output.js";
 import type { ActivityStep } from "./tool-activity.js";
 import type { Citation, MercureConfig } from "./types.js";
 
@@ -257,34 +257,51 @@ export class StreamingMercurePusher {
    */
   async flush(opts?: { final?: boolean }): Promise<void> {
     this.cancelTimer();
-    let chunk = this.fullText.slice(this.pushedLen, this.visibleLimit());
+    const start = this.pushedLen;
+    let rawChunk = this.fullText.slice(start, this.visibleLimit());
     if (!opts?.final) {
       // Hold back a tail that is a partial prefix of the citations marker, so a
       // marker straddling two flush windows (`…\n<<<CIT` then `ATIONS>>>…`) is
       // never streamed as visible text before we can recognize and truncate it.
-      const partial = partialMarkerSuffixLen(chunk, CITATIONS_MARKER);
+      const partial = partialMarkerSuffixLen(rawChunk, CITATIONS_MARKER);
       if (partial > 0) {
-        chunk = chunk.slice(0, chunk.length - partial);
+        rawChunk = rawChunk.slice(0, rawChunk.length - partial);
       }
       // Hold back an unterminated code span (odd number of backticks) until its
       // closing backtick arrives, so an internal path straddling two windows is
       // not pushed half-open past the sanitizer.
-      if ((chunk.match(/`/g)?.length ?? 0) % 2 === 1) {
-        const lastTick = chunk.lastIndexOf("`");
-        chunk = chunk.slice(0, lastTick);
+      if ((rawChunk.match(/`/g)?.length ?? 0) % 2 === 1) {
+        const lastTick = rawChunk.lastIndexOf("`");
+        rawChunk = rawChunk.slice(0, lastTick);
       }
       // Hold back a `MEDIA:` line that has not reached its newline yet. The
       // directive can only be rewritten into markdown as a whole line, so
       // pushing it half-open strands a literal "MEDIA:https" in the customer's
       // view and the image never renders.
-      const pendingMedia = pendingMediaLineLen(chunk);
+      const pendingMedia = pendingMediaLineLen(rawChunk);
       if (pendingMedia > 0) {
-        chunk = chunk.slice(0, chunk.length - pendingMedia);
+        rawChunk = rawChunk.slice(0, rawChunk.length - pendingMedia);
+      }
+    }
+    let consumedLength = rawChunk.length;
+    const end = start + consumedLength;
+    let chunk = normalizeChineseProseQuotes(this.fullText.slice(0, end)).slice(start, end);
+    if (!opts?.final) {
+      // An opening quote may arrive in one LLM delta and its closing quote in a
+      // later one. Hold that incomplete tail so we can emit a paired “…” rather
+      // than leaking an immutable straight opening quote to the live frontend.
+      // Straight quotes on already-complete lines are safe technical content
+      // (for example JSON) and are released unchanged by the document normalizer.
+      const incompleteLineStart = chunk.lastIndexOf("\n") + 1;
+      const pendingQuote = chunk.indexOf('"', incompleteLineStart);
+      if (pendingQuote >= 0) {
+        chunk = chunk.slice(0, pendingQuote);
+        consumedLength = pendingQuote;
       }
     }
     // Advance by the RAW consumed length (not the sanitized length): stripped
     // internal refs were still part of the visible stream we've now consumed.
-    this.pushedLen += chunk.length;
+    this.pushedLen += consumedLength;
     // Duplicate check runs against the whole reply so far, not just this chunk:
     // the tool's `![](url)` and the model's `MEDIA:url` land in different windows.
     const safe = mediaLinesToMarkdown(stripInternalRefs(chunk), this.fullText);

@@ -14,6 +14,7 @@ import {
   type CollectedStats,
   type QueryPlan,
 } from "./query-plan.js";
+import { normalizeChineseProseQuotes } from "./sanitize-output.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import type { GeneratedReport, ReportPeriod } from "./types.js";
 
@@ -401,6 +402,8 @@ export class ReportGenerator {
       if (!generatedText) {
         throw new Error("No report content generated");
       }
+
+      generatedText = normalizeChineseProseQuotes(generatedText);
 
       // Extract title from first heading (any level)
       const titleMatch = generatedText.match(/^#{1,6}\s+(.+)/m);
