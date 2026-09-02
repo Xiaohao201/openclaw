@@ -51,6 +51,8 @@ Docs: https://docs.openclaw.ai
 - Agents/skills: inline bounded integer pagination in MySQL skill-library list queries so `skill_list` works with MySQL versions that reject prepared `LIMIT`/`OFFSET` parameters.
 - Agents/file sharing: reject agent bootstrap, memory, configuration, credential, session, private-key, and internal-directory files at the `file_share` execution boundary, including symlink and hard-link aliases, so model tool-selection mistakes cannot publish internal workspace state to OSS.
 - RabbitMQ/Suheng report intent: keep newspaper names, article references, and one-off special-report templates out of the periodic report generator while preserving explicit daily, weekly, and monthly report commands.
+- RabbitMQ/Suheng media intent: recognize media-first phrases such as “视频解析” and “短视频帮我分析” so `video_link_parse` and `video_understand` remain available when the media term precedes the requested action.
+- RabbitMQ/Suheng link-check intent: route dead-link, link-validity, and batch availability checks to the dedicated `link_batch_*` workflow instead of using `web_fetch` for each URL.
 
 ## 2026.4.15
 

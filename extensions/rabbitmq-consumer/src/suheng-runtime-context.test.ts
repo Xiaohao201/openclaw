@@ -20,4 +20,9 @@ describe("SUHENG_RUNTIME_SYSTEM_PROMPT", () => {
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("video_understand");
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("无需再次询问用户");
   });
+
+  it("routes dead-link batch requests to the dedicated async tool", () => {
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("link_batch_create");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("不要用 web_fetch 逐条代替");
+  });
 });

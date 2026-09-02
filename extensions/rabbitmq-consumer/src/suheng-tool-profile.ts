@@ -37,9 +37,6 @@ const COMPLAINT_TOOLS = [
   "infringe_profile_save",
   "letter_fetch",
   "letter_generate",
-  "link_batch_create",
-  "link_batch_list",
-  "link_batch_status",
   "opinion_content_create",
   "opinion_download_content",
   "opinion_download_list",
@@ -47,6 +44,8 @@ const COMPLAINT_TOOLS = [
   "read",
   "write",
 ] as const;
+
+const LINK_CHECK_TOOLS = ["link_batch_create", "link_batch_list", "link_batch_status"] as const;
 
 const SCHEDULE_TOOLS = [
   "schedule_create",
@@ -80,8 +79,15 @@ export type SuhengToolProfileOptions = {
 const REPORT_INTENT =
   /(?:报告|简报|快报|专报|日报|周报|月报|汇报材料|表格|图表|看板|可视化|Word|Excel|PDF|PPT|HTML|文件|文档)/iu;
 const COMPLAINT_INTENT = /(?:侵权|投诉|举报|维权|投诉函|投诉通知|主体档案|证件|盖章|下架|固证)/iu;
+const LINK_CHECK_INTENT_PATTERNS = [
+  /(?:失效|无效|死链|坏链).{0,8}(?:链接|网址|URL)/iu,
+  /(?:链接|网址|URL).{0,20}(?:失效|无效|有效|可用|可访问|正常访问|能否打开|是否正常)/iu,
+] as const;
 const SCHEDULE_INTENT = /(?:定时|计划任务|提醒|每天|每周|每月|定期|周期|几点|定时任务)/iu;
-const MEDIA_INTENT = /(?:生成|制作|解析|理解|分析).{0,16}(?:图片|海报|音乐|音频|视频|短视频)/iu;
+const MEDIA_INTENT_PATTERNS = [
+  /(?:生成|制作|解析|理解|分析).{0,16}(?:图片|海报|音乐|音频|视频|短视频)/iu,
+  /(?:图片|海报|音乐|音频|视频|短视频).{0,16}(?:生成|制作|解析|理解|分析)/iu,
+] as const;
 const EXTERNAL_HTTP_LINK = /https?:\/\/[^\s]+/iu;
 const LINK_EVIDENCE_INTENT = /(?:研判|分析|核查|核实|判断|评估|看看|查看|读取|理解)/iu;
 const SKILL_INTENT =
@@ -106,6 +112,7 @@ function addBuiltinSkillTools(target: Set<string>, builtinSkillName: string): bo
     case "infringement-judgment":
     case "institution-violation-judgment":
       addTools(target, COMPLAINT_TOOLS);
+      addTools(target, LINK_CHECK_TOOLS);
       return true;
     case "ai-collaboration-diagnostic":
       addTools(target, COLLABORATION_DIAGNOSTIC_TOOLS);
@@ -147,11 +154,15 @@ export function resolveSuhengToolsAllow(
   }
   if (COMPLAINT_INTENT.test(message)) {
     addTools(tools, COMPLAINT_TOOLS);
+    addTools(tools, LINK_CHECK_TOOLS);
+  }
+  if (LINK_CHECK_INTENT_PATTERNS.some((pattern) => pattern.test(message))) {
+    addTools(tools, LINK_CHECK_TOOLS);
   }
   if (SCHEDULE_INTENT.test(message)) {
     addTools(tools, SCHEDULE_TOOLS);
   }
-  if (MEDIA_INTENT.test(message)) {
+  if (MEDIA_INTENT_PATTERNS.some((pattern) => pattern.test(message))) {
     addTools(tools, MEDIA_TOOLS);
   }
   if (EXTERNAL_HTTP_LINK.test(message) && LINK_EVIDENCE_INTENT.test(message)) {
