@@ -1,12 +1,7 @@
 import mysql from "mysql2/promise";
 import type {
-<<<<<<< HEAD
   CollaborationHistoryQueryResult,
   ChatMessage,
-=======
-  ChatMessage,
-  CollaborationHistoryQueryResult,
->>>>>>> v2
   HistoryDbConfig,
   WriterDbConfig,
   HistoryRecord,
@@ -201,11 +196,7 @@ export class HistoryManager {
     values.push(limit + 1);
     const [rows] = await pool.execute<mysql.RowDataPacket[]>(
       `SELECT id, session_id, message, response, created_at
-<<<<<<< HEAD
-       FROM history_messages
-=======
        FROM ${this.tableSql}
->>>>>>> v2
        WHERE ${clauses.join(" AND ")}
        ORDER BY id DESC
        LIMIT ?`,
