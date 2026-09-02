@@ -1,4 +1,5 @@
 import type { PluginLogger } from "../api.js";
+import { normalizeChineseProseQuotes } from "./sanitize-output.js";
 import type { ActivityStep } from "./tool-activity.js";
 import type { MercureConfig } from "./types.js";
 
@@ -165,9 +166,9 @@ export class StreamingMercurePusher {
   private readonly topic: string;
   private readonly taskId: number;
   private readonly flushIntervalMs: number;
-  private buffer = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private fullText = "";
+  private pushedLen = 0;
   /** Chains flushes so pushes always reach the hub in order. */
   private pending: Promise<void> = Promise.resolve();
 
@@ -183,7 +184,6 @@ export class StreamingMercurePusher {
     if (!delta) {
       return;
     }
-    this.buffer += delta;
     this.fullText += delta;
     this.scheduleFlush();
   }
@@ -194,10 +194,21 @@ export class StreamingMercurePusher {
   }
 
   /** Flush any buffered text immediately (ordered after in-flight pushes). */
-  async flush(): Promise<void> {
+  async flush(opts?: { final?: boolean }): Promise<void> {
     this.cancelTimer();
-    const chunk = this.buffer;
-    this.buffer = "";
+    const start = this.pushedLen;
+    const end = this.fullText.length;
+    let chunk = normalizeChineseProseQuotes(this.fullText).slice(start, end);
+    if (!opts?.final) {
+      // Keep an incomplete quoted tail until the closing quote arrives in a
+      // later delta. Complete structured-data lines are released unchanged.
+      const incompleteLineStart = chunk.lastIndexOf("\n") + 1;
+      const pendingQuote = chunk.indexOf('"', incompleteLineStart);
+      if (pendingQuote >= 0) {
+        chunk = chunk.slice(0, pendingQuote);
+      }
+    }
+    this.pushedLen += chunk.length;
     this.pending = this.pending.then(async () => {
       if (chunk) {
         await this.pusher.pushReportText(this.topic, chunk, this.taskId);
@@ -208,14 +219,14 @@ export class StreamingMercurePusher {
 
   /** Signal that the stream is done: flush remaining buffer + push done event. */
   async finish(): Promise<void> {
-    await this.flush();
+    await this.flush({ final: true });
     await this.pusher.pushReportDone(this.topic, this.taskId);
   }
 
   /** Push an error after draining in-flight text pushes. */
   async pushError(error: string): Promise<void> {
     this.cancelTimer();
-    this.buffer = "";
+    this.pushedLen = this.fullText.length;
     await this.pending;
     await this.pusher.pushReportError(this.topic, error, this.taskId);
   }

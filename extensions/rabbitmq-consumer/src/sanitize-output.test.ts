@@ -1,5 +1,95 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeInternalRefs, stripInternalRefs } from "./sanitize-output.js";
+import {
+  normalizeChineseProseQuotes,
+  sanitizeInternalRefs,
+  stripInternalRefs,
+} from "./sanitize-output.js";
+
+describe("normalizeChineseProseQuotes", () => {
+  it("converts adjacent straight-quoted phrases to paired Chinese quotes", () => {
+    expect(
+      normalizeChineseProseQuotes(
+        '弱势群体叙事自带燃点，"残疾夫妻""脑瘫女孩住桥洞两年""城管扣车致贷款用光"。',
+      ),
+    ).toBe("弱势群体叙事自带燃点，“残疾夫妻”“脑瘫女孩住桥洞两年”“城管扣车致贷款用光”。");
+  });
+
+  it("leaves code, JSON, HTML attributes, and Markdown link destinations unchanged", () => {
+    const input = [
+      '正文中的"重点人群"需要关注。',
+      '`const label = "重点人群";`',
+      "```json",
+      '{"标题":"重点人群"}',
+      "```",
+      '<span title="重点人群">说明</span>',
+      '[查看详情](https://example.com "重点人群")',
+    ].join("\n");
+
+    expect(normalizeChineseProseQuotes(input)).toBe(
+      [
+        "正文中的“重点人群”需要关注。",
+        '`const label = "重点人群";`',
+        "```json",
+        '{"标题":"重点人群"}',
+        "```",
+        '<span title="重点人群">说明</span>',
+        '[查看详情](https://example.com "重点人群")',
+      ].join("\n"),
+    );
+  });
+
+  it("keeps unmatched and escaped straight quotes untouched", () => {
+    expect(normalizeChineseProseQuotes('未闭合"重点；转义\\"重点\\"。')).toBe(
+      '未闭合"重点；转义\\"重点\\"。',
+    );
+  });
+
+  it("handles nested link destinations, multi-backtick code, and tilde fences", () => {
+    const input = [
+      '链接[详情](https://example.com/a_(b) "标题")，正文"重点"。',
+      '代码 ``const label = "重点";``，正文"结论"。',
+      "~~~~md",
+      '围栏中的"原样内容"',
+      "~~~~",
+    ].join("\r\n");
+
+    expect(normalizeChineseProseQuotes(input)).toBe(
+      [
+        '链接[详情](https://example.com/a_(b) "标题")，正文“重点”。',
+        '代码 ``const label = "重点";``，正文“结论”。',
+        "~~~~md",
+        '围栏中的"原样内容"',
+        "~~~~",
+      ].join("\r\n"),
+    );
+  });
+
+  it("preserves structured lines and treats malformed markup as prose", () => {
+    const input = [
+      '{"标题":"重点"}',
+      '["重点"]',
+      '"标题": "重点"',
+      'title: "重点"',
+      'items: ["重点"]',
+      '未闭合链接](https://example.com/a_(b "标题"',
+      '<span title="重点"，正文"结论"',
+    ].join("\n");
+
+    expect(normalizeChineseProseQuotes(input)).toBe(
+      [
+        '{"标题":"重点"}',
+        '["重点"]',
+        '"标题": "重点"',
+        'title: "重点"',
+        'items: ["重点"]',
+        "未闭合链接](https://example.com/a_(b “标题”",
+        "<span title=“重点”，正文“结论”",
+      ].join("\n"),
+    );
+    expect(normalizeChineseProseQuotes("没有英文双引号")).toBe("没有英文双引号");
+    expect((normalizeChineseProseQuotes as (value: unknown) => string)(undefined)).toBe("");
+  });
+});
 
 describe("sanitizeInternalRefs", () => {
   it("removes a backticked workspace path together with its lead-in verb", () => {

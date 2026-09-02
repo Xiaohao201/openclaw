@@ -85,6 +85,17 @@ describe("ReportGenerator.generate report extraction", () => {
     expect(result.title).toBe("2026年第23周舆情周报");
   });
 
+  it("normalizes straight quotes in the persisted and downloadable report body", async () => {
+    const report = '# 风险研判\n\n弱势群体叙事自带燃点，"残疾夫妻""脑瘫女孩住桥洞两年"。';
+    const runtime = runtimeWith([{ role: "assistant", content: report }]);
+
+    const result = await new ReportGenerator(runtime).generate(baseOptions, logger);
+
+    expect(result.content).toBe(
+      "# 风险研判\n\n弱势群体叙事自带燃点，“残疾夫妻”“脑瘫女孩住桥洞两年”。",
+    );
+  });
+
   it("prefers the longest heading-bearing message over a short one", async () => {
     const longReport = `## 概述\n${"舆情数据。".repeat(40)}\n\n## 建议\n持续监测。`;
     const runtime = runtimeWith([

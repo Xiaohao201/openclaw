@@ -86,6 +86,33 @@ describe("StreamingMercurePusher push ordering", () => {
     expect(calls).toEqual(["text:第一段", "text:第二段", "done"]);
   });
 
+  it("streams paired Chinese quotes correctly when a pair spans flush windows", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 42, 80);
+    const drain = async () => {
+      while (resolvers.length) {
+        resolvers.shift()!();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    };
+
+    pusher.appendDelta('前文，"残疾夫');
+    await vi.advanceTimersByTimeAsync(80);
+    await drain();
+
+    pusher.appendDelta('妻""脑瘫女孩"。');
+    const finishPromise = pusher.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await drain();
+    await finishPromise;
+
+    expect(
+      calls
+        .filter((call) => call.startsWith("text:"))
+        .map((call) => call.slice("text:".length))
+        .join(""),
+    ).toBe("前文，“残疾夫妻”“脑瘫女孩”。");
+  });
+
   it("never streams an internal path split across two flush windows", async () => {
     const pusher = new StreamingMercurePusher(fakePusher, "user-1", 7, 80);
     const drain = async () => {
