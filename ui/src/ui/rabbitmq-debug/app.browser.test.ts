@@ -34,12 +34,33 @@ describe("Suheng RabbitMQ debug browser flow", () => {
             trace: [
               {
                 id: "step-1",
-                summary: "检索资料",
-                category: "search",
+                summary: "查询分析数据",
+                category: "query",
                 status: "completed",
                 narrative: ["读取了当前用户授权的数据。"],
+                toolName: "feed_query",
+                input: '{\n  "limit": 10\n}',
+                output: '{\n  "success": true,\n  "total": 3\n}',
               },
             ],
+            usage: {
+              calls: 1,
+              inputTokens: 128,
+              outputTokens: 32,
+              cacheReadTokens: 16,
+              cacheWriteTokens: 0,
+              totalTokens: 176,
+              models: [
+                {
+                  provider: "openai",
+                  model: "GPT5.4",
+                  calls: 1,
+                  inputTokens: 128,
+                  outputTokens: 32,
+                  totalTokens: 160,
+                },
+              ],
+            },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -76,7 +97,15 @@ describe("Suheng RabbitMQ debug browser flow", () => {
     app.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
 
     await vi.waitFor(() => expect(app.textContent).toContain("研判已完成"));
-    expect(app.textContent).toContain("检索资料");
+    expect(app.textContent).toContain("查询分析数据");
+    expect(app.textContent).toContain("输入 128");
+    expect(app.textContent).toContain("输出 32");
+    expect(app.textContent).toContain("缓存写入 0");
+    expect(app.textContent).toContain("GPT5.4 · 1 次 · 输入 128 · 输出 32 · 总计 160");
+    expect(app.textContent).toContain("调用参数");
+    expect(app.textContent).toContain('"limit": 10');
+    expect(app.textContent).toContain("返回结果");
+    expect(app.textContent).toContain('"total": 3');
     const runCall = fetchMock.mock.calls.find(([input]) => requestUrl(input).endsWith("/run"));
     const body = runCall?.[1]?.body;
     expect(typeof body).toBe("string");

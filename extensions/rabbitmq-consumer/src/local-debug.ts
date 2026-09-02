@@ -1,13 +1,25 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, PluginLogger, PluginRuntime } from "../api.js";
+import {
+  collectSessionTurnUsage,
+  hasSessionTurnUsage,
+  redactSensitiveText,
+  type OpenClawConfig,
+  type PluginLogger,
+  type PluginRuntime,
+} from "../api.js";
 import { processChatMessage } from "./chat-pipeline.js";
 import type { HistoryManager } from "./history-manager.js";
 import type { MercureEventPusher } from "./mercure-pusher.js";
 import { parseMessage } from "./message-handler.js";
 import { sanitizeInternalRefs } from "./sanitize-output.js";
-import type { SkillLookup, SkillSummary } from "./skill-lookup.js";
-import type { ActivityStep, StepCategory } from "./tool-activity.js";
+import type { ResolvedSkill, SkillLookup, SkillSummary } from "./skill-lookup.js";
+import {
+  resolveToolCategory,
+  resolveToolLabel,
+  type ActivityStep,
+  type StepCategory,
+} from "./tool-activity.js";
 import type { ChatMessage, Citation } from "./types.js";
 
 const DEBUG_ROOT = "/plugins/rabbitmq-consumer/debug";
@@ -26,6 +38,7 @@ export type LocalDebugRunResult = {
   response: string;
   events: LocalDebugEvent[];
   trace: LocalDebugTraceItem[];
+  usage?: LocalDebugUsage;
 };
 
 export type LocalDebugTraceItem = {
@@ -36,12 +49,49 @@ export type LocalDebugTraceItem = {
   durationMs?: number;
   repeatCount?: number;
   narrative: string[];
+  toolName?: string;
+  input?: string;
+  output?: string;
 };
 
 type LocalDebugTraceContext = {
   request?: string;
   response?: string;
+  toolCalls?: LocalDebugToolCall[];
+  skills?: ResolvedSkill[];
 };
+
+export type LocalDebugToolCall = {
+  id: string;
+  name: string;
+  status: "running" | "completed" | "failed";
+  input?: unknown;
+  output?: unknown;
+};
+
+export type LocalDebugUsage = {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  models: Array<{
+    provider?: string;
+    model?: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  }>;
+};
+
+export type LocalDebugUsageCollector = (params: {
+  sessionKey: string;
+  agentId: string;
+  sinceMs: number;
+  config: OpenClawConfig;
+}) => Promise<LocalDebugUsage | undefined>;
 
 type LocalHistoryManager = Pick<HistoryManager, "getRecord" | "updateResponse" | "updateMetadata">;
 type LocalPersistentHistoryManager = LocalHistoryManager & Pick<HistoryManager, "createRecord">;
@@ -54,6 +104,7 @@ export type LocalDebugRunPipeline = (params: {
   config: OpenClawConfig;
   logger: PluginLogger;
   skillLookup?: SkillLookup;
+  onSkillsResolved?: (skills: readonly ResolvedSkill[]) => void;
 }) => Promise<string>;
 
 type LocalDebugExecutionTask<T> = {
@@ -76,11 +127,99 @@ const TRACE_CATEGORIES = new Set<StepCategory>([
   "default",
 ]);
 
+const DEBUG_SECRET_KEY =
+  /(?:authorization|api[_-]?key|access[_-]?key|token|secret|password|passwd|cookie|credential|private[_-]?key|jwt)/iu;
+const DEBUG_SECRET_ASSIGNMENT =
+  /\b(password|passwd|api[_-]?key|access[_-]?key|token|secret|authorization|cookie|jwt)\s*[:=]\s*[^\s,;]+/giu;
+const DEBUG_MAX_DEPTH = 6;
+const DEBUG_MAX_ARRAY_ITEMS = 30;
+const DEBUG_MAX_OBJECT_KEYS = 60;
+const DEBUG_MAX_STRING_LENGTH = 2_000;
+const DEBUG_MAX_JSON_LENGTH = 16_000;
+
+function sanitizeDebugString(value: string): string {
+  const sanitized = sanitizeInternalRefs(redactSensitiveText(value))
+    .replace(DEBUG_SECRET_ASSIGNMENT, "$1=[REDACTED]")
+    .trim();
+  return sanitized.length > DEBUG_MAX_STRING_LENGTH
+    ? `${sanitized.slice(0, DEBUG_MAX_STRING_LENGTH)}…`
+    : sanitized;
+}
+
+function sanitizeDebugValue(
+  value: unknown,
+  depth = 0,
+  seen: WeakSet<object> = new WeakSet(),
+): unknown {
+  if (value === null || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : String(value);
+  }
+  if (typeof value === "string") {
+    return sanitizeDebugString(value);
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "undefined") {
+    return "undefined";
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  if (typeof value === "function") {
+    return value.name ? `[Function ${value.name}]` : "[Function]";
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  if (depth >= DEBUG_MAX_DEPTH) {
+    return "[Depth limit]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, DEBUG_MAX_ARRAY_ITEMS)
+      .map((item) => sanitizeDebugValue(item, depth + 1, seen));
+    if (value.length > DEBUG_MAX_ARRAY_ITEMS) {
+      items.push(`[${value.length - DEBUG_MAX_ARRAY_ITEMS} more items]`);
+    }
+    return items;
+  }
+  const result: Record<string, unknown> = {};
+  const entries = Object.entries(value).slice(0, DEBUG_MAX_OBJECT_KEYS);
+  for (const [key, child] of entries) {
+    result[key] = DEBUG_SECRET_KEY.test(key)
+      ? "[REDACTED]"
+      : sanitizeDebugValue(child, depth + 1, seen);
+  }
+  const keyCount = Object.keys(value).length;
+  if (keyCount > DEBUG_MAX_OBJECT_KEYS) {
+    result.__truncated__ = `${keyCount - DEBUG_MAX_OBJECT_KEYS} more keys`;
+  }
+  return result;
+}
+
+function formatDebugValue(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const formatted = JSON.stringify(sanitizeDebugValue(value), null, 2);
+  if (!formatted) {
+    return undefined;
+  }
+  return formatted.length > DEBUG_MAX_JSON_LENGTH
+    ? `${formatted.slice(0, DEBUG_MAX_JSON_LENGTH)}\n…[truncated]`
+    : formatted;
+}
+
 function safeTraceText(value: unknown, maxLength = 240): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const sanitized = sanitizeInternalRefs(value).replace(/\s+/g, " ").trim();
+  const sanitized = sanitizeDebugString(value).replace(/\s+/g, " ").trim();
   if (!sanitized) {
     return undefined;
   }
@@ -146,7 +285,13 @@ function collapseRepeatedTraceItems(trace: LocalDebugTraceItem[]): LocalDebugTra
       previous.category === item.category &&
       previous.status === item.status &&
       previous.narrative.length === 0 &&
-      item.narrative.length === 0
+      item.narrative.length === 0 &&
+      !previous.toolName &&
+      !item.toolName &&
+      !previous.input &&
+      !item.input &&
+      !previous.output &&
+      !item.output
     ) {
       previous.repeatCount = (previous.repeatCount ?? 1) + (item.repeatCount ?? 1);
       if (previous.durationMs !== undefined || item.durationMs !== undefined) {
@@ -161,7 +306,7 @@ function collapseRepeatedTraceItems(trace: LocalDebugTraceItem[]): LocalDebugTra
 
 export function buildLocalDebugTrace(
   events: LocalDebugEvent[],
-  _context?: LocalDebugTraceContext,
+  context?: LocalDebugTraceContext,
 ): LocalDebugTraceItem[] {
   const trace: LocalDebugTraceItem[] = [];
   const stepsById = new Map<string, LocalDebugTraceItem>();
@@ -271,6 +416,58 @@ export function buildLocalDebugTrace(
       item.narrative = ["这一步没有返回可用结果，详细错误已留在服务端日志中。"];
     }
   }
+
+  const itemsById = new Map(trace.map((item) => [item.id, item]));
+  for (const call of context?.toolCalls ?? []) {
+    const name = /^[a-z0-9_.:-]{1,128}$/iu.test(call.name) ? call.name : "unknown";
+    let item = itemsById.get(call.id);
+    if (!item) {
+      item = {
+        id: call.id,
+        summary: resolveToolLabel(name),
+        category: resolveToolCategory(name),
+        status: call.status,
+        narrative: [],
+      };
+      itemsById.set(call.id, item);
+      trace.push(item);
+    }
+    item.toolName = name;
+    item.status = call.status;
+    item.input = formatDebugValue(call.input) ?? "（无调用参数）";
+    item.output =
+      formatDebugValue(call.output) ??
+      (call.status === "running"
+        ? undefined
+        : call.status === "failed"
+          ? "（工具调用失败，未返回结构化结果）"
+          : "（工具已完成，但没有返回内容）");
+  }
+
+  const skills = context?.skills ?? [];
+  if (skills.length > 0) {
+    const skillNames = skills
+      .map((skill) => safeTraceText(skill.name, 80))
+      .filter((name): name is string => Boolean(name));
+    trace.unshift({
+      id: "skills",
+      summary: "已读取数据库 Skills",
+      category: "read",
+      status: "completed",
+      narrative: [
+        `成功加载 ${skills.length} 个数据库 Skill。`,
+        ...(skillNames.length > 0 ? [`已加载：${skillNames.join("、")}。`] : []),
+      ],
+      output: formatDebugValue(
+        skills.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          content: skill.content,
+        })),
+      ),
+    });
+  }
   return collapseRepeatedTraceItems(trace);
 }
 
@@ -364,6 +561,119 @@ function createMemoryHistory(chatMsg: ChatMessage): LocalHistoryManager {
   } as LocalHistoryManager;
 }
 
+type LocalDebugAgentEvent = Parameters<Parameters<PluginRuntime["events"]["onAgentEvent"]>[0]>[0];
+
+function debugToolCallId(data: Record<string, unknown>): string | undefined {
+  const value = data.toolCallId ?? data.itemId;
+  if (typeof value === "string" && value) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function recordDebugToolEvent(calls: LocalDebugToolCall[], event: LocalDebugAgentEvent): void {
+  if (event.stream !== "tool") {
+    return;
+  }
+  const data = event.data ?? {};
+  const id = debugToolCallId(data);
+  if (!id) {
+    return;
+  }
+  const phase = data.phase;
+  if (phase === "start") {
+    const name = typeof data.name === "string" ? data.name : "unknown";
+    calls.push({ id, name, status: "running", input: data.args });
+    return;
+  }
+  if (phase !== "end" && phase !== "result") {
+    return;
+  }
+  const existing = calls.findLast((call) => call.id === id);
+  if (!existing) {
+    const name = typeof data.name === "string" ? data.name : "unknown";
+    calls.push({
+      id,
+      name,
+      status: data.status === "failed" || data.isError === true ? "failed" : "completed",
+      output: data.result,
+    });
+    return;
+  }
+  existing.status = data.status === "failed" || data.isError === true ? "failed" : "completed";
+  existing.output = data.result;
+}
+
+function createObservedRuntime(params: {
+  runtime: PluginRuntime;
+  sessionKey: string;
+  toolCalls: LocalDebugToolCall[];
+}): PluginRuntime {
+  let currentRunId: string | undefined;
+  return {
+    ...params.runtime,
+    subagent: {
+      ...params.runtime.subagent,
+      run: async (args) => {
+        const result = await params.runtime.subagent.run(args);
+        if (args.sessionKey === params.sessionKey) {
+          currentRunId = result.runId;
+        }
+        return result;
+      },
+    },
+    events: {
+      ...params.runtime.events,
+      onAgentEvent: (listener) =>
+        params.runtime.events.onAgentEvent((event) => {
+          const matchesRun = currentRunId !== undefined && event.runId === currentRunId;
+          const matchesSession = event.sessionKey === params.sessionKey;
+          if (matchesRun || matchesSession) {
+            recordDebugToolEvent(params.toolCalls, event);
+          }
+          listener(event);
+        }),
+    },
+  } as PluginRuntime;
+}
+
+const LOCAL_USAGE_SETTLE_DELAY_MS = 400;
+
+export async function collectLocalDebugUsage(params: {
+  sessionKey: string;
+  agentId: string;
+  sinceMs: number;
+  config: OpenClawConfig;
+}): Promise<LocalDebugUsage | undefined> {
+  let usage = await collectSessionTurnUsage(params);
+  if (!hasSessionTurnUsage(usage)) {
+    await new Promise<void>((resolve) => setTimeout(resolve, LOCAL_USAGE_SETTLE_DELAY_MS));
+    usage = await collectSessionTurnUsage(params);
+  }
+  if (!hasSessionTurnUsage(usage)) {
+    return undefined;
+  }
+  return {
+    calls: usage.calls,
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    cacheReadTokens: usage.cacheRead,
+    cacheWriteTokens: usage.cacheWrite,
+    totalTokens: usage.totalTokens,
+    models: usage.models.map((model) => ({
+      ...(model.provider ? { provider: model.provider } : {}),
+      ...(model.model ? { model: model.model } : {}),
+      calls: model.calls,
+      inputTokens: model.input,
+      outputTokens: model.output,
+      totalTokens: model.totalTokens,
+    })),
+  };
+}
+
 const defaultRunPipeline: LocalDebugRunPipeline = async ({
   chatMsg,
   historyManager,
@@ -372,6 +682,7 @@ const defaultRunPipeline: LocalDebugRunPipeline = async ({
   config,
   logger,
   skillLookup,
+  onSkillsResolved,
 }) =>
   await processChatMessage(
     chatMsg,
@@ -387,7 +698,7 @@ const defaultRunPipeline: LocalDebugRunPipeline = async ({
     skillLookup,
     config,
     undefined,
-    { eventPusher },
+    { eventPusher, onSkillsResolved },
   );
 
 export function createLocalDebugRunner(params: {
@@ -398,6 +709,7 @@ export function createLocalDebugRunner(params: {
   skillLookup?: SkillLookup;
   historyManager?: LocalPersistentHistoryManager;
   prepareHistory?: () => Promise<void>;
+  collectUsage?: LocalDebugUsageCollector;
 }): (payload: unknown) => Promise<LocalDebugRunResult> {
   const runPipeline = params.runPipeline ?? defaultRunPipeline;
   return async (payload) => {
@@ -421,20 +733,47 @@ export function createLocalDebugRunner(params: {
       await params.historyManager.createRecord(chatMsg);
     }
 
+    const agentId = `rabbitmq-${chatMsg.userId}`;
+    const sessionKey = `agent:${agentId}:rabbitmq:${chatMsg.userId}:${chatMsg.sessionId}`;
+    const sinceMs = Date.now();
+    const toolCalls: LocalDebugToolCall[] = [];
+    let resolvedSkills: ResolvedSkill[] = [];
+    const observedRuntime = createObservedRuntime({
+      runtime: params.runtime,
+      sessionKey,
+      toolCalls,
+    });
     const { events, pusher } = createEventRecorder();
     const response = await runPipeline({
       chatMsg,
       historyManager,
       eventPusher: pusher,
-      runtime: params.runtime,
+      runtime: observedRuntime,
       config: params.config,
       logger: params.logger,
       skillLookup: params.skillLookup,
+      onSkillsResolved: (skills) => {
+        resolvedSkills = [...skills];
+      },
     });
+    let usage: LocalDebugUsage | undefined;
+    if (params.collectUsage) {
+      try {
+        usage = await params.collectUsage({ sessionKey, agentId, sinceMs, config: params.config });
+      } catch (error) {
+        params.logger.warn(`[RABBITMQ_LOCAL_DEBUG] Usage collection failed: ${String(error)}`);
+      }
+    }
     return {
       response,
       events,
-      trace: buildLocalDebugTrace(events, { request: chatMsg.message, response }),
+      trace: buildLocalDebugTrace(events, {
+        request: chatMsg.message,
+        response,
+        toolCalls,
+        skills: resolvedSkills,
+      }),
+      ...(usage ? { usage } : {}),
     };
   };
 }

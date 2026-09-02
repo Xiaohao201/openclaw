@@ -48,10 +48,37 @@ describe("RabbitMQ debug transport", () => {
   it("posts one debug turn through the existing loopback endpoint", async () => {
     const fetchImpl = vi.fn(
       async () =>
-        new Response(JSON.stringify({ response: "研判结果", events: [], trace: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({
+            response: "研判结果",
+            events: [],
+            trace: [
+              {
+                id: "tool-1",
+                summary: "正在查询分析数据",
+                category: "query",
+                status: "completed",
+                narrative: [],
+                toolName: "feed_query",
+                input: '{"limit": 10}',
+                output: '{"success": true, "total": 3}',
+              },
+            ],
+            usage: {
+              calls: 1,
+              inputTokens: 128,
+              outputTokens: 32,
+              cacheReadTokens: 16,
+              cacheWriteTokens: 0,
+              totalTokens: 176,
+              models: [],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
 
     await expect(
@@ -65,7 +92,17 @@ describe("RabbitMQ debug transport", () => {
         },
         fetchImpl,
       ),
-    ).resolves.toMatchObject({ response: "研判结果", trace: [] });
+    ).resolves.toMatchObject({
+      response: "研判结果",
+      trace: [
+        expect.objectContaining({
+          toolName: "feed_query",
+          input: '{"limit": 10}',
+          output: '{"success": true, "total": 3}',
+        }),
+      ],
+      usage: expect.objectContaining({ inputTokens: 128, outputTokens: 32, totalTokens: 176 }),
+    });
     expect(fetchImpl).toHaveBeenCalledWith(
       "/plugins/rabbitmq-consumer/debug/run",
       expect.objectContaining({

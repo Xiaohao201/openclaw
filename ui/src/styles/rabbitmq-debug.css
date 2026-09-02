@@ -237,6 +237,55 @@ suheng-rabbitmq-debug-app {
   text-align: center;
 }
 
+.suheng-debug-usage {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
+}
+
+.suheng-debug-usage__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.suheng-debug-usage__head strong {
+  font-size: 12px;
+}
+
+.suheng-debug-usage__head span,
+.suheng-debug-usage small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.suheng-debug-usage__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.suheng-debug-usage__grid span {
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--bg);
+  font-size: 10px;
+}
+
+.suheng-debug-usage__grid strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
 .suheng-debug-trace-list {
   display: grid;
   gap: 0;
@@ -306,6 +355,52 @@ suheng-rabbitmq-debug-app {
 .suheng-debug-trace-list details p {
   margin: 6px 0 0;
   line-height: 1.6;
+}
+
+.suheng-debug-tool-result {
+  display: grid;
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.suheng-debug-tool-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.suheng-debug-tool-name code {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.suheng-debug-tool-result section {
+  min-width: 0;
+}
+
+.suheng-debug-tool-result section > strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.suheng-debug-tool-result pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .suheng-debug-skills {

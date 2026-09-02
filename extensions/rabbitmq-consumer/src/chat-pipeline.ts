@@ -457,6 +457,8 @@ export type ChatTurnOptions = {
   turnTimeoutMs?: number;
   /** Local/debug-only event sink. Production callers default to the real Mercure client. */
   eventPusher?: MercureEventPusher;
+  /** Local-debug observation hook; receives only Skills already authorized for this user. */
+  onSkillsResolved?: (skills: readonly ResolvedSkill[]) => void;
 };
 
 /** Five-minute polling windows keep the Gateway RPC bounded without limiting the whole turn. */
@@ -701,6 +703,7 @@ export async function processChatMessage(
     let selectedSkills: ResolvedSkill[] = [];
     if (!chatMsg.builtinSkillName && chatMsg.skillIds?.length && skillLookup) {
       selectedSkills = await skillLookup.resolveMany(chatMsg.skillIds, userId, logger);
+      options?.onSkillsResolved?.(selectedSkills);
       if (selectedSkills.length) {
         logger.info(
           `[CHAT_PIPELINE] Injecting ${selectedSkills.length} active skill(s) for userId=${userId}: ` +
