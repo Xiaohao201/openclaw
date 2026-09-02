@@ -70,6 +70,7 @@ describe("video_link_parse tool", () => {
     expect(tool.description).toContain("web_fetch");
     expect(tool.description).toContain("无需询问用户");
     expect(tool.description).toContain("video_understand");
+    expect(tool.description).toContain("weixin.qq.com/sph/");
   });
 
   it("posts credentials in JSON instead of leaking them in the request URL", async () => {
@@ -124,6 +125,63 @@ describe("video_link_parse tool", () => {
     expect(jsonRequestBody(init).url).toBe("https://v.douyin.com/share-code/");
   });
 
+  it("expands WeChat Channels short links before calling the vendor", async () => {
+    const inputs = [
+      {
+        input: "weixin.qq.com/sph/AOj81Jolt2",
+        sourceUrl: "https://weixin.qq.com/sph/AOj81Jolt2",
+      },
+      {
+        input: "复制打开视频号 https://weixin.qq.com/sph/AOj81Jolt2?from=share 查看视频",
+        sourceUrl: "https://weixin.qq.com/sph/AOj81Jolt2?from=share",
+      },
+    ];
+    const resolvedUrl = "https://channels.weixin.qq.com/finder-preview/pages/sph?id=AOj81Jolt2";
+
+    for (const [index, testCase] of inputs.entries()) {
+      const fetchImpl = vi.fn<FetchStub>(async () =>
+        jsonResponse({ code: 200, data: { video_url: "https://cdn.example.com/video.mp4" } }),
+      );
+      const tool = createVideoLinkParseTool({ config: CONFIG, fetchImpl });
+
+      const result = await tool.execute?.(`wechat-short-${index}`, { url: testCase.input });
+      const request = jsonRequestBody(fetchImpl.mock.calls[0]?.[1]);
+      const payload = (result as { details: Record<string, unknown> }).details;
+
+      expect(request.url).toBe(resolvedUrl);
+      expect(payload.source_url).toBe(testCase.sourceUrl);
+      expect(payload.resolved_url).toBe(resolvedUrl);
+    }
+  });
+
+  it("keeps an expanded WeChat Channels URL unchanged", async () => {
+    const expandedUrl = "https://channels.weixin.qq.com/finder-preview/pages/sph?id=AOj81Jolt2";
+    const fetchImpl = vi.fn<FetchStub>(async () =>
+      jsonResponse({ code: 200, data: { video_url: "https://cdn.example.com/video.mp4" } }),
+    );
+    const tool = createVideoLinkParseTool({ config: CONFIG, fetchImpl });
+
+    const result = await tool.execute?.("wechat-expanded", { url: expandedUrl });
+    const request = jsonRequestBody(fetchImpl.mock.calls[0]?.[1]);
+    const payload = (result as { details: Record<string, unknown> }).details;
+
+    expect(request.url).toBe(expandedUrl);
+    expect(payload.source_url).toBe(expandedUrl);
+    expect(payload.resolved_url).toBe(expandedUrl);
+  });
+
+  it("rejects malformed WeChat Channels short-link paths", async () => {
+    const fetchImpl = vi.fn<FetchStub>();
+    const tool = createVideoLinkParseTool({ config: CONFIG, fetchImpl });
+
+    const result = await tool.execute?.("wechat-malformed", {
+      url: "https://weixin.qq.com/sph/AOj81Jolt2/extra",
+    });
+
+    expect((result as { details: { success: boolean } }).details.success).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("rejects local or non-http targets before calling the vendor", async () => {
     const fetchImpl = vi.fn<FetchStub>();
     const tool = createVideoLinkParseTool({ config: CONFIG, fetchImpl });
@@ -147,6 +205,10 @@ describe("video_link_parse tool", () => {
       "https://user:pass@example.com/private",
       "https://[invalid",
       "file:///etc/passwd",
+      "evilweixin.qq.com/sph/AOj81Jolt2",
+      "weixin.qq.com.evil/sph/AOj81Jolt2",
+      "weixin.qq.com/sph/AOj81Jolt2/extra",
+      "https://weixin.qq.com/sph/%2e%2e%2fprivate",
       42,
     ];
     for (const [index, url] of rejected.entries()) {
