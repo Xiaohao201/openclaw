@@ -28,6 +28,7 @@ const REPORT_TOOLS = [
 
 const COMPLAINT_TOOLS = [
   "complaint_submit",
+  "complaint_task_status",
   "crawl_refresh_create",
   "crawl_refresh_list",
   "crawl_refresh_status",
