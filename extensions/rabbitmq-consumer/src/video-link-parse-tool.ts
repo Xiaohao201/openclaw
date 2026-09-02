@@ -12,6 +12,10 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
+const WECHAT_CHANNEL_SHORT_HOSTS = new Set(["weixin.qq.com", "www.weixin.qq.com"]);
+const WECHAT_CHANNEL_SHORT_PATH = /^\/sph\/([A-Za-z0-9_-]{1,128})\/?$/u;
+const BARE_WECHAT_CHANNEL_SHORT_URL =
+  /(?:^|\[|[\s（(【：:])((?:www\.)?weixin\.qq\.com\/sph\/[A-Za-z0-9_-]{1,128}(?:\?[^\s<>"']*)?)(?=$|\]|[\s<>"'）)】,，。！？；：])/iu;
 
 const VideoLinkParseSchema = {
   type: "object",
@@ -21,7 +25,7 @@ const VideoLinkParseSchema = {
       type: "string",
       minLength: 1,
       description:
-        "短视频链接或包含一个短视频链接的分享文案。支持抖音、快手、小红书、视频号、B站、微博等平台。",
+        "短视频链接或包含一个短视频链接的分享文案。支持抖音、快手、小红书、视频号、B站、微博等平台；视频号 weixin.qq.com/sph/ 短链可省略协议。",
     },
   },
   required: ["url"],
@@ -133,12 +137,44 @@ function extractPublicVideoUrl(input: unknown): string | undefined {
   if (typeof input !== "string") {
     return undefined;
   }
-  const match = input.trim().match(/https?:\/\/[^\s<>"']+/iu);
-  const candidate = match?.[0]?.replace(/[\])}>,，。！？；：]+$/u, "");
+  const normalizedInput = input.trim();
+  const explicitMatch = normalizedInput.match(/https?:\/\/[^\s<>"']+/iu);
+  const bareWechatMatch = explicitMatch
+    ? undefined
+    : normalizedInput.match(BARE_WECHAT_CHANNEL_SHORT_URL);
+  const candidate = (explicitMatch?.[0] ?? bareWechatMatch?.[1])?.replace(
+    /[\])}>,，。！？；：]+$/u,
+    "",
+  );
   if (!candidate) {
     return undefined;
   }
-  return normalizePublicHttpUrl(candidate);
+  return normalizePublicHttpUrl(explicitMatch ? candidate : `https://${candidate}`);
+}
+
+type VideoTarget = {
+  sourceUrl: string;
+  resolvedUrl: string;
+};
+
+function resolveVideoTarget(sourceUrl: string): VideoTarget | undefined {
+  const parsed = new URL(sourceUrl);
+  if (!WECHAT_CHANNEL_SHORT_HOSTS.has(parsed.hostname.toLowerCase())) {
+    return { sourceUrl, resolvedUrl: sourceUrl };
+  }
+
+  const shortPath = parsed.pathname.match(WECHAT_CHANNEL_SHORT_PATH);
+  if (!shortPath) {
+    return undefined;
+  }
+
+  const shareId = shortPath[1];
+  if (!shareId) {
+    return undefined;
+  }
+  const expanded = new URL("https://channels.weixin.qq.com/finder-preview/pages/sph");
+  expanded.searchParams.set("id", shareId);
+  return { sourceUrl, resolvedUrl: expanded.href };
 }
 
 async function readBoundedText(response: Response): Promise<string> {
@@ -199,12 +235,14 @@ export function createVideoLinkParseTool(options: {
     label: "视频链接解析",
     description:
       "解析抖音、快手、小红书、视频号、B站、微博等平台的短视频分享链接，返回无水印视频直链、封面、标题、作者和图集。" +
+      "视频号 weixin.qq.com/sph/ 短链会自动展开为可解析的 channels.weixin.qq.com 地址。" +
       "收到平台分享链接且需要读取视频时先调用本工具；当 web_fetch 失败、只返回页面外壳或没有取得视频媒体时，应自主调用本工具兜底，无需询问用户。" +
       "如需理解视频口播、字幕或画面，再把返回的 video_url 交给 video_understand。",
     parameters: VideoLinkParseSchema,
     async execute(_toolCallId, rawParams) {
-      const targetUrl = extractPublicVideoUrl((rawParams as Record<string, unknown>).url);
-      if (!targetUrl) {
+      const sourceUrl = extractPublicVideoUrl((rawParams as Record<string, unknown>).url);
+      const target = sourceUrl ? resolveVideoTarget(sourceUrl) : undefined;
+      if (!target) {
         return safeFailure("请提供一个公开的 http(s) 短视频链接；不支持本地或私网地址。");
       }
       try {
@@ -214,7 +252,7 @@ export function createVideoLinkParseTool(options: {
           body: JSON.stringify({
             appId: options.config.appId,
             appKey: options.config.appKey,
-            url: targetUrl,
+            url: target.resolvedUrl,
           }),
           signal: AbortSignal.timeout(options.config.timeoutMs),
         });
@@ -254,7 +292,8 @@ export function createVideoLinkParseTool(options: {
 
         return jsonResult({
           success: true,
-          source_url: targetUrl,
+          source_url: target.sourceUrl,
+          resolved_url: target.resolvedUrl,
           video_url: videoUrl,
           cover_url: normalizePublicHttpUrl(data.cover_url),
           music_url: normalizePublicHttpUrl(data.music_url),
