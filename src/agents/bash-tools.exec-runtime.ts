@@ -9,6 +9,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
+import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -492,6 +493,19 @@ export function buildExecRuntimeErrorOutcome(params: {
   };
 }
 
+export function buildExecRuntimeEnv(
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  return markOpenClawExecEnv(
+    {
+      ...env,
+      OPENCLAW_SHELL: "exec",
+    },
+    platform,
+  );
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -517,10 +531,7 @@ export async function runExecProcess(opts: {
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
   const supervisor = getProcessSupervisor();
-  const shellRuntimeEnv: Record<string, string> = {
-    ...opts.env,
-    OPENCLAW_SHELL: "exec",
-  };
+  const shellRuntimeEnv = buildExecRuntimeEnv(opts.env);
 
   const session: ProcessSession = {
     id: sessionId,

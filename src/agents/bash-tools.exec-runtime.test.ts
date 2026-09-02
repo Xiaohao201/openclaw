@@ -12,6 +12,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
+let buildExecRuntimeEnv: typeof import("./bash-tools.exec-runtime.js").buildExecRuntimeEnv;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
@@ -20,11 +21,28 @@ let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExec
 beforeAll(async () => {
   ({
     buildExecExitOutcome,
+    buildExecRuntimeEnv,
     detectCursorKeyMode,
     emitExecSystemEvent,
     formatExecFailureReason,
     resolveExecTarget,
   } = await import("./bash-tools.exec-runtime.js"));
+});
+
+describe("buildExecRuntimeEnv", () => {
+  it("applies the Windows Python UTF-8 default to the real exec runtime environment", () => {
+    expect(buildExecRuntimeEnv({ PATH: "C:\\Windows" }, "win32")).toMatchObject({
+      PATH: "C:\\Windows",
+      OPENCLAW_SHELL: "exec",
+      PYTHONIOENCODING: "utf-8",
+    });
+  });
+
+  it("preserves a caller-provided Python output encoding", () => {
+    expect(buildExecRuntimeEnv({ PYTHONIOENCODING: "cp936" }, "win32").PYTHONIOENCODING).toBe(
+      "cp936",
+    );
+  });
 });
 
 describe("detectCursorKeyMode", () => {
