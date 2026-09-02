@@ -86,8 +86,8 @@ const LINK_CHECK_INTENT_PATTERNS = [
 ] as const;
 const SCHEDULE_INTENT = /(?:定时|计划任务|提醒|每天|每周|每月|定期|周期|几点|定时任务)/iu;
 const MEDIA_INTENT_PATTERNS = [
-  /(?:生成|制作|解析|理解|分析).{0,16}(?:图片|海报|音乐|音频|视频|短视频)/iu,
-  /(?:图片|海报|音乐|音频|视频|短视频).{0,16}(?:生成|制作|解析|理解|分析)/iu,
+  /(?:生成|制作|解析|理解|分析|下载|研判).{0,16}(?:图片|海报|音乐|音频|视频|短视频)/iu,
+  /(?:图片|海报|音乐|音频|视频|短视频).{0,16}(?:生成|制作|解析|理解|分析|下载|研判)/iu,
 ] as const;
 const EXTERNAL_HTTP_LINK = /https?:\/\/[^\s]+/iu;
 const LINK_EVIDENCE_INTENT = /(?:研判|分析|核查|核实|判断|评估|看看|查看|读取|理解)/iu;
