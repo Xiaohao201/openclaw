@@ -62,7 +62,6 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
-import { createContextCaptureLogger } from "../../context-capture-log.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -102,6 +101,7 @@ import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
+import { createSessionStepLogger } from "../../session-step-log.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
@@ -1128,7 +1128,7 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
-      const contextCaptureLogger = createContextCaptureLogger({
+      const sessionStepLogger = createSessionStepLogger({
         env: process.env,
         runId: params.runId,
         sessionId: activeSession.sessionId,
@@ -1136,9 +1136,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         modelApi: params.model.api,
-        // Sandbox-aware, resolved working folder for this turn — this is where
-        // the per-call context log lands (<workspace>/context-log.jsonl).
-        workspaceDir: effectiveWorkspace,
+        sessionFile: params.sessionFile,
       });
 
       // Rebuild each turn from the session's original stream base so prior-turn
@@ -1386,10 +1384,8 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
-      if (contextCaptureLogger) {
-        activeSession.agent.streamFn = contextCaptureLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
+      if (sessionStepLogger) {
+        activeSession.agent.streamFn = sessionStepLogger.wrapStreamFn(activeSession.agent.streamFn);
       }
       // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.
       // Recover the known "sensitive" stop reason here so a model refusal does not

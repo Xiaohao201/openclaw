@@ -24,7 +24,7 @@ export function getQueuedFileWriter(
     write: (line: string) => {
       queue = queue
         .then(() => ready)
-        .then(() => fs.appendFile(filePath, line, "utf8"))
+        .then(() => fs.appendFile(filePath, line, { encoding: "utf8", mode: 0o600 }))
         .catch(() => undefined);
     },
   };

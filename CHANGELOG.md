@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng collaboration diagnostics: restrict ordinary users to their own chat history, allow cross-user diagnosis only after server-side administrator verification, and align attachment-report file claims with confirmed export tool results.
 - RabbitMQ/local debugging: replace the inline simulator with a Control UI-backed debug mode while preserving the loopback session boundary, sourcing selectable Skills exclusively from each user's enabled MySQL `skills` rows, and providing a `pnpm suheng:debug` one-command launcher that builds missing artifacts automatically.
 - Leading v2/complaints: add a read-only `complaint_task_status` tool for authenticated complaint-task lists and per-link submission, failure, and takedown status so Suheng no longer infers queue progress without backend evidence.
+- Agents/session diagnostics: store each enabled deployment conversation as a dedicated JSONL file under its session directory, with one redacted input/output record per model step.
 
 ### Fixes
 
