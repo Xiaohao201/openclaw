@@ -22,10 +22,9 @@ import {
   type MercureEventPusher,
 } from "./mercure-pusher.js";
 import { extractMessageText } from "./message-text.js";
-import { classifyReportIntent } from "./report-intent-llm.js";
+import { computeDateScope, type ReportPeriod } from "./report-period.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
-import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { normalizeChineseProseQuotes, sanitizeInternalRefs } from "./sanitize-output.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
@@ -69,12 +68,13 @@ const MONITORING_TOPIC_INTENT_PATTERNS = [
   /(?:负面|正面|中性)(?:舆情|信息|新闻|报道|内容|帖子|文章|动态)?.{0,10}(?:多少|几条|数据|趋势|分布|声量|热度)/iu,
 ];
 
-function shouldInjectTopicContext(message: string, reportRequested: boolean): boolean {
+function shouldInjectTopicContext(message: string, templateReportPending: boolean): boolean {
   if (SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY.test(message)) {
     return false;
   }
   return (
-    reportRequested || MONITORING_TOPIC_INTENT_PATTERNS.some((pattern) => pattern.test(message))
+    templateReportPending ||
+    MONITORING_TOPIC_INTENT_PATTERNS.some((pattern) => pattern.test(message))
   );
 }
 
@@ -197,8 +197,7 @@ async function matchRequirementTopic(
 
 /**
  * Resolve the user's report topic (entity_auth: uid -> masterId/slaveId).
- * Shared by the explicit-template and keyword report paths so both agree on
- * which feed_topic the report covers. Returns zeros when no resolver/mapping.
+ * Returns zeros when no resolver/mapping exists for the explicit-template report path.
  *
  * When the requirement names a project ("...南方基金..."), the best match WITHIN
  * the user's authorized topics wins over the default primary topic — so a
@@ -279,8 +278,8 @@ interface EnqueueReportTaskArgs {
   useSlaveTopic: boolean;
   /** Master topic id from entity_auth; stored as download.topicId in slave mode. */
   masterId: number;
-  /** report_template.id the user picked explicitly (undefined for keyword reports). */
-  templateId: number | undefined;
+  /** report_template.id the user picked explicitly. */
+  templateId: number;
   chatMsg: ChatMessage;
   mercure: MercureEventPusher;
   mercureTopic: string;
@@ -377,26 +376,6 @@ async function enqueueReportTask(args: EnqueueReportTaskArgs): Promise<number> {
   }
 
   return taskId;
-}
-
-/**
- * Keyword report path (no template): enqueue the report and reply with a fixed
- * "正在生成中" ack, then unlock the frontend. The template path does NOT use this
- * — there the user is greeted by a streamed conversational reply (see Step 2.4).
- */
-async function createReportTaskAndRespond(
-  args: EnqueueReportTaskArgs & { historyManager: HistoryManager },
-): Promise<string> {
-  const { period, chatMsg, mercure, mercureTopic, historyManager } = args;
-
-  // Acknowledge before generation; the COUNT never blocks this path.
-  const reportResponse = `${period}报告已创建，正在生成中...`;
-  await mercure.pushText(mercureTopic, reportResponse, chatMsg.historyId);
-  await enqueueReportTask(args);
-  // Unlock the frontend; the report arrives later as a separate "report" event.
-  await mercure.pushDone(mercureTopic, chatMsg.historyId);
-  await historyManager.updateResponse(chatMsg.historyId, reportResponse);
-  return reportResponse;
 }
 
 /**
@@ -716,76 +695,6 @@ export async function processChatMessage(
       }
     }
 
-    // Step 2.5: Check if this is a report generation request (keyword path).
-    // Skipped when the user attached a file: an upload means "analyze THIS data"
-    // and the keyword (日报/月报/…) in the prompt must not divert the turn to the
-    // internal 智脑 feed tables (which would ignore the attachment and report
-    // "暂无数据"). The attachment content is already in `userMessage`.
-    //
-    // The detector is layered: an unmistakable ask ("出个周报") is acted on
-    // directly, a keyword that only appears as a citation inside pasted source
-    // material ("…时代周报、深圳新闻网等媒体…") is dropped outright, and the
-    // genuinely unclear middle is settled by a short, tool-less LLM
-    // classification. Anything the classifier cannot settle degrades to an
-    // ordinary chat turn — the user's actual question must survive.
-    const triggerResult = detectReportRequest(userMessage, logger);
-    let reportRequested = triggerResult.isReportRequest;
-    let reportPeriod = triggerResult.period;
-    const reportPathOpen = Boolean(downloadManager) && !chatMsg.hasAttachment;
-
-    if (triggerResult.verdict === "ambiguous" && reportPathOpen && runtime) {
-      const verdict = await classifyReportIntent({
-        instruction: triggerResult.instruction,
-        hintedPeriod: triggerResult.period,
-        subagent: runtime.subagent,
-        userId,
-        token: chatMsg.historyId,
-        logger,
-      });
-      if (verdict.isReport && verdict.period) {
-        reportRequested = true;
-        reportPeriod = verdict.period;
-      } else {
-        logger.info(
-          `[CHAT_PIPELINE] Ambiguous report keyword resolved as normal chat ` +
-            `(reason=${triggerResult.reason})`,
-        );
-      }
-    }
-
-    if (reportRequested && reportPeriod && reportPathOpen && downloadManager) {
-      logger.info(`[CHAT_PIPELINE] Report request detected: ${reportPeriod}`);
-
-      const topic = await resolveReportTopic({
-        userId,
-        topicResolver,
-        logger,
-        requirement: triggerResult.requirement,
-        runtime,
-        token: chatMsg.historyId,
-      });
-
-      return await createReportTaskAndRespond({
-        period: reportPeriod,
-        requirement: triggerResult.requirement,
-        // Recomputed rather than reused: the LLM arbiter may have corrected the
-        // period the deterministic layer guessed.
-        dateScope: computeDateScope(reportPeriod),
-        topicId: topic.topicId,
-        useSlaveTopic: topic.useSlaveTopic,
-        masterId: topic.masterId,
-        templateId: undefined,
-        chatMsg,
-        mercure,
-        mercureTopic,
-        historyManager,
-        downloadManager,
-        feedCounter,
-        reportTaskPublisher,
-        logger,
-      });
-    }
-
     // Resolve and inject project ownership only for turns that actually need
     // monitoring data. A default project is authorization metadata, not normal
     // conversation context; injecting it into every turn made the model bring
@@ -793,8 +702,7 @@ export async function processChatMessage(
     // failure degrades to the plain [userId:...] prefix instead of failing.
     let topicContext = "";
     const needsTopicContext =
-      !chatMsg.hasAttachment &&
-      shouldInjectTopicContext(userMessage, reportRequested || pendingReport !== null);
+      !chatMsg.hasAttachment && shouldInjectTopicContext(userMessage, pendingReport !== null);
     if (topicResolver && needsTopicContext) {
       try {
         const resolution = await topicResolver.getTopicIdsByUser(userId);
@@ -1182,18 +1090,9 @@ export async function processChatMessage(
         : "";
 
       // Does this attachment turn ask for a report (vs an ad-hoc question like
-      // "华东有多少条")? Template selection, the 日/周/月报 detector, or an
-      // explicit report word all count. Only then do we force full-report output
-      // — a plain question should still get a plain answer.
-      const wantsReport =
-        !!selectedTemplate ||
-        // `verdict !== "none"` (not `isReportRequest`): on an attachment turn the
-        // report path is closed, so the detector never gets upgraded past
-        // "ambiguous" — but a period keyword still means the user wants a report
-        // shaped answer. Citations inside pasted material score "none" and are
-        // correctly ignored here too.
-        triggerResult.verdict !== "none" ||
-        /报告|简报|研判|通报/.test(userMessage);
+      // "华东有多少条")? A selected template or an explicit report noun counts.
+      // Period keywords alone intentionally do not trigger report behavior.
+      const wantsReport = !!selectedTemplate || /报告|简报|研判|通报/.test(userMessage);
 
       // Report turns: force the COMPLETE report inline. This path streams the
       // report AS the chat reply and stores it in history_messages.response —
