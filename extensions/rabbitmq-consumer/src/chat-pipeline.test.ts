@@ -1313,54 +1313,52 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain(`[userId:${USER_ID}] hi there`);
   });
 
-  it("acknowledges a keyword report instantly without blocking on the feed count", async () => {
-    // Regression: the ack used to run a COUNT before replying, and returned an
-    // early "暂无数据" when it was 0. A slow COUNT on a high-volume topic blew
-    // the frontend's response deadline. The task must now be created and acked
-    // regardless of the count; the empty case is handled by the report-generator.
-    const createReportTask = vi.fn(async (_args: Record<string, unknown>) => 321);
-    const downloadManager = { createReportTask } as unknown as DownloadManager;
-    // A count that resolves to 0 (and even slowly) must NOT short-circuit the ack.
-    const countFeedData = vi.fn(async () => 0);
-    const feedCounter = { countFeedData } as unknown as never;
+  it.each(["日报", "周报", "月报", "今日舆情", "本周舆情", "本月舆情"])(
+    "treats %s as ordinary chat instead of creating a report task",
+    async (message) => {
+      const createReportTask = vi.fn(async (_args: Record<string, unknown>) => 321);
+      const downloadManager = { createReportTask } as unknown as DownloadManager;
+      const countFeedData = vi.fn(async () => 0);
+      const feedCounter = { countFeedData } as unknown as never;
 
-    let ranSubagent = false;
-    const runtime = createRuntimeMock({
-      workspaceDir,
-      onRun: () => {
-        ranSubagent = true;
-      },
-    });
-    const { historyManager, updateResponse } = createHistoryManagerMock();
-    const topicResolver = {
-      getTopicIdsByUser: async () => ({
-        topicId: 89,
-        useSlaveTopic: false,
-        masterId: 89,
-        topicName: "广汽本田",
-        topics: [{ topicId: 89, useSlaveTopic: false, masterId: 89, topicName: "广汽本田" }],
-      }),
-    } as unknown as TopicResolver;
+      let ranSubagent = false;
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {
+          ranSubagent = true;
+        },
+        sessionMessages: [{ role: "assistant", content: "normal answer" }],
+      });
+      const { historyManager, updateResponse } = createHistoryManagerMock();
+      const topicResolver = {
+        getTopicIdsByUser: async () => ({
+          topicId: 89,
+          useSlaveTopic: false,
+          masterId: 89,
+          topicName: "广汽本田",
+          topics: [{ topicId: 89, useSlaveTopic: false, masterId: 89, topicName: "广汽本田" }],
+        }),
+      } as unknown as TopicResolver;
 
-    const chatMsg: ChatMessage = { ...createChatMessage(), message: "给我生成一份广汽本田的月报" };
-    const result = await processChatMessage(
-      chatMsg,
-      historyManager,
-      mercureConfig,
-      runtime,
-      logger,
-      downloadManager,
-      topicResolver,
-      feedCounter,
-    );
+      const chatMsg: ChatMessage = { ...createChatMessage(), message };
+      const result = await processChatMessage(
+        chatMsg,
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        downloadManager,
+        topicResolver,
+        feedCounter,
+      );
 
-    expect(createReportTask).toHaveBeenCalledTimes(1);
-    expect(result).toBe("月报报告已创建，正在生成中...");
-    expect(result).not.toContain("暂无");
-    expect(updateResponse).toHaveBeenCalledWith(1, "月报报告已创建，正在生成中...");
-    // The keyword report path never runs the chat subagent.
-    expect(ranSubagent).toBe(false);
-  });
+      expect(createReportTask).not.toHaveBeenCalled();
+      expect(countFeedData).not.toHaveBeenCalled();
+      expect(ranSubagent).toBe(true);
+      expect(result).toBe("normal answer");
+      expect(updateResponse).toHaveBeenCalledWith(1, "normal answer");
+    },
+  );
 
   it("falls through to normal chat when the templateId does not resolve", async () => {
     // A deleted / disabled / foreign templateId must not silently drop the
@@ -1458,11 +1456,9 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain("你先学习一下这份舆情专报的模版");
   });
 
-  it("does NOT route a keyword report to the internal DB when a file is attached", async () => {
-    // Regression: uploading an Excel + a prompt containing "日报/月报" wrongly
-    // triggered the keyword path, which queried the 智脑 feed tables (ignoring
-    // the upload) and returned "暂无舆情数据". With an attachment the turn must
-    // run as a normal chat so the agent analyzes the spliced file content.
+  it("keeps a report-writing request with an attachment in normal chat", async () => {
+    // With an attachment the agent analyzes the supplied content directly and
+    // must not enqueue an internal-DB report task.
     const createReportTask = vi.fn(async () => 1);
     const downloadManager = { createReportTask } as unknown as DownloadManager;
     const countFeedData = vi.fn(async () => 0);

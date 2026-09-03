@@ -1,6 +1,6 @@
 import mysql from "mysql2/promise";
 import type { PluginLogger } from "../api.js";
-import type { ReportPeriod } from "./report-trigger.js";
+import type { ReportPeriod } from "./report-period.js";
 import type { HistoryDbConfig } from "./types.js";
 
 /** report_template.period as stored in the DB (English enum). */

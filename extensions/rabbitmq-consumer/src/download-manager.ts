@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import mysql from "mysql2/promise";
-import type { ReportPeriod } from "./report-trigger.js";
+import type { ReportPeriod } from "./report-period.js";
 import type { HistoryDbConfig, WriterDbConfig } from "./types.js";
 
 export interface DownloadRecord {
@@ -76,8 +76,7 @@ export class DownloadManager {
     agentId?: string;
     /**
      * report_template.id the user explicitly picked. Stored so the
-     * report-generator loads that exact template instead of waterfall-resolving
-     * one. Omitted for keyword-triggered reports (no explicit template).
+     * report-generator loads that exact template instead of waterfall-resolving one.
      */
     templateId?: number;
     /**
