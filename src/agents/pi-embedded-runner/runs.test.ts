@@ -63,6 +63,14 @@ describe("pi-embedded runner run registry", () => {
     expect(abortB).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts a session key when aborting one active run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-by-key", createRunHandle({ abort }), "agent:main:chat:user-1");
+
+    expect(abortEmbeddedPiRun("agent:main:chat:user-1")).toBe(true);
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for active runs to drain", async () => {
     vi.useFakeTimers();
     try {

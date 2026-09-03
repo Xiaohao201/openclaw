@@ -1,4 +1,4 @@
-import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
+import { abortAgentHarnessRun, definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { processChatMessage, resolveTurnTimeoutMs, warmupAgent } from "./src/chat-pipeline.js";
 import { createCollaborationHistoryToolFactory } from "./src/collaboration-history-tool.js";
 import { DownloadManager } from "./src/download-manager.js";
@@ -272,30 +272,36 @@ export default definePluginEntry({
         // Per-session serialization lives in the consumer (see message-consumer.ts):
         // with prefetch > 1 different windows run concurrently while messages
         // inside one conversation stay strictly ordered.
+        const messageConsumer = createMessageConsumer({
+          logger: ctx.logger,
+          runWarmup: (userId) => warmupAgent(userId, api.runtime, ctx.logger),
+          runChat: (chatMsg, abortSignal) =>
+            processChatMessage(
+              chatMsg,
+              historyRef!,
+              pluginConfig.mercure,
+              api.runtime,
+              ctx.logger,
+              downloadRef,
+              topicResolverRef,
+              feedCounterRef,
+              reportPublisherRef,
+              templateLookupRef,
+              skillLookupRef,
+              api.config,
+              usageCurrency,
+              {
+                turnTimeoutMs: pluginConfig.chat.turnTimeoutMs,
+                abortSignal,
+                abortRun: abortAgentHarnessRun,
+              },
+            ),
+        });
         const client = new RabbitMqClient(
           pluginConfig.rabbitmq,
           ctx.logger,
-          createMessageConsumer({
-            logger: ctx.logger,
-            runWarmup: (userId) => warmupAgent(userId, api.runtime, ctx.logger),
-            runChat: (chatMsg) =>
-              processChatMessage(
-                chatMsg,
-                historyRef!,
-                pluginConfig.mercure,
-                api.runtime,
-                ctx.logger,
-                downloadRef,
-                topicResolverRef,
-                feedCounterRef,
-                reportPublisherRef,
-                templateLookupRef,
-                skillLookupRef,
-                api.config,
-                usageCurrency,
-                { turnTimeoutMs: pluginConfig.chat.turnTimeoutMs },
-              ),
-          }),
+          messageConsumer,
+          messageConsumer,
         );
 
         clientRef = client;

@@ -169,4 +169,57 @@ describe("createMessageConsumer", () => {
     await expect(handler(msgOf(chatPayload(2, "1749")))).resolves.toBeUndefined();
     expect(runChat).toHaveBeenCalledTimes(2);
   });
+
+  it("delivers cancellation immediately while the matching chat is still running", async () => {
+    const started = makeGate();
+    const release = makeGate();
+    let observedSignal: AbortSignal | undefined;
+    const runChat = vi.fn(async (_chatMsg: unknown, signal: AbortSignal) => {
+      observedSignal = signal;
+      started.resolve();
+      await release.promise;
+    });
+    const handler = createMessageConsumer(makeDeps({ runChat: runChat as never }));
+
+    const chat = handler(msgOf(chatPayload(17, "42", "window-1")));
+    await started.promise;
+    await handler(msgOf({ type: "cancel", id: 17, user_id: "42", session_id: "window-1" }));
+
+    expect(observedSignal?.aborted).toBe(true);
+    release.resolve();
+    await chat;
+  });
+
+  it("does not cancel a turn when the user or session does not match", async () => {
+    const started = makeGate();
+    const release = makeGate();
+    let observedSignal: AbortSignal | undefined;
+    const runChat = vi.fn(async (_chatMsg: unknown, signal: AbortSignal) => {
+      observedSignal = signal;
+      started.resolve();
+      await release.promise;
+    });
+    const handler = createMessageConsumer(makeDeps({ runChat: runChat as never }));
+
+    const chat = handler(msgOf(chatPayload(17, "42", "window-1")));
+    await started.promise;
+    await handler(msgOf({ type: "cancel", id: 17, user_id: "other", session_id: "window-1" }));
+
+    expect(observedSignal?.aborted).toBe(false);
+    release.resolve();
+    await chat;
+  });
+
+  it("remembers a cancellation that reaches the control queue before the chat delivery", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const runChat = vi.fn(async (_chatMsg: unknown, signal: AbortSignal) => {
+      observedSignal = signal;
+    });
+    const handler = createMessageConsumer(makeDeps({ runChat: runChat as never }));
+
+    await handler(msgOf({ type: "cancel", id: 17, user_id: "42", session_id: "window-1" }));
+    await handler(msgOf(chatPayload(17, "42", "window-1")));
+
+    expect(observedSignal?.aborted).toBe(true);
+  });
 });

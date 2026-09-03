@@ -168,6 +168,45 @@ describe("processChatMessage", () => {
     expect(captured?.extraSystemPrompt).toContain("已知事实、分析推断、处置建议");
   });
 
+  it("aborts the active OpenClaw run when the chat turn is cancelled", async () => {
+    const controller = new AbortController();
+    const aborted: string[] = [];
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: () => controller.abort(),
+      sessionMessages: [{ role: "assistant", content: "should not be returned" }],
+    });
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        abortSignal: controller.signal,
+        abortRun: (sessionKey) => {
+          aborted.push(sessionKey);
+          return true;
+        },
+      },
+    );
+
+    expect(aborted).toEqual([SESSION_KEY]);
+    expect(updateResponse).toHaveBeenCalledWith(1, "输出已暂停。");
+    expect(result).toBe("输出已暂停。");
+  });
+
   it("exposes autonomous video evidence fallbacks for a link judgment turn", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({

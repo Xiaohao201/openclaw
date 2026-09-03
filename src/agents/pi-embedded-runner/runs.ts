@@ -136,19 +136,22 @@ export function abortEmbeddedPiRun(
   opts?: { mode?: "all" | "compacting" },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
-    const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+    // Plugin callers naturally know the canonical session key, while the
+    // embedded runner is indexed by its persisted session id. Accept either.
+    const resolvedSessionId = resolveActiveEmbeddedRunSessionId(sessionId) ?? sessionId;
+    const handle = ACTIVE_EMBEDDED_RUNS.get(resolvedSessionId);
     if (!handle) {
-      if (abortReplyRunBySessionId(sessionId)) {
+      if (abortReplyRunBySessionId(resolvedSessionId)) {
         return true;
       }
-      diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
+      diag.debug(`abort failed: sessionId=${resolvedSessionId} reason=no_active_run`);
       return false;
     }
-    diag.debug(`aborting run: sessionId=${sessionId}`);
+    diag.debug(`aborting run: sessionId=${resolvedSessionId}`);
     try {
       handle.abort();
     } catch (err) {
-      diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
+      diag.warn(`abort failed: sessionId=${resolvedSessionId} err=${String(err)}`);
       return false;
     }
     return true;

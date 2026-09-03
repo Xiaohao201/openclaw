@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseMessage } from "./message-handler.js";
+import { parseCancel, parseMessage } from "./message-handler.js";
 
 const buf = (obj: unknown): Buffer => Buffer.from(JSON.stringify(obj), "utf-8");
 
@@ -241,5 +241,28 @@ describe("parseMessage", () => {
     const msg = parseMessage(buf({ id: 5, message: "m", user_id: 42, attachments: [good, bad] }));
     expect(msg?.attachments).toHaveLength(1);
     expect(msg?.attachments?.[0].fileId).toBe("g");
+  });
+});
+
+describe("parseCancel", () => {
+  it("parses a stop envelope without treating it as a chat message", () => {
+    const raw = buf({
+      type: "cancel",
+      id: 17,
+      user_id: "42",
+      session_id: "window-1",
+    });
+
+    expect(parseCancel(raw)).toEqual({
+      historyId: 17,
+      userId: "42",
+      sessionId: "window-1",
+    });
+    expect(parseMessage(raw)).toBeNull();
+  });
+
+  it("rejects malformed stop envelopes", () => {
+    expect(parseCancel(buf({ type: "cancel", id: 0, user_id: "42" }))).toBeNull();
+    expect(parseCancel(buf({ type: "cancel", id: 17, user_id: "" }))).toBeNull();
   });
 });

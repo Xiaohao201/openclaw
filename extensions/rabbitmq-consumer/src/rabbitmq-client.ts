@@ -14,16 +14,24 @@ export class RabbitMqClient {
   private readonly config: RabbitMqConfig;
   private readonly logger: PluginLogger;
   private readonly handler: MessageHandler;
+  private readonly controlHandler?: MessageHandler;
 
   private connection: amqplib.ChannelModel | null = null;
   private channel: amqplib.Channel | null = null;
+  private controlChannel: amqplib.Channel | null = null;
   private consuming = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(config: RabbitMqConfig, logger: PluginLogger, handler: MessageHandler) {
+  constructor(
+    config: RabbitMqConfig,
+    logger: PluginLogger,
+    handler: MessageHandler,
+    controlHandler?: MessageHandler,
+  ) {
     this.config = config;
     this.logger = logger;
     this.handler = handler;
+    this.controlHandler = controlHandler;
   }
 
   /** Start consuming messages. Runs until stop() is called. */
@@ -58,21 +66,19 @@ export class RabbitMqClient {
         // We set up a "close" listener to trigger reconnection.
         if (this.channel) {
           await new Promise<void>((resolve) => {
-            const ch = this.channel;
-            if (!ch) {
-              resolve();
-              return;
+            for (const ch of [this.channel, this.controlChannel]) {
+              if (!ch) {
+                continue;
+              }
+              ch.once("close", () => {
+                this.logger.info("[RABBITMQ] Channel closed");
+                resolve();
+              });
+              ch.once("error", (err: Error) => {
+                this.logger.error(`[RABBITMQ] Channel error: ${err.message}`);
+                resolve();
+              });
             }
-
-            ch.on("close", () => {
-              this.logger.info("[RABBITMQ] Channel closed");
-              resolve();
-            });
-
-            ch.on("error", (err: Error) => {
-              this.logger.error(`[RABBITMQ] Channel error: ${err.message}`);
-              resolve();
-            });
           });
         }
       } catch (error) {
@@ -123,22 +129,47 @@ export class RabbitMqClient {
 
     this.logger.info(`[RABBITMQ] Started consuming from queue: ${this.config.queue}`);
 
-    await this.channel.consume(this.config.queue, async (msg) => {
+    await this.consumeChannel(this.channel, this.config.queue, this.handler);
+
+    if (this.controlHandler) {
+      this.controlChannel = await this.connection.createChannel();
+      const controlQueue = `${this.config.queue}.control`;
+      await this.controlChannel.assertQueue(controlQueue, { durable: true });
+      await this.controlChannel.prefetch(32);
+      await this.consumeChannel(this.controlChannel, controlQueue, this.controlHandler);
+      this.logger.info(`[RABBITMQ] Started consuming controls from queue: ${controlQueue}`);
+    }
+  }
+
+  private async consumeChannel(
+    channel: amqplib.Channel,
+    queue: string,
+    handler: MessageHandler,
+  ): Promise<void> {
+    await channel.consume(queue, async (msg) => {
       if (!msg) {
         return;
       }
 
       try {
-        await this.handler(msg);
-        this.channel?.ack(msg);
+        await handler(msg);
+        channel.ack(msg);
       } catch (error) {
         this.logger.error(`[RABBITMQ] Message handler error: ${String(error)}`);
-        this.channel?.nack(msg, false, false);
+        channel.nack(msg, false, false);
       }
     });
   }
 
   private async cleanupConnection(): Promise<void> {
+    try {
+      if (this.controlChannel) {
+        await this.controlChannel.close().catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+
     try {
       if (this.channel) {
         await this.channel.close().catch(() => {});
@@ -156,6 +187,7 @@ export class RabbitMqClient {
     }
 
     this.channel = null;
+    this.controlChannel = null;
     this.connection = null;
   }
 }
