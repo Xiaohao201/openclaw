@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AttachmentRef, ChatMessage } from "./types.js";
+import type { AttachmentRef, ChatCancelMessage, ChatMessage } from "./types.js";
 
 /**
  * Zod schema for validating incoming RabbitMQ messages.
@@ -101,6 +101,9 @@ function parseAttachments(raw: unknown): AttachmentRef[] | undefined {
 }
 
 const rabbitMqMessageSchema = z.object({
+  // Control envelopes are parsed before chat messages and must never degrade
+  // into an empty chat turn merely because they also carry an `id`.
+  type: z.never().optional(),
   id: z.number().int().positive(),
   body: z
     .object({
@@ -147,6 +150,13 @@ const warmupMessageSchema = z.object({
   session_id: z.string().optional(),
 });
 
+const cancelMessageSchema = z.object({
+  type: z.literal("cancel"),
+  id: z.number().int().positive(),
+  user_id: z.union([z.string().min(1), z.number()]),
+  session_id: z.string().min(1),
+});
+
 export type WarmupMessage = { userId: string; sessionId: string };
 
 /**
@@ -168,6 +178,25 @@ export function parseWarmup(rawBody: Buffer): WarmupMessage | null {
   return {
     userId: result.data.user_id != null ? String(result.data.user_id) : "",
     sessionId: result.data.session_id ?? "",
+  };
+}
+
+/** Parse a chat cancellation control envelope without accepting chat payloads. */
+export function parseCancel(rawBody: Buffer): ChatCancelMessage | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString("utf-8"));
+  } catch {
+    return null;
+  }
+  const result = cancelMessageSchema.safeParse(parsed);
+  if (!result.success) {
+    return null;
+  }
+  return {
+    historyId: result.data.id,
+    userId: String(result.data.user_id),
+    sessionId: result.data.session_id,
   };
 }
 

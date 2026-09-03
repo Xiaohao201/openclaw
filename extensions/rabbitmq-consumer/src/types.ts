@@ -141,6 +141,13 @@ export interface ChatMessage {
   builtinSkillName?: string;
 }
 
+/** Trusted control envelope used to stop one queued or running chat turn. */
+export interface ChatCancelMessage {
+  historyId: number;
+  sessionId: string;
+  userId: string;
+}
+
 /**
  * A single citation/footnote source attached to an assistant answer. Emitted to
  * the frontend so it can render inline `[n]` markers (hover/click → source card)

@@ -459,6 +459,10 @@ export type ChatTurnOptions = {
   eventPusher?: MercureEventPusher;
   /** Local-debug observation hook; receives only Skills already authorized for this user. */
   onSkillsResolved?: (skills: readonly ResolvedSkill[]) => void;
+  /** Stops this turn's embedded OpenClaw run when the web client cancels it. */
+  abortSignal?: AbortSignal;
+  /** Host abort seam, injected by the plugin entrypoint and tests. */
+  abortRun?: (sessionKey: string) => boolean | Promise<boolean>;
 };
 
 /** Five-minute polling windows keep the Gateway RPC bounded without limiting the whole turn. */
@@ -825,6 +829,13 @@ export async function processChatMessage(
     const agentId = `rabbitmq-${userId}`;
     const sessionKey = `agent:${agentId}:rabbitmq:${userId}:${sessionId}`;
 
+    if (options?.abortSignal?.aborted) {
+      const stopped = "输出已暂停。";
+      await historyManager.updateResponse(chatMsg.historyId, stopped);
+      await mercure.pushDone(mercureTopic, chatMsg.historyId);
+      return stopped;
+    }
+
     // Original attachments: copy the OSS-backed files into this agent's
     // workspace so the agent can read full tables and inspect evidence such as
     // stamped PDFs. Best-effort — failures degrade to the extracted text already
@@ -1011,6 +1022,18 @@ export async function processChatMessage(
     // isolating us from concurrent runs (report subagent, heartbeat, another
     // user's chat) whose runId and sessionKey both differ.
     let currentRunId: string | null = null;
+    let abortRunPromise: Promise<unknown> | null = null;
+    const abortActiveRun = () => {
+      if (!currentRunId || abortRunPromise || !options?.abortRun) {
+        return;
+      }
+      abortRunPromise = Promise.resolve(options.abortRun(sessionKey)).catch((error) => {
+        logger.warn(
+          `[CHAT_PIPELINE] Failed to abort subagent run ${currentRunId}: ${String(error)}`,
+        );
+      });
+    };
+    options?.abortSignal?.addEventListener("abort", abortActiveRun, { once: true });
     const unsubscribe = runtime.events.onAgentEvent((evt) => {
       if (evt.runId !== currentRunId && evt.sessionKey !== sessionKey) {
         return;
@@ -1229,6 +1252,9 @@ export async function processChatMessage(
       // Scope the event listener to this run now that we have its id. Tool and
       // assistant events fire during waitForRun below, after this assignment.
       currentRunId = runResult.runId;
+      if (options?.abortSignal?.aborted) {
+        abortActiveRun();
+      }
 
       // Step 5: Wait until the embedded run actually settles. agent.wait needs a
       // bounded RPC timeout, but an elapsed wait window only means "still
@@ -1241,6 +1267,21 @@ export async function processChatMessage(
           runId: runResult.runId,
           timeoutMs: turnTimeoutMs,
         });
+        if (options?.abortSignal?.aborted) {
+          abortActiveRun();
+          const pendingAbort = abortRunPromise;
+          if (pendingAbort) {
+            await pendingAbort;
+          }
+          const partialText = streamPusherCtx.streamPusher.getFullText().trim();
+          const stopped = partialText || "输出已暂停。";
+          await historyManager.updateResponse(chatMsg.historyId, stopped);
+          await persistTimeline("completed");
+          await persistUsage();
+          await streamPusherCtx.streamPusher.finish();
+          logger.info(`[CHAT_PIPELINE] Cancelled: historyId=${chatMsg.historyId}`);
+          return stopped;
+        }
         if (waitResult.status !== "timeout") {
           break;
         }
@@ -1382,6 +1423,7 @@ export async function processChatMessage(
 
       return safeResponse;
     } finally {
+      options?.abortSignal?.removeEventListener("abort", abortActiveRun);
       unsubscribe();
     }
   } catch (error) {

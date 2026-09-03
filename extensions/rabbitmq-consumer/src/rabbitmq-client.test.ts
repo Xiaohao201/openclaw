@@ -61,6 +61,32 @@ describe("RabbitMqClient connection resilience", () => {
 });
 
 describe("RabbitMqClient concurrency", () => {
+  it("consumes cancellation controls on an independent channel", async () => {
+    const conn = new FakeConnection();
+    const chatChannel = new FakeChannel();
+    const controlChannel = new FakeChannel();
+    conn.createChannel
+      .mockImplementationOnce(async () => chatChannel)
+      .mockImplementationOnce(async () => controlChannel);
+    mockConnect.mockResolvedValue(conn);
+    const controlHandler = vi.fn().mockResolvedValue(undefined);
+
+    const client = new RabbitMqClient(config, logger as never, vi.fn(), controlHandler);
+    void client.start();
+    await flush();
+
+    expect(controlChannel.assertQueue).toHaveBeenCalledWith("chat.control", { durable: true });
+    const consumeControl = controlChannel.consume.mock.calls[0]?.[1] as (
+      msg: unknown,
+    ) => Promise<void>;
+    const cancelMsg = { content: Buffer.from('{"type":"cancel"}') };
+    await consumeControl(cancelMsg);
+    expect(controlHandler).toHaveBeenCalledWith(cancelMsg);
+    expect(controlChannel.ack).toHaveBeenCalledWith(cancelMsg);
+
+    await client.stop();
+  });
+
   it("applies the configured prefetch to the channel", async () => {
     const conn = new FakeConnection();
     mockConnect.mockResolvedValue(conn);
