@@ -135,4 +135,65 @@ describe("RabbitMqClient concurrency", () => {
 
     await client.stop();
   });
+
+  it("does not nack or reject when the channel closes before a successful ack", async () => {
+    const conn = new FakeConnection();
+    const channelClosed = new Error("Channel closed");
+    conn.channel.ack.mockImplementation(() => {
+      throw channelClosed;
+    });
+    conn.channel.nack.mockImplementation(() => {
+      throw channelClosed;
+    });
+    mockConnect.mockResolvedValue(conn);
+
+    const client = new RabbitMqClient(
+      config,
+      logger as never,
+      vi.fn().mockResolvedValue(undefined),
+    );
+    void client.start();
+    await flush();
+
+    const consumeCb = conn.channel.consume.mock.calls[0]?.[1] as (msg: unknown) => Promise<void>;
+    const msg = { content: Buffer.from("completed") };
+
+    await expect(consumeCb(msg)).resolves.toBeUndefined();
+    expect(conn.channel.ack).toHaveBeenCalledWith(msg);
+    expect(conn.channel.nack).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to ack message: Error: Channel closed"),
+    );
+
+    await client.stop();
+  });
+
+  it("does not reject when nack races with a closed channel", async () => {
+    const conn = new FakeConnection();
+    conn.channel.nack.mockImplementation(() => {
+      throw new Error("Channel closed");
+    });
+    mockConnect.mockResolvedValue(conn);
+    const handlerError = new Error("handler failed");
+
+    const client = new RabbitMqClient(
+      config,
+      logger as never,
+      vi.fn().mockRejectedValue(handlerError),
+    );
+    void client.start();
+    await flush();
+
+    const consumeCb = conn.channel.consume.mock.calls[0]?.[1] as (msg: unknown) => Promise<void>;
+
+    await expect(consumeCb({ content: Buffer.from("failed") })).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("Message handler error: Error: handler failed"),
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to nack message: Error: Channel closed"),
+    );
+
+    await client.stop();
+  });
 });

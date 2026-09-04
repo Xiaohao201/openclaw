@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Windows/exec: default Python child-process stdio to UTF-8 when no explicit `PYTHONIOENCODING` is configured so Chinese paths and analysis output are not decoded as mojibake.
 - RabbitMQ/Suheng typography: render paired straight quotes as Chinese quotation marks in live replies and generated reports, including copied and downloaded content, while preserving code, structured data, HTML attributes, and Markdown links.
 - RabbitMQ/Suheng video links: expand allowlisted WeChat Channels `/sph/` short links, including scheme-less share text, before calling the configured video parser while retaining the original and resolved URLs for diagnostics.
+- RabbitMQ/consumer: contain `ack` and `nack` failures when a channel closes during message processing so cancellation and reconnect races no longer terminate the OpenClaw process.
 
 ## 2026.4.15
 
