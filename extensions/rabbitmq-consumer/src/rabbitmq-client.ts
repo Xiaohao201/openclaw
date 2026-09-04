@@ -153,12 +153,33 @@ export class RabbitMqClient {
 
       try {
         await handler(msg);
-        channel.ack(msg);
       } catch (error) {
         this.logger.error(`[RABBITMQ] Message handler error: ${String(error)}`);
+        this.settleMessage(channel, msg, "nack");
+        return;
+      }
+
+      this.settleMessage(channel, msg, "ack");
+    });
+  }
+
+  private settleMessage(
+    channel: amqplib.Channel,
+    msg: amqplib.ConsumeMessage,
+    action: "ack" | "nack",
+  ): void {
+    try {
+      if (action === "ack") {
+        channel.ack(msg);
+      } else {
         channel.nack(msg, false, false);
       }
-    });
+    } catch (error) {
+      // A channel can close while an async handler is still running. Once
+      // closed, RabbitMQ owns redelivery of any unsettled delivery, so logging
+      // is sufficient and must not escape as an unhandled rejection.
+      this.logger.error(`[RABBITMQ] Failed to ${action} message: ${String(error)}`);
+    }
   }
 
   private async cleanupConnection(): Promise<void> {
