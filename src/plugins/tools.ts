@@ -1,5 +1,6 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
@@ -86,7 +87,12 @@ export function resolvePluginTools(params: {
     workspaceDir: params.context.workspaceDir,
   });
   const normalized = normalizePluginsConfig(context.config.plugins);
+  const report = (event: Record<string, unknown>) =>
+    context.logger.info(
+      `tool-availability ${JSON.stringify({ sessionKey: params.context.sessionKey, ...event })}`,
+    );
   if (!normalized.enabled) {
+    report({ stage: "plugins-disabled", available: [] });
     return [];
   }
 
@@ -99,8 +105,20 @@ export function resolvePluginTools(params: {
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   if (!registry) {
+    report({ stage: "plugin-registry-unavailable", available: [] });
     return [];
   }
+  report({
+    stage: "plugin-registry",
+    plugins: (registry.plugins ?? [])
+      .map((plugin) => ({
+        id: plugin.id,
+        status: plugin.status,
+        toolNames: plugin.toolNames.toSorted(),
+        reason: plugin.error ? redactSensitiveText(plugin.error).slice(0, 1000) : undefined,
+      }))
+      .toSorted((a, b) => a.id.localeCompare(b.id)),
+  });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
@@ -135,6 +153,11 @@ export function resolvePluginTools(params: {
       continue;
     }
     if (!resolved) {
+      report({
+        stage: "plugin-factory-empty",
+        pluginId: entry.pluginId,
+        declared: entry.names.toSorted(),
+      });
       if (entry.names.length > 0) {
         context.logger.debug?.(
           `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
@@ -152,6 +175,17 @@ export function resolvePluginTools(params: {
           }),
         )
       : listRaw;
+    if (list.length !== listRaw.length) {
+      const retained = new Set(list.map((tool) => tool.name));
+      report({
+        stage: "optional-plugin-tool-policy",
+        pluginId: entry.pluginId,
+        removed: listRaw
+          .map((tool) => tool.name)
+          .filter((name) => !retained.has(name))
+          .toSorted(),
+      });
+    }
     if (list.length === 0) {
       continue;
     }
@@ -180,5 +214,11 @@ export function resolvePluginTools(params: {
     }
   }
 
+  report({
+    stage: "plugin-tools-resolved",
+    available: tools
+      .map((tool) => ({ name: tool.name, pluginId: pluginToolMeta.get(tool)?.pluginId }))
+      .toSorted((a, b) => a.name.localeCompare(b.name)),
+  });
   return tools;
 }

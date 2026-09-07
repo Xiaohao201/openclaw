@@ -684,7 +684,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("channel=telegram");
-    expect(prompt).toContain("capabilities=inlinebuttons");
+    expect(prompt).toContain("channel_capabilities=inlinebuttons");
   });
 
   it("canonicalizes runtime provider capabilities before rendering", () => {
@@ -699,6 +699,34 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("channel=telegram");
     expect(prompt).toContain("capabilities=inlinebuttons,voice");
     expect(prompt).not.toContain("capabilities= InlineButtons ,voice,inlinebuttons,Voice");
+  });
+
+  it("does not confuse absent channel features with unavailable tools", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["browser"],
+      runtimeInfo: { channel: "webchat", capabilities: [] },
+    });
+    expect(prompt).toContain("channel_capabilities=none");
+    expect(prompt).toContain("not tool availability");
+    expect(prompt).toContain("- browser:");
+  });
+
+  it("does not advertise fallback browser tools when the runtime explicitly supplies none", () => {
+    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: [] });
+    expect(prompt).toContain("No tools are available in this run.");
+    expect(prompt).not.toContain("- browser:");
+    expect(prompt).not.toContain("This runtime enables:");
+  });
+
+  it("keeps the tool prompt stable across equivalent catalogs on follow-up turns", () => {
+    const build = (toolNames: string[]) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        runtimeInfo: { channel: "webchat", capabilities: [] },
+      });
+    expect(build(["browser", "zeta", "alpha"])).toBe(build(["alpha", "browser", "zeta"]));
   });
 
   it("includes agent id in runtime when provided", () => {

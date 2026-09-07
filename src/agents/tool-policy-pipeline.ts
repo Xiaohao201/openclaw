@@ -94,6 +94,12 @@ export function applyToolPolicyPipeline(params: {
   toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
+  onFilter?: (event: {
+    stage: string;
+    removed: string[];
+    allow?: string[];
+    deny?: string[];
+  }) => void;
 }): AnyAgentTool[] {
   const coreToolNames = new Set(
     params.tools
@@ -152,7 +158,20 @@ export function applyToolPolicyPipeline(params: {
     }
 
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    const before = filtered;
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
+    if (params.onFilter && filtered.length !== before.length) {
+      const retained = new Set(filtered.map((tool) => tool.name));
+      params.onFilter({
+        stage: step.label,
+        removed: before
+          .map((tool) => tool.name)
+          .filter((name) => !retained.has(name))
+          .toSorted(),
+        allow: expanded?.allow?.toSorted(),
+        deny: expanded?.deny?.toSorted(),
+      });
+    }
   }
   return filtered;
 }

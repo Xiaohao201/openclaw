@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
 
 describe("SUHENG_RUNTIME_SYSTEM_PROMPT", () => {
+  it("uses the actual browser tool and distinguishes channel capabilities", () => {
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("channel_capabilities");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("不代表工具权限");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("browser 的 status/profiles");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("不得推断是无头模式");
+  });
   it("separates facts, inferences, and recommendations", () => {
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("已知事实、分析推断、处置建议");
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("数据不足");

@@ -27,3 +27,33 @@ needed tools, not silently discard capabilities based on one message.
 Regression coverage lives in `src/chat-pipeline.test.ts`: multi-turn artifact
 creation, revisions, retries and skill follow-ups must preserve the runtime tool
 catalog. Core policy tests separately cover deny rules and account boundaries.
+
+## Diagnosing missing tools
+
+The Runtime field `channel_capabilities` describes messaging-channel features,
+such as inline buttons. `none` does not mean tools are absent. Older transcripts
+use the ambiguous field name `capabilities`; neither field is a tool allowlist.
+The prompt uses the current tool catalog, including an explicitly empty catalog.
+
+Gateway info logs prefixed with `tool-availability` record the plugin registry,
+resolved plugin tools, registered tools, removals at each policy stage, and the
+final model tool catalog. Correlate core events by `runId` and `sessionKey`;
+plugin events carry `sessionKey`. Tool names are sorted only in diagnostics, not
+reordered in the runtime. Arguments and schemas are not logged by this diagnostic.
+
+- `plugins-disabled`, `plugin-registry-unavailable`, and `plugin-registry` locate
+  plugin activation failures or disabled plugins.
+- `plugin-factory-empty` and `optional-plugin-tool-policy` explain tools omitted
+  during plugin tool resolution. Existing plugin error logs report factory errors
+  and name conflicts.
+- Policy events include the stage, removed tool names, and expanded allow/deny
+  rules. Owner, provider, and run-specific filters are recorded separately.
+- `model-tool-schemas` lists the final effective catalog, including client, MCP,
+  and LSP tools. `model-tools-unsupported` indicates a model without tool support.
+
+For browser incidents, first locate `browser` in these events. If available, the
+assistant should query `browser` status/profiles and use the authorized browser.
+Headless mode, login requirements, verification pages, or connection failures must
+be established from real browser results. A failed HTTP fetch alone establishes
+none of these. A conversation snapshot without tool schemas cannot establish which
+tools were actually offered to the model.

@@ -3,7 +3,8 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
-import { logWarn } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
+import { formatToolAvailability } from "../logging/tool-availability.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import {
@@ -667,10 +668,37 @@ export function createOpenClawCodingTools(options?: {
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const recordAvailability = (
+    stage: string,
+    available: AnyAgentTool[],
+    before?: AnyAgentTool[],
+  ) => {
+    if (before && before.length === available.length) {
+      return;
+    }
+    logInfo(
+      formatToolAvailability({
+        stage,
+        available: available.map((tool) => tool.name),
+        before: before?.map((tool) => tool.name),
+        runId: options?.runId,
+        sessionKey: options?.sessionKey,
+      }),
+    );
+  };
+  recordAvailability("registered", tools);
+  recordAvailability("runtime-preparation", toolsForMemoryFlush, tools);
+  recordAvailability("message-provider", toolsForMessageProvider, toolsForMemoryFlush);
+  recordAvailability("model-provider", toolsForModelProvider, toolsForMessageProvider);
+  recordAvailability("owner-policy", toolsByAuthorization, toolsForModelProvider);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
+    onFilter: (event) =>
+      logInfo(
+        `tool-availability ${JSON.stringify({ runId: options?.runId, sessionKey: options?.sessionKey, ...event })}`,
+      ),
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
