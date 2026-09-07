@@ -516,6 +516,156 @@ describe("runVideoUnderstand output", () => {
 });
 
 describe("video_understand tool", () => {
+  it.each(["disabled", "scope-deny", "no-attachment"] as const)(
+    "preserves runner skip reason %s",
+    async (outcome) => {
+      const { deps } = makeDeps({ probe: { durationSeconds: 600 } });
+      const original = deps.describeMedia!;
+      deps.describeMedia = async (params) => {
+        if (params.capability !== "audio") {
+          return original(params);
+        }
+        params.onDecision?.({ capability: "audio", outcome, attachments: [] });
+        return [];
+      };
+      const result = await runVideoUnderstand({
+        url: "https://example.com/video.mp4",
+        cfg: CFG,
+        deps,
+      });
+      expect(result.audio.status).toBe("skipped");
+      expect(result.audio.decision?.outcome).toBe(outcome);
+      expect(result.markdown).toContain(outcome);
+    },
+  );
+
+  it.each([false, true])("redacts provider errors and preserves recovery: %s", async (recover) => {
+    const secret = "sk-examplefakecredential123456789";
+    const { deps } = makeDeps({ probe: { durationSeconds: 600 } });
+    const original = deps.describeMedia!;
+    deps.describeMedia = async (params) => {
+      if (params.capability !== "audio") {
+        return original(params);
+      }
+      params.onDecision?.({
+        capability: "audio",
+        outcome: recover ? "success" : "failed",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              {
+                type: "provider",
+                provider: "example",
+                model: "asr",
+                outcome: "failed",
+                reason: `HTTP 401 Authorization: Bearer ${secret}`,
+              },
+            ],
+          },
+        ],
+      });
+      if (!recover) {
+        throw new Error(`HTTP 401 Authorization: Bearer ${secret}`);
+      }
+      return original(params);
+    };
+    const result = await runVideoUnderstand({
+      url: "https://example.com/video.mp4",
+      cfg: CFG,
+      deps,
+    });
+    expect(result.audio.status).toBe(recover ? "success" : "transcription-failed");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result.audio.decision?.attachments[0]?.attempts[0]?.reason).toContain("HTTP 401");
+  });
+
+  it.each(["failed", "skipped", "success"] as const)(
+    "reports audio runner outcome %s without claiming silence",
+    async (outcome) => {
+      const { deps } = makeDeps({
+        probe: { durationSeconds: 600 },
+        describe: async (params) => {
+          if (params.capability === "audio") {
+            params.onDecision?.({
+              capability: "audio",
+              outcome,
+              attachments: [
+                {
+                  attachmentIndex: 0,
+                  attempts:
+                    outcome === "skipped"
+                      ? []
+                      : [
+                          {
+                            type: "provider",
+                            provider: "example",
+                            outcome,
+                            reason: "transcription service unavailable",
+                          },
+                        ],
+                },
+              ],
+            });
+            return [];
+          }
+          return [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              text: "画面字幕",
+              provider: "example",
+            },
+          ];
+        },
+      });
+      const result = await runVideoUnderstand({
+        url: "https://example.com/video.mp4",
+        cfg: CFG,
+        deps,
+      });
+      expect(result.audio.status).toBe(
+        outcome === "failed"
+          ? "transcription-failed"
+          : outcome === "skipped"
+            ? "unavailable"
+            : "empty",
+      );
+      expect(result.audio.extraction).toBe("success");
+      expect(result.audio.decision?.outcome).toBe(outcome);
+      expect(result.markdown).toContain("不能据此判断视频没有人声");
+      expect(result.markdown).not.toContain("分析方式：音轨转写 + 关键帧");
+      expect(result.markdown).toContain("抽样关键帧");
+    },
+  );
+
+  it("distinguishes extraction failure from transcription failure", async () => {
+    const { deps, recorder } = makeDeps({ probe: { durationSeconds: 600 } });
+    deps.extractAudio = async () => {
+      throw new Error("ffmpeg failed");
+    };
+    const result = await runVideoUnderstand({
+      url: "https://example.com/video.mp4",
+      cfg: CFG,
+      deps,
+    });
+    expect(result.audio).toMatchObject({ status: "extraction-failed", extraction: "failed" });
+    expect(recorder.describeCalls.some((call) => call.capability === "audio")).toBe(false);
+  });
+
+  it("reports absent audio and successful transcription separately", async () => {
+    for (const hasAudio of [false, true]) {
+      const { deps, recorder } = makeDeps({ probe: { durationSeconds: 600, hasAudio } });
+      const result = await runVideoUnderstand({
+        url: "https://example.com/video.mp4",
+        cfg: CFG,
+        deps,
+      });
+      expect(result.audio.status).toBe(hasAudio ? "success" : "no-audio");
+      expect(recorder.audioExtracted).toBe(hasAudio ? 1 : 0);
+    }
+  });
+
   it("wraps the markdown as untrusted external content", async () => {
     const { deps } = makeDeps({ probe: { durationSeconds: 30 } });
     const tool = createVideoUnderstandTool({ config: CFG, deps });

@@ -6,10 +6,12 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { MediaUnderstandingConfig } from "../../config/types.tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   MediaAttachment,
   MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../../media-understanding/types.js";
 import { wrapExternalContent } from "../../security/external-content.js";
@@ -105,6 +107,18 @@ const VideoUnderstandSchema = Type.Object({
 
 export type VideoUnderstandRoute = "whole-video" | "decomposed";
 
+export type VideoAudioStatus = {
+  message: string;
+  decision?: MediaUnderstandingDecision;
+} & (
+  | { status: "no-audio" | "not-requested"; extraction: "not-attempted" }
+  | { status: "extraction-failed"; extraction: "failed" }
+  | {
+      status: "success" | "unavailable" | "skipped" | "empty" | "transcription-failed";
+      extraction: "success";
+    }
+);
+
 export type VideoUnderstandResult = {
   sourceUrl: string;
   resolvedVideoUrl: string;
@@ -115,6 +129,7 @@ export type VideoUnderstandResult = {
   route: VideoUnderstandRoute;
   description?: string;
   transcript?: string;
+  audio: VideoAudioStatus;
   frames: Array<{ at: string; description: string }>;
   snapshots: Array<{ at: string; path: string }>;
   markdown: string;
@@ -134,6 +149,7 @@ export type VideoUnderstandToolDeps = {
 };
 
 export type DescribeMediaParams = {
+  onDecision?: (decision: MediaUnderstandingDecision) => void;
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -178,22 +194,22 @@ async function describeLocalMedia(
     attachments: { mode: "all", maxAttachments: params.maxAttachments },
   };
   const ctx: MsgContext = {};
-  const result = await runCapability({
-    capability: params.capability,
-    cfg: params.cfg,
-    ctx,
-    attachments: cache,
-    media: attachments,
-    agentDir: params.agentDir,
-    providerRegistry: buildProviderRegistry(undefined, params.cfg),
-    config,
-  });
   try {
-    await cache.cleanup();
-  } catch {
-    // Temp cleanup is best-effort.
+    const result = await runCapability({
+      capability: params.capability,
+      cfg: params.cfg,
+      ctx,
+      attachments: cache,
+      media: attachments,
+      agentDir: params.agentDir,
+      providerRegistry: buildProviderRegistry(undefined, params.cfg),
+      config,
+    });
+    params.onDecision?.(result.decision);
+    return result.outputs;
+  } finally {
+    await cache.cleanup().catch(() => {});
   }
-  return result.outputs;
 }
 
 async function fetchPageHtmlDefault(url: string): Promise<string | null> {
@@ -296,8 +312,12 @@ function buildMarkdown(result: Omit<VideoUnderstandResult, "markdown">): string 
     lines.push(`- 分辨率：${result.resolution}`);
   }
   lines.push(
-    `- 分析方式：${result.route === "whole-video" ? "整片多模态理解" : "音轨转写 + 关键帧"}`,
+    `- 分析方式：${result.route === "whole-video" ? "整片多模态理解" : result.transcript ? "音轨转写 + 关键帧（抽样）" : "关键帧分析（未获得口播转写）"}`,
   );
+  lines.push(`- 音频处理：${result.audio.message}`);
+  if (result.route === "decomposed") {
+    lines.push(`- 画面覆盖：${result.frames.length} 张抽样关键帧完成分析，并非逐帧完整覆盖。`);
+  }
 
   if (result.description) {
     lines.push("", "### 内容描述", result.description);
@@ -389,18 +409,52 @@ async function analyzeAudioTrack(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   deps: VideoUnderstandToolDeps;
-}): Promise<{ transcript?: string; warnings: string[] }> {
-  const warnings: string[] = [];
+}): Promise<{ transcript?: string; audio: VideoAudioStatus; warnings: string[] }> {
+  const finish = (audio: VideoAudioStatus, transcript?: string) => ({
+    audio,
+    transcript,
+    warnings: audio.status === "success" ? [] : [audio.message],
+  });
   if (!params.hasAudio) {
-    return { warnings: ["该视频没有音轨，只能依据画面分析。"] };
+    return finish({
+      status: "no-audio",
+      extraction: "not-attempted",
+      message: "该视频没有音轨，只能依据画面分析。",
+    });
   }
-
+  let audioPath: string;
   try {
-    const audioPath = await params.deps.extractAudio({
+    audioPath = await params.deps.extractAudio({
       inputPath: params.filePath,
       workDir: params.workDir,
     });
+  } catch (error) {
+    return finish({
+      status: "extraction-failed",
+      extraction: "failed",
+      message: `音轨提取失败，尚未执行转写：${redactSensitiveText(formatErrorMessage(error))}`,
+    });
+  }
+  let decision: MediaUnderstandingDecision | undefined;
+  try {
     const outputs = await params.deps.describeMedia({
+      onDecision: (value) => {
+        // Provider errors may contain credentials; never return raw diagnostics.
+        const sanitize = (
+          attempt: MediaUnderstandingDecision["attachments"][number]["attempts"][number],
+        ) => ({
+          ...attempt,
+          reason: attempt.reason ? redactSensitiveText(attempt.reason).slice(0, 1000) : undefined,
+        });
+        decision = {
+          ...value,
+          attachments: value.attachments.map((attachment) => ({
+            ...attachment,
+            attempts: attachment.attempts.map(sanitize),
+            chosen: attachment.chosen ? sanitize(attachment.chosen) : undefined,
+          })),
+        };
+      },
       capability: "audio",
       cfg: params.cfg,
       agentDir: params.agentDir,
@@ -411,12 +465,51 @@ async function analyzeAudioTrack(params: {
       localRoot: params.workDir,
     });
     const transcript = normalizeOptionalString(outputs[0]?.text);
-    if (!transcript) {
-      warnings.push("音轨转写未返回内容（可能没有配置语音转写 provider，或视频无人声）。");
+    if (transcript) {
+      return finish(
+        {
+          status: "success",
+          extraction: "success",
+          decision,
+          message: "音轨提取成功，已获得语音转写文本。",
+        },
+        transcript,
+      );
     }
-    return { transcript, warnings };
+    const attempts = decision?.attachments.flatMap((attachment) => attachment.attempts) ?? [];
+    const status =
+      decision?.outcome === "failed"
+        ? "transcription-failed"
+        : decision?.outcome === "skipped" && attempts.length === 0
+          ? "unavailable"
+          : decision && decision.outcome !== "success"
+            ? "skipped"
+            : "empty";
+    const labels = {
+      "transcription-failed": "转写服务执行失败",
+      unavailable: "未找到可用的语音转写服务，请检查 tools.media.audio 及其凭据或本地转写程序",
+      skipped: "转写被跳过",
+      empty: "转写未返回文本",
+    };
+    const reasons = attempts
+      .map(
+        (attempt) =>
+          `${attempt.provider ?? attempt.type}${attempt.model ? `/${attempt.model}` : ""}: ${attempt.outcome}${attempt.reason ? ` (${attempt.reason})` : ""}`,
+      )
+      .join("；");
+    return finish({
+      status,
+      extraction: "success",
+      decision,
+      message: `音轨提取成功；${labels[status]}${decision ? `（状态：${decision.outcome}）` : ""}。${reasons ? `${reasons}。` : ""}未获得口播内容，不能据此判断视频没有人声。`,
+    });
   } catch (error) {
-    return { warnings: [`音轨转写失败：${formatErrorMessage(error)}`] };
+    return finish({
+      status: "transcription-failed",
+      extraction: "success",
+      decision,
+      message: `音轨提取成功；音轨转写失败：${redactSensitiveText(formatErrorMessage(error))}。未获得口播内容，不能据此判断视频没有人声。`,
+    });
   }
 }
 
@@ -524,6 +617,7 @@ async function analyzeDecomposed(params: {
   warnings: string[];
 }): Promise<{
   transcript?: string;
+  audio: VideoAudioStatus;
   frames: Array<{ at: string; description: string }>;
   snapshots: Array<{ at: string; path: string }>;
 }> {
@@ -550,7 +644,12 @@ async function analyzeDecomposed(params: {
   ]);
   // Keep warning order deterministic even though the expensive work runs concurrently.
   params.warnings.push(...audio.warnings, ...visual.warnings);
-  return { transcript: audio.transcript, frames: visual.frames, snapshots: visual.snapshots };
+  return {
+    transcript: audio.transcript,
+    audio: audio.audio,
+    frames: visual.frames,
+    snapshots: visual.snapshots,
+  };
 }
 
 export async function runVideoUnderstand(params: {
@@ -626,7 +725,17 @@ export async function runVideoUnderstand(params: {
             deps,
             warnings,
           })
-        : { transcript: undefined, frames: [], snapshots: [] };
+        : {
+            transcript: undefined,
+            frames: [],
+            snapshots: [],
+            audio: {
+              status: "not-requested",
+              extraction: "not-attempted",
+              message:
+                "使用整片多模态理解，未单独执行音轨提取和语音转写；不能据此确认口播转写完整性。",
+            } satisfies VideoAudioStatus,
+          };
 
     if (
       !description &&
@@ -649,6 +758,7 @@ export async function runVideoUnderstand(params: {
       route,
       description,
       transcript: decomposed.transcript,
+      audio: decomposed.audio,
       frames: decomposed.frames,
       snapshots: decomposed.snapshots,
       warnings,
@@ -672,6 +782,7 @@ export function createVideoUnderstandTool(options?: {
       "Download the video behind a URL and analyze its content. Accepts a direct video URL, an HLS manifest, " +
       "a platform watch page (抖音/哔哩哔哩/微博/快手/YouTube…), or an article URL whose main video is detected automatically. " +
       "Short clips are analyzed whole by a multimodal model; longer ones are transcribed and sampled into a frame timeline. " +
+      "Check the returned audio status and warnings before claiming speech was analyzed; missing transcription does not prove silence. Frames are samples, not exhaustive coverage. " +
       "If visual understanding is unavailable, saved keyframes are returned as MEDIA paths that can be shown to the user.",
     parameters: VideoUnderstandSchema,
     execute: async (_toolCallId, args) => {
@@ -690,7 +801,7 @@ export function createVideoUnderstandTool(options?: {
         });
         log.info(
           `video_understand: ${result.route} for ${result.resolvedVideoUrl} ` +
-            `(session=${options?.agentSessionKey ?? "unknown"}, frames=${result.frames.length})`,
+            `(session=${options?.agentSessionKey ?? "unknown"}, frames=${result.frames.length}, audio=${result.audio.status})`,
         );
         return jsonResult({
           ...result,
