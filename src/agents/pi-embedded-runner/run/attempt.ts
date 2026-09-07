@@ -16,6 +16,7 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { materializeSkillsForUser, resolveSkillUserId } from "../../../infra/skills-mysql.js";
+import { formatToolAvailability } from "../../../logging/tool-availability.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -584,7 +585,17 @@ export async function runEmbeddedAttempt(
           });
           if (params.toolsAllow && params.toolsAllow.length > 0) {
             const allowSet = new Set(params.toolsAllow);
-            return allTools.filter((tool) => allowSet.has(tool.name));
+            const allowed = allTools.filter((tool) => allowSet.has(tool.name));
+            log.info(
+              formatToolAvailability({
+                stage: "run-toolsAllow",
+                available: allowed.map((tool) => tool.name),
+                before: allTools.map((tool) => tool.name),
+                runId: params.runId,
+                sessionKey: params.sessionKey,
+              }),
+            );
+            return allowed;
           }
           return allTools;
         })();
@@ -637,6 +648,15 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
+    log.info(
+      formatToolAvailability({
+        stage: toolsEnabled ? "model-tool-schemas" : "model-tools-unsupported",
+        available: allowedToolNames,
+        before: toolsRaw.map((tool) => tool.name),
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+      }),
+    );
     logProviderToolSchemaDiagnostics({
       tools: effectiveTools,
       provider: params.provider,

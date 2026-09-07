@@ -35,6 +35,29 @@ function runAllowlistWarningStep(params: {
 }
 
 describe("tool-policy-pipeline", () => {
+  test("reports the exact policy stage removing tools without changing tool order", () => {
+    const events: unknown[] = [];
+    const tools = [{ name: "zeta" }, { name: "browser" }, { name: "alpha" }] as Parameters<
+      typeof applyToolPolicyPipeline
+    >[0]["tools"];
+    const filtered = applyToolPolicyPipeline({
+      tools,
+      toolMeta: () => undefined,
+      warn: () => {},
+      onFilter: (event) => events.push(event),
+      steps: [
+        { label: "tools.profile", policy: { allow: ["alpha", "browser"] } },
+        { label: "sandbox tools.allow", policy: { deny: ["browser"] } },
+      ],
+    });
+    expect(filtered.map((tool) => tool.name)).toEqual(["alpha"]);
+    expect(events).toEqual([
+      { stage: "tools.profile", removed: ["zeta"], allow: ["alpha", "browser"], deny: undefined },
+      { stage: "sandbox tools.allow", removed: ["browser"], allow: undefined, deny: ["browser"] },
+    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["zeta", "browser", "alpha"]);
+  });
+
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
   });
