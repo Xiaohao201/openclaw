@@ -10,7 +10,7 @@
  * 分别对应「投诉」与「举报」两个功能（对应工具 infringe_complaint_submit /
  * complaint_submit），因此不列入 LETTER_LABELS。
  */
-import { asString } from "../client/envelope.js";
+import { asString, envelopeError } from "../client/envelope.js";
 import { getJson } from "../client/http-client.js";
 import type { BackendConfig } from "../client/types.js";
 
@@ -146,40 +146,42 @@ function unfinishedJobError(job: Record<string, unknown>): string {
   const target = label ? `「${label}」` : "";
   if (status === "Stop" || status === "Fail") {
     return (
-      `最近一次内容检测任务${target}${statusLabel}，没有完整的检测结果，无法生成文书。` +
+      `指定内容检测任务${target}${statusLabel}，没有完整的检测结果，无法生成文书。` +
       "请告知用户重新发起一次内容检测。"
     );
   }
   return (
-    `最近一次内容检测任务${target}尚未完成（当前${statusLabel}）。` +
-    "文书必须依据检测结果生成——请告知用户等检测完成后再来生成文书，" +
-    "不要自行编写违规事实，也不要在本轮重复调用本工具。"
+    `指定内容检测任务${target}尚未完成（当前${statusLabel}）。` +
+    "此后台文书接口需要该任务的检测结果；可继续处理不依赖该结果的证据与材料，不要反复提交生成请求。"
   );
 }
 
 /**
- * 文书生成前置：定位最近一次检测任务 → 必须已完成 → 从检测结果收集违规事实。
+ * 后台文书生成前置：读取明确指定的检测任务 → 必须已完成 → 收集检测结果。
  * 任一闸门不过就返回可直接回给模型的中文原因。
  */
 export async function resolveLetterBasis(
   config: BackendConfig,
   apiKey: string,
+  jobId: number,
 ): Promise<LetterBasis> {
-  const job = await resolveLatestJob(config, apiKey);
-  const jobId = Number(job?.id);
-  if (!job || !Number.isInteger(jobId) || jobId <= 0) {
-    return { ok: false, error: "没有可生成文书的内容检测任务；请先完成一次内容检测。" };
-  }
-  if (asString(job.status) !== "Done") {
-    return { ok: false, error: unfinishedJobError(job) };
-  }
-
   const detail = await getJson(
     config,
     "/ai/fetch-job",
     { id: jobId, workspace: DEFAULT_WORKSPACE, all: 1 },
     apiKey,
   );
+  const error = envelopeError(detail);
+  if (error) {
+    return { ok: false, error };
+  }
+  const job = detail.job as Record<string, unknown> | undefined;
+  if (!job || Number(job.id) !== jobId) {
+    return { ok: false, error: "未取得指定内容检测任务的详情，不能改用其他任务生成文书。" };
+  }
+  if (asString(job.status) !== "Done") {
+    return { ok: false, error: unfinishedJobError(job) };
+  }
   const errors = collectJobErrors(detail);
   if (errors.length < MIN_ERRORS_LENGTH) {
     return {

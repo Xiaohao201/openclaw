@@ -73,14 +73,58 @@ describe("job_list", () => {
 });
 
 describe("letter_generate", () => {
+  it.each(["RiskEvaluation", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid detection reference %s without backend calls",
+    async (jobId) => {
+      const selected = createLetterGenerateToolFactory(
+        fakeApi,
+        resolver,
+      )({ agentId: "rabbitmq-1749" })!;
+      expect(parse(await selected.execute("invalid", { jobId }))).toMatchObject({
+        success: false,
+        code: "TASK_REQUIRED",
+      });
+      expect(mockGetJson).not.toHaveBeenCalled();
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{ job: { id: 999, status: "Done" } }, { code: "error", message: "无权读取本任务" }])(
+    "does not generate from a mismatched or inaccessible task",
+    async (response) => {
+      mockGetJson.mockResolvedValue(response);
+      const selected = createLetterGenerateToolFactory(
+        fakeApi,
+        resolver,
+      )({ agentId: "rabbitmq-1749" })!;
+      expect(parse(await selected.execute("wrong", { jobId: 6032 })).success).toBe(false);
+      expect(mockGetJson.mock.calls[0]?.[2]).toMatchObject({ id: 6032 });
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+  it("never reads the account's latest detection when no task was selected", async () => {
+    mockGetJson.mockResolvedValue({ jobs: [{ id: 999, status: "Done" }] });
+    const selected = createLetterGenerateToolFactory(
+      fakeApi,
+      resolver,
+    )({ agentId: "rabbitmq-1749" })!;
+    const result = parse(await selected.execute("missing", {}));
+    expect(result).toMatchObject({ success: false, code: "TASK_REQUIRED" });
+    expect(mockGetJson).not.toHaveBeenCalled();
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
   const tool = () =>
     createLetterGenerateToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
 
-  /** 两段 GET：先 /ai/fetch-jobs 定位任务，再 /ai/fetch-job 取检测结果。 */
+  /** Fetch only the explicitly selected task; account-wide latest-job lookup is forbidden. */
   function mockJob(job: Record<string, unknown>, detail?: Record<string, unknown>) {
-    mockGetJson.mockImplementation((_config: unknown, path: unknown) =>
-      Promise.resolve(path === "/ai/fetch-jobs" ? { jobs: [job] } : (detail ?? {})),
-    );
+    mockGetJson.mockImplementation(async (_config: unknown, path: unknown) => {
+      expect(path).toBe("/ai/fetch-job");
+      return {
+        ...detail,
+        job: { ...job, ...(detail?.job as Record<string, unknown> | undefined) },
+      };
+    });
   }
 
   const DONE_JOB = { id: 6032, label: "某检测", status: "Done" };
@@ -91,7 +135,7 @@ describe("letter_generate", () => {
 
   it("refuses while the detection task is still running — no backend write", async () => {
     mockJob({ id: 6032, label: "某检测", status: "Pending" });
-    const res = parse(await tool().execute("g0", {}));
+    const res = parse(await tool().execute("g0", { jobId: 6032 }));
     expect(res.success).toBe(false);
     expect(String(res.error)).toContain("尚未完成");
     expect(mockPostForm).not.toHaveBeenCalled();
@@ -99,7 +143,7 @@ describe("letter_generate", () => {
 
   it("refuses when the finished task found no violations", async () => {
     mockJob(DONE_JOB, { job: { id: 6032, rate: 0, summary: "未发现违规" }, tasks: [] });
-    const res = parse(await tool().execute("g1", {}));
+    const res = parse(await tool().execute("g1", { jobId: 6032 }));
     expect(res.success).toBe(false);
     expect(String(res.error)).toContain("未检测到违规事实");
     expect(mockPostForm).not.toHaveBeenCalled();
@@ -108,7 +152,7 @@ describe("letter_generate", () => {
   it("takes the violations from the detection result, not from the model", async () => {
     mockJob(DONE_JOB, DETAIL);
     mockPostForm.mockResolvedValue({ code: "success", message: "正在生成，请稍等！" });
-    const res = parse(await tool().execute("g2", { all: true }));
+    const res = parse(await tool().execute("g2", { jobId: 6032, all: true }));
     const [, path, fields] = mockPostForm.mock.calls[0] as [
       unknown,
       string,
@@ -125,7 +169,7 @@ describe("letter_generate", () => {
   it("appends the optional supplement after the detection result", async () => {
     mockJob(DONE_JOB, DETAIL);
     mockPostForm.mockResolvedValue({ code: "success" });
-    await tool().execute("g3", { supplement: "另引用《民法典》第1024条。" });
+    await tool().execute("g3", { jobId: 6032, supplement: "另引用《民法典》第1024条。" });
     const [, , fields] = mockPostForm.mock.calls[0] as [unknown, string, Record<string, unknown>];
     expect(String(fields.errors)).toMatch(/第3段虚构营收数据。\n另引用《民法典》第1024条。$/);
   });
@@ -133,19 +177,32 @@ describe("letter_generate", () => {
   it("surfaces the backend 'too minor' error", async () => {
     mockJob(DONE_JOB, DETAIL);
     mockPostForm.mockResolvedValue({ code: "error", message: "文章违规程度较低，无法生成撤稿函" });
-    const res = parse(await tool().execute("g4", {}));
+    const res = parse(await tool().execute("g4", { jobId: 6032 }));
     expect(res).toMatchObject({ success: false, error: "文章违规程度较低，无法生成撤稿函" });
   });
 
-  it("errors when there is no recent job", async () => {
-    mockGetJson.mockResolvedValue({ jobs: [] });
-    const res = parse(await tool().execute("g5", {}));
+  it("errors when the selected task was not returned", async () => {
+    mockGetJson.mockResolvedValue({});
+    const res = parse(await tool().execute("g5", { jobId: 6032 }));
     expect(res.success).toBe(false);
     expect(mockPostForm).not.toHaveBeenCalled();
   });
 });
 
 describe("letter_fetch", () => {
+  it("requires the selected task and does not claim an empty result is still running", async () => {
+    const selected = createLetterFetchToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+    expect(parse(await selected.execute("missing", {}))).toMatchObject({
+      success: false,
+      code: "TASK_REQUIRED",
+    });
+    expect(mockPostForm).not.toHaveBeenCalled();
+    mockPostForm.mockResolvedValue({ code: "success", letterMap: {} });
+    const result = parse(await selected.execute("empty", { jobId: 77 }));
+    expect(result).toMatchObject({ jobId: 77, count: 0 });
+    expect(result.agentInstruction).toContain("不能仅凭空结果判断仍在生成");
+    expect(mockGetJson).not.toHaveBeenCalled();
+  });
   it("maps letterMap to a list with category labels", async () => {
     const tool = createLetterFetchToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
     mockGetJson.mockResolvedValue({ jobs: [{ id: 6052 }] });
@@ -157,7 +214,7 @@ describe("letter_fetch", () => {
       },
       size: 2,
     });
-    const res = parse(await tool.execute("lf1"));
+    const res = parse(await tool.execute("lf1", { jobId: 6052 }));
     const [, path, fields] = mockPostForm.mock.calls[0] as [
       unknown,
       string,
@@ -187,7 +244,7 @@ describe("letter_fetch", () => {
         Retraction: { id: 6, category: "Retraction", content: "撤稿函正文" },
       },
     });
-    const res = parse(await tool.execute("lf3"));
+    const res = parse(await tool.execute("lf3", { jobId: 6052 }));
     expect(res.count).toBe(1);
     expect((res.letters as Array<Record<string, unknown>>)[0]).toMatchObject({
       category: "Retraction",
@@ -199,7 +256,7 @@ describe("letter_fetch", () => {
     const tool = createLetterFetchToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
     mockGetJson.mockResolvedValue({ jobs: [{ id: 6052 }] });
     mockPostForm.mockResolvedValue({ code: "success", letterMap: [], size: 0 });
-    const res = parse(await tool.execute("lf2"));
+    const res = parse(await tool.execute("lf2", { jobId: 6052 }));
     expect(res).toMatchObject({ success: true, count: 0 });
   });
 });
