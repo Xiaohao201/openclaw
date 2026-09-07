@@ -26,6 +26,11 @@ const ListSchema = Type.Object(
 
 const LetterGenerateSchema = Type.Object(
   {
+    jobId: Type.Integer({
+      minimum: 1,
+      description:
+        "本次文书对应的内容检测任务 ID，来自 job_list 的匹配记录。RiskEvaluation 报告标识不能用于此处。",
+    }),
     supplement: Type.Optional(
       Type.String({
         description:
@@ -147,6 +152,16 @@ const ComplaintSubmitSchema = Type.Object(
 );
 
 const EmptySchema = Type.Object({}, { additionalProperties: false });
+const LetterFetchSchema = Type.Object(
+  { jobId: Type.Integer({ minimum: 1, description: "生成文书时使用的同一个内容检测任务 ID。" }) },
+  { additionalProperties: false },
+);
+
+function readLetterJobId(params: Record<string, unknown>): number | null {
+  return typeof params.jobId === "number" && Number.isSafeInteger(params.jobId) && params.jobId > 0
+    ? params.jobId
+    : null;
+}
 
 export function createJobListToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
@@ -188,6 +203,8 @@ export function createJobListToolFactory(api: OpenClawPluginApi, resolver: ApiKe
         const list = jobs.map((job) => {
           const status = asString(job.status) ?? "";
           return {
+            jobId: Number(job.id),
+            link: asString(job.link) ?? null,
             label: asString(job.label) ?? null,
             status,
             statusLabel: JOB_STATUS_LABELS[status] ?? status,
@@ -262,13 +279,23 @@ export function createLetterGenerateToolFactory(api: OpenClawPluginApi, resolver
       name: "letter_generate",
       label: "Generate 维权文书",
       description:
-        "为最近一次内容检测任务生成「维权文书」——只有三种：撤稿函、投诉通知、举报信。" +
+        "兼容后台流程：为明确指定 jobId 的已完成内容检测任务生成撤稿函、投诉通知或举报信。" +
+        "普通 RiskEvaluation 风险研判报告不是内容检测任务，不能连接此接口。单篇链接的即时研判与文书可按技能、真实原文和截图直接生成文件，无需先创建后台任务。" +
         "违规事实自动取自该检测任务的检测结果（与网页端「一键生成所需函件」同源），不需要也不允许自行编写；" +
         "检测任务尚未完成、或检测结果里没有违规事实时，本工具会直接拒绝——此时应告知用户等检测完成，不要编造违规事实。" +
         "异步执行——生成完毕后用 letter_fetch 取回。" +
         "注意：官方公函/个人公函不是文书，它们分别对应投诉(infringe_complaint_submit)与举报(complaint_submit)功能。",
       parameters: LetterGenerateSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const jobId = readLetterJobId(rawParams);
+        if (!jobId) {
+          return jsonResult({
+            success: false,
+            code: "TASK_REQUIRED",
+            error:
+              "请指定本次文书对应的内容检测 jobId；不得默认使用账户最近一次任务。可用 job_list 核对链接与任务。",
+          });
+        }
         const keyed = await resolveKeyOrError(api, resolver, userId, "letter_generate");
         if ("error" in keyed) {
           return keyed.error;
@@ -276,7 +303,7 @@ export function createLetterGenerateToolFactory(api: OpenClawPluginApi, resolver
         // 前置闸门：检测必须已完成，且检测结果里确有违规事实（errors 由此而来）。
         let basis: Awaited<ReturnType<typeof resolveLetterBasis>>;
         try {
-          basis = await resolveLetterBasis(config, keyed.apiKey);
+          basis = await resolveLetterBasis(config, keyed.apiKey, jobId);
         } catch (error) {
           return failure(api, "letter_generate", userId, error);
         }
@@ -307,9 +334,11 @@ export function createLetterGenerateToolFactory(api: OpenClawPluginApi, resolver
         return jsonResult({
           success: true,
           submitted: true,
+          jobId,
+          taskType: "ContentCheckLetter",
           message: asString(res.message) ?? "正在生成，请稍等！",
           agentInstruction:
-            "维权文书生成任务已提交。请立刻告知用户文书正在后台生成，稍后可询问我取回文书。不要调用任何工具——等用户主动询问时再用 letter_fetch 获取。",
+            "后台文书已提交，尚未生成完成。取回时将此 jobId 传给 letter_fetch；避免连续轮询同一任务，可继续其他独立工作。未经真实调度安排，不要承诺完成后自动通知。",
         });
       },
     };
@@ -328,26 +357,20 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
       name: "letter_fetch",
       label: "Fetch 维权文书",
       description:
-        "取回最近一次内容检测任务已生成的「维权文书」（撤稿函/投诉通知/举报信三种，只返回已有正文的）。无需参数。" +
-        "⚠️ SINGLE-USE PER TURN: call EXACTLY ONCE, then immediately reply to the user. " +
-        "If count is 0, tell the user generation is still running and STOP — never call again in the same turn.",
-      parameters: EmptySchema,
-      async execute(_toolCallId: string) {
-        const keyed = await resolveKeyOrError(api, resolver, userId, "letter_fetch");
-        if ("error" in keyed) {
-          return keyed.error;
-        }
-        let jobId: number | null;
-        try {
-          jobId = await resolveLatestJobId(config, keyed.apiKey);
-        } catch (error) {
-          return failure(api, "letter_fetch", userId, error);
-        }
+        "按生成时的 jobId 取回后台维权文书（撤稿函/投诉通知/举报信）。不默认读取最近任务。未返回正文只表示尚无可用文书，不代表已成功生成或仍在运行；避免连续轮询，可继续其他独立工作。",
+      parameters: LetterFetchSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown> = {}) {
+        const jobId = readLetterJobId(rawParams);
         if (!jobId) {
           return jsonResult({
             success: false,
-            error: "No recent 内容检测 task to fetch letters for.",
+            code: "TASK_REQUIRED",
+            error: "请提供生成文书时使用的 jobId，不能自动选择最近任务。",
           });
+        }
+        const keyed = await resolveKeyOrError(api, resolver, userId, "letter_fetch");
+        if ("error" in keyed) {
+          return keyed.error;
         }
         let res: Record<string, unknown>;
         try {
@@ -385,11 +408,12 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
         return jsonResult({
           success: true,
           count: letters.length,
+          jobId,
           letters,
           agentInstruction:
             letters.length > 0
               ? "文书已生成，请向用户展示结果。"
-              : "⚠️ 文书仍在生成中。请立刻告知用户「文书正在生成，稍后可再询问」并结束本轮对话。禁止再次调用此工具。",
+              : "该任务尚无可用文书正文，不能仅凭空结果判断仍在生成。请核对生成请求是否成功；避免重复轮询，可以继续整理其他证据或材料。",
         });
       },
     };

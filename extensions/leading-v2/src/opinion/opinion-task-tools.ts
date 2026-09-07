@@ -8,7 +8,7 @@ import type { RecentTaskStore } from "../client/recent-tasks.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
 
-/** What we remember per user so opinion_download_status can poll a submitted task by slug. */
+/** Optional display metadata; status selection always uses an explicit slug from the conversation. */
 export interface RecentDownload {
   slug: string;
   category: string;
@@ -101,12 +101,11 @@ const SheetSchema = Type.Object(
 
 const StatusSchema = Type.Object(
   {
-    slug: Type.Optional(
-      Type.String({
-        description:
-          "Internal — leave unset. Polls the most recent submitted 舆情 task for this account.",
-      }),
-    ),
+    slug: Type.String({
+      minLength: 1,
+      description:
+        "本次请求关联的任务标识，来自创建结果或 opinion_download_list；不要向用户展示或改用最近任务。",
+    }),
   },
   { additionalProperties: false },
 );
@@ -212,8 +211,8 @@ export function createOpinionAnalyzeToolFactory(
       name: "opinion_analyze",
       label: "Analyze Opinion / 舆情简报",
       description:
-        "Submit text or links for instant 舆情分析/简报 (风险研判/处置快报/风险提示). " +
-        "Runs asynchronously on the backend worker — call opinion_download_status (no arguments) to poll. " +
+        "Submit text or links for an asynchronous 舆情报告 (风险研判/处置快报/风险提示). This is not a 内容检测 task and cannot supply jobId to letter_generate. For a single-link complaint document, use current evidence and the selected skill to analyze and create the document directly. " +
+        "Use this for requested background reports or batch analysis. Query opinion_download_status with the returned slug. " +
         "The analysis text comes back in the status result's content/title. Tracked server-side; never mention any id to the user.",
       parameters: AnalyzeSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -262,11 +261,13 @@ export function createOpinionAnalyzeToolFactory(
         return jsonResult({
           success: true,
           submitted: true,
+          slug,
+          taskType: "OpinionReport",
           category,
           title,
           message: asString(res.message) ?? "任务已提交",
           agentInstruction:
-            "舆情分析任务已提交成功。请立刻告知用户任务正在后台处理，通常需要数分钟。不要调用状态查询工具——等用户主动询问进度时再用 opinion_download_status 查询。",
+            "后台报告已提交，尚无研判结果。用此 slug 查询同一任务；它不是内容检测任务，不能直接驱动 letter_generate。避免连续轮询，可继续不依赖报告的工作；未安排真实调度时不要承诺自动通知。",
         });
       },
     };
@@ -290,7 +291,7 @@ export function createOpinionExportToolFactory(
       label: "Export 智脑 Report / Data",
       description:
         "Export a 智脑项目 report (日/周/月报) or its 舆情数据 to a file. Requires the project's reportId. " +
-        "Runs asynchronously — call opinion_download_status (no arguments) to poll, then read fileLink when Done. " +
+        "Runs asynchronously — pass the returned slug to opinion_download_status, then read fileLink when Done. " +
         "Tracked server-side; never mention any id to the user.",
       parameters: ExportSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -348,10 +349,11 @@ export function createOpinionExportToolFactory(
         return jsonResult({
           success: true,
           submitted: true,
+          slug,
           category,
           message: asString(res.message) ?? "任务已提交",
           agentInstruction:
-            "报告导出任务已提交成功。请立刻告知用户任务正在后台处理。不要调用状态查询工具——等用户主动询问进度时再用 opinion_download_status 查询。",
+            "报告导出已提交。用此 slug 查询同一任务，避免连续轮询；可继续其他独立工作，不要把提交成功说成文件已生成。",
         });
       },
     };
@@ -375,7 +377,7 @@ export function createSheetReportToolFactory(
       label: "Create 精品报告 from Sheet",
       description:
         "Submit an .xlsx/.csv of 舆情 data (by public URL) for 精品报告 generation. " +
-        "Runs asynchronously — call opinion_download_status (no arguments) to poll, then read fileLink when Done. " +
+        "Runs asynchronously — pass the returned slug to opinion_download_status, then read fileLink when Done. " +
         "Tracked server-side; never mention any id to the user.",
       parameters: SheetSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -420,9 +422,10 @@ export function createSheetReportToolFactory(
         return jsonResult({
           success: true,
           submitted: true,
+          slug,
           message: asString(res.message) ?? "任务已提交",
           agentInstruction:
-            "精品报告生成任务已提交成功。请立刻告知用户任务正在后台处理。不要调用状态查询工具——等用户主动询问进度时再用 opinion_download_status 查询。",
+            "精品报告已提交。用此 slug 查询同一任务，避免连续轮询；可继续其他独立工作，不要把提交成功说成报告已完成。",
         });
       },
     };
@@ -445,23 +448,22 @@ export function createOpinionDownloadStatusToolFactory(
       name: "opinion_download_status",
       label: "舆情 Task Status",
       description:
-        "Get the status/result of the most recent 舆情 task. Call with no arguments. " +
-        "⚠️ SINGLE-USE PER TURN: call EXACTLY ONCE per user request, then immediately reply to the user — " +
-        "regardless of whether the task is done. NEVER call this tool a second time in the same turn.",
+        "Get status/result of the explicitly selected 舆情 task using its returned slug. Never fall back to another task. Avoid repeated polling without new information; pending tasks do not prevent independent work, and completed results can be used to continue the user's workflow.",
       parameters: StatusSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         const keyed = await resolveKeyOrError(api, resolver, userId, "opinion_download_status");
         if ("error" in keyed) {
           return keyed.error;
         }
-        const recent = store.latest(userId);
-        const slug = asString(rawParams.slug) ?? recent?.slug;
-        const category = recent?.category ?? "All";
+        const slug = asString(rawParams.slug)?.trim();
+        const latest = store.latest(userId);
+        const recent = latest?.slug === slug ? latest : undefined;
+        const category = "All";
         if (!slug) {
           return jsonResult({
             success: false,
-            error:
-              "No recent 舆情 task to poll; submit one first (opinion_analyze / opinion_report_export / sheet_report_create).",
+            code: "TASK_REQUIRED",
+            error: "请提供本次任务的 slug，来自创建结果或任务列表；不会自动查询账户最近任务。",
           });
         }
 
@@ -475,8 +477,9 @@ export function createOpinionDownloadStatusToolFactory(
           return jsonResult({
             success: true,
             found: false,
+            slug,
             agentInstruction:
-              "⚠️ 任务已提交但尚未出现在列表中，属正常现象。请立刻告知用户「任务正在队列中处理，稍后可再询问进度」，然后结束本轮对话。禁止再次调用此工具。",
+              "未在本次查询范围内找到该任务，不能据此断言仍在排队；核对任务标识或列表，不要改用另一任务或连续轮询。可继续其他独立工作。",
           });
         }
         const status = asString(row.status) ?? "";
@@ -488,6 +491,7 @@ export function createOpinionDownloadStatusToolFactory(
         return jsonResult({
           success: true,
           found: true,
+          slug,
           status,
           statusLabel: STATUS_LABELS[status] ?? status ?? "未知",
           ...(terminal ? { done, failed, stopped } : {}),
@@ -496,8 +500,8 @@ export function createOpinionDownloadStatusToolFactory(
           content: asString(row.content) ?? null,
           memo: asString(row.memo) ?? null,
           agentInstruction: terminal
-            ? "任务已结束，请向用户展示结果。"
-            : "⚠️ 任务仍在处理中。请立刻向用户报告当前进度并结束本轮对话。禁止再次调用此工具或任何其他工具。",
+            ? "该任务已结束。成功时可依据真实结果继续用户已要求的后续工作；失败或停止时说明具体状态，不要当作研判已完成。"
+            : "该任务仍在处理中，尚无完成结果。避免连续轮询同一任务；可以继续获取证据、整理材料等独立工作，不必结束整个流程。",
         });
       },
     };
@@ -550,6 +554,7 @@ export function createOpinionDownloadListToolFactory(
         const list = items.map((item) => {
           const status = asString(item.status) ?? "";
           return {
+            slug: asString(item.slug) ?? null,
             category: asString(item.category) ?? null,
             status,
             statusLabel: STATUS_LABELS[status] ?? status,

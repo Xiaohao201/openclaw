@@ -59,6 +59,56 @@ describe("gating", () => {
 });
 
 describe("opinion_analyze + status", () => {
+  it.each(["Running", "Done", "Fail", "Stop"])(
+    "tracks the selected task across concurrent submissions: %s",
+    async (state) => {
+      const s = new RecentTaskStore<RecentDownload>();
+      s.remember("1749", { slug: "NEWER", category: "SheetReport", title: "另一个报告" });
+      const status = createOpinionDownloadStatusToolFactory(
+        fakeApi,
+        resolver,
+        s,
+      )({ agentId: "rabbitmq-1749" })!;
+      mockGetJson.mockResolvedValue({
+        code: "success",
+        items: [
+          { slug: "NEWER", title: "另一个报告", status: "Done" },
+          { slug: "SELECTED", status: state, title: "本次报告" },
+        ],
+      });
+      const result = parse(await status.execute("selected", { slug: "SELECTED" }));
+      expect(result).toMatchObject({ slug: "SELECTED", title: "本次报告", status: state });
+      expect(mockGetJson.mock.calls[0]?.[2]).toMatchObject({ category: "All" });
+      expect(result.agentInstruction).not.toContain("禁止再次调用此工具或任何其他工具");
+      expect(result.agentInstruction).not.toContain("结束本轮");
+    },
+  );
+
+  it("does not describe an unknown task as queued", async () => {
+    const status = createOpinionDownloadStatusToolFactory(
+      fakeApi,
+      resolver,
+      new RecentTaskStore<RecentDownload>(),
+    )({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValue({ code: "success", items: [] });
+    const result = parse(await status.execute("unknown", { slug: "UNKNOWN" }));
+    expect(result).toMatchObject({ found: false, slug: "UNKNOWN" });
+    expect(result.agentInstruction).toContain("不能据此断言仍在排队");
+  });
+  it("requires an explicit task even when another conversation submitted one", async () => {
+    const s = new RecentTaskStore<RecentDownload>();
+    s.remember("1749", { slug: "OTHER-CHAT", category: "RiskEvaluation", title: "other" });
+    const tool = createOpinionDownloadStatusToolFactory(
+      fakeApi,
+      resolver,
+      s,
+    )({ agentId: "rabbitmq-1749" })!;
+    expect(parse(await tool.execute("missing", {}))).toMatchObject({
+      success: false,
+      code: "TASK_REQUIRED",
+    });
+    expect(mockGetJson).not.toHaveBeenCalled();
+  });
   it("submits request-download then polls fetch-downloads by slug", async () => {
     const s = new RecentTaskStore<RecentDownload>();
     const analyze = createOpinionAnalyzeToolFactory(
@@ -88,7 +138,7 @@ describe("opinion_analyze + status", () => {
     expect(fields).toMatchObject({ category: "RiskEvaluation", siteId: "legal" });
     expect(created).toMatchObject({ success: true, submitted: true, category: "RiskEvaluation" });
     expect(created).not.toHaveProperty("status");
-    expect(created).not.toHaveProperty("slug");
+    expect(created).toMatchObject({ slug: "DLSLUG", taskType: "OpinionReport" });
 
     mockGetJson.mockResolvedValue({
       code: "success",
@@ -103,7 +153,7 @@ describe("opinion_analyze + status", () => {
         },
       ],
     });
-    const res = parse(await status.execute("s1", {}));
+    const res = parse(await status.execute("s1", { slug: created.slug }));
     expect(res).toMatchObject({
       success: true,
       found: true,
