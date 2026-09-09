@@ -277,6 +277,114 @@ describe("job_stop", () => {
 });
 
 describe("complaint_submit", () => {
+  const batchLinks = ["https://example.com/video/a", "https://example.com/video/b"];
+  const batchParams = {
+    basisSource: "AgentJudgment",
+    confirmed: true,
+    subjectScope: "Enterprise",
+    role: "Personal",
+    judgment: "本批次包含两个独立作品，以下分别提供各链接的事实依据及举报理由。",
+    links: batchLinks,
+    linkJudgments: batchLinks.map((link, index) => ({
+      link,
+      judgment: `第${index + 1}个作品的独立举报事由，仅依据该作品已核验内容，请平台审核。`,
+    })),
+    classifications: batchLinks.map((link) => ({
+      link,
+      taxonomyVersionId: 23,
+      categoryCode: "false_information",
+    })),
+  };
+
+  it("submits each link with only its own judgment and classification", async () => {
+    mockPostForm.mockResolvedValue({ code: "success" });
+    const res = parse(await tool().execute("batch", batchParams));
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+    batchLinks.forEach((link, index) => {
+      expect(mockPostForm.mock.calls[index][2]).toMatchObject({
+        links: JSON.stringify([link]),
+        judgment: batchParams.linkJudgments[index].judgment,
+        classifications: JSON.stringify([batchParams.classifications[index]]),
+        role: "Personal",
+        subjectScope: "Enterprise",
+      });
+    });
+    expect(res).toMatchObject({ success: true, submitted: true, submittedLinks: batchLinks });
+  });
+
+  it.each(
+    [
+      undefined,
+      [],
+      [batchParams.linkJudgments[0]],
+      [batchParams.linkJudgments[0], batchParams.linkJudgments[0]],
+      [...batchParams.linkJudgments, { link: "https://example.com/other", judgment: "unrelated" }],
+      batchLinks.map((link) => ({ link, judgment: "short" })),
+    ].map((linkJudgments) => ({ linkJudgments })),
+  )(
+    "rejects incomplete or ambiguous per-link judgments before submitting: $linkJudgments",
+    async ({ linkJudgments }) => {
+      const res = parse(await tool().execute("batch-invalid", { ...batchParams, linkJudgments }));
+      expect(res.success).toBe(false);
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fetches every missing classification before submitting any link", async () => {
+    mockGetJson.mockResolvedValue({ code: "success", taxonomies: [{ link: batchLinks[1] }] });
+    const res = parse(
+      await tool().execute("batch-catalog", {
+        ...batchParams,
+        classifications: [batchParams.classifications[0]],
+      }),
+    );
+    expect(res).toMatchObject({ classificationRequired: true, missingLinks: [batchLinks[1]] });
+    expect(mockPostForm).not.toHaveBeenCalled();
+    mockPostForm.mockResolvedValue({ code: "success" });
+    expect(parse(await tool().execute("batch-classified", batchParams)).success).toBe(true);
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops on the first rejection and preserves the unsubmitted remainder", async () => {
+    mockPostForm.mockResolvedValueOnce({ code: "error", message: "rejected" });
+    expect(parse(await tool().execute("batch-stop", batchParams))).toMatchObject({
+      success: false,
+      submittedLinks: [],
+      failedLinks: [batchLinks[0]],
+      pendingLinks: [batchLinks[1]],
+    });
+    expect(mockPostForm).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns submitted and rejected links without retrying a partially submitted batch", async () => {
+    mockPostForm
+      .mockResolvedValueOnce({ code: "success" })
+      .mockResolvedValueOnce({ code: "error", message: "rejected" });
+    const res = parse(await tool().execute("batch-partial", batchParams));
+    expect(res).toMatchObject({
+      success: false,
+      submitted: false,
+      submittedLinks: [batchLinks[0]],
+      failedLinks: [batchLinks[1]],
+      pendingLinks: [],
+    });
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a transport failure as unknown rather than safe to retry", async () => {
+    mockPostForm
+      .mockResolvedValueOnce({ code: "success" })
+      .mockRejectedValueOnce(new Error("timeout"));
+    const res = parse(await tool().execute("batch-timeout", batchParams));
+    expect(res).toMatchObject({
+      success: false,
+      submittedLinks: [batchLinks[0]],
+      unknownLinks: [batchLinks[1]],
+      pendingLinks: [],
+    });
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+  });
+
   const tool = () =>
     createComplaintSubmitToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
 

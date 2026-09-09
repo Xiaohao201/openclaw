@@ -128,6 +128,26 @@ function resolveDirectJudgment(
 const ComplaintSubmitSchema = Type.Object(
   {
     ...DirectJudgmentProperties,
+    linkJudgments: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            link: Type.String({ description: "与 links 中的链接完全一致，每条仅出现一次。" }),
+            judgment: Type.String({
+              minLength: AGENT_JUDGMENT_MIN_LENGTH,
+              maxLength: AGENT_JUDGMENT_MAX_LENGTH,
+              description:
+                "仅针对该链接的已核验事实、用户举报理由和证据边界，不得混入其他作品的事由。",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+        {
+          description:
+            "直接研判批量举报必须逐链接提供。系统拆为单链接任务，各自使用对应事由；任务级 judgment 仅作批次摘要。",
+        },
+      ),
+    ),
     links: Type.Optional(
       Type.Array(Type.String(), {
         description:
@@ -434,6 +454,8 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
       description:
         "一键举报：可直接使用夙衡本轮研判，或兼容复用最近一次内容检测任务。" +
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
+        "批量举报必须提供 linkJudgments，为每条链接独立撰写事由；工具逐链接创建任务，不会把整批摘要填入每条举报。" +
+        "仅根据对应链接的真实证据和用户理由撰写，不得将未核实、AI标注或缺少来源直接认定为虚假事实。" +
         "直接研判首次调用不要猜分类、不要传 classifications；工具会返回当前平台分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
         "支持范围动态变化；查询 complaint_taxonomy 获取当前平台和逐链接分类，不得凭旧名单拒绝。" +
@@ -479,6 +501,47 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                 ? "直接使用夙衡研判举报时必须提供 links。"
                 : "未找到可举报的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
           });
+        }
+
+        const linkJudgments = new Map<string, string>();
+        if (
+          direct.code === "valid" &&
+          (links.length > 1 || rawParams.linkJudgments !== undefined)
+        ) {
+          const entries = rawParams.linkJudgments;
+          if (Array.isArray(entries)) {
+            for (const entry of entries) {
+              if (!entry || typeof entry !== "object") {
+                break;
+              }
+              const item = entry as Record<string, unknown>;
+              const link = asString(item.link);
+              const judgment = asString(item.judgment)?.trim();
+              if (
+                !link ||
+                !links.includes(link) ||
+                linkJudgments.has(link) ||
+                !judgment ||
+                judgment.length < AGENT_JUDGMENT_MIN_LENGTH ||
+                judgment.length > AGENT_JUDGMENT_MAX_LENGTH
+              ) {
+                break;
+              }
+              linkJudgments.set(link, judgment);
+            }
+          }
+          if (
+            !Array.isArray(entries) ||
+            entries.length !== links.length ||
+            linkJudgments.size !== links.length
+          ) {
+            return jsonResult({
+              success: false,
+              code: "LINK_JUDGMENTS_REQUIRED",
+              error:
+                "请在 linkJudgments 中为每条链接提供且仅提供一份20至6000字的独立事由，不能共用整批描述。",
+            });
+          }
         }
 
         const classifications = Array.isArray(rawParams.classifications)
@@ -554,13 +617,15 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         }
 
         const role =
-          direct.code === "valid"
-            ? direct.basis.subjectScope === "Enterprise"
-              ? "Enterprise"
-              : "Personal"
-            : rawParams.role === "Enterprise"
-              ? "Enterprise"
-              : "Personal";
+          rawParams.role === "Personal" || rawParams.role === "Enterprise"
+            ? rawParams.role
+            : direct.code === "valid"
+              ? direct.basis.subjectScope === "Enterprise"
+                ? "Enterprise"
+                : "Personal"
+              : rawParams.role === "Enterprise"
+                ? "Enterprise"
+                : "Personal";
         const fields: Record<string, FieldValue> = {
           id: jobId,
           links: JSON.stringify(links),
@@ -572,6 +637,59 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           fields.subjectScope = direct.basis.subjectScope;
           fields.judgment = direct.basis.judgment;
           fields.classifications = JSON.stringify(classifications);
+        }
+        if (direct.code === "valid" && linkJudgments.size > 0) {
+          const submittedLinks: string[] = [];
+          for (const [index, link] of links.entries()) {
+            // The backend only accepts task-level judgment: never send a batch
+            // summary with multiple links and rely on it to split the prose.
+            let response: Record<string, unknown>;
+            try {
+              response = await postForm(
+                config,
+                "/legal/save-complaint-job",
+                {
+                  ...fields,
+                  links: JSON.stringify([link]),
+                  judgment: linkJudgments.get(link)!,
+                  classifications: JSON.stringify(
+                    classifications.filter((item) => item.link === link),
+                  ),
+                },
+                keyed.apiKey,
+              );
+            } catch {
+              return jsonResult({
+                success: false,
+                submitted: false,
+                submittedLinks,
+                unknownLinks: [link],
+                pendingLinks: links.slice(index + 1),
+                error:
+                  "提交连接异常，该链接是否入队未知。请先核对后台状态，不要自动重试或重提整批。",
+              });
+            }
+            if (response.code !== "success") {
+              return jsonResult({
+                success: false,
+                submitted: false,
+                submittedLinks,
+                failedLinks: [link],
+                pendingLinks: links.slice(index + 1),
+                error: asString(response.message) ?? "后端拒绝了该链接的举报请求。",
+                agentInstruction: "如实报告逐条结果；已提交链接不要重复提交。",
+              });
+            }
+            submittedLinks.push(link);
+          }
+          return jsonResult({
+            success: true,
+            submitted: true,
+            submittedLinks,
+            message: "已按链接分别提交举报任务，每条使用独立事由。",
+            agentInstruction:
+              "告知用户逐链接任务已提交，不代表平台已受理或处置。无需继续调用工具。",
+          });
         }
         let res: Record<string, unknown>;
         try {

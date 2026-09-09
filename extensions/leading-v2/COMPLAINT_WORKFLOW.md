@@ -7,6 +7,26 @@ the available document tools. Other articles on the same topic do not establish
 what the target article says. Missing evidence must be identified explicitly.
 Creating a document does not authorize submitting a complaint externally.
 
+For direct `complaint_submit` batches, provide `linkJudgments` with exactly one
+`{ link, judgment }` entry per URL (20–6000 characters per judgment). Each reason
+must refer only to that URL's evidence and the user's stated grounds. Keep
+unverified claims distinct from established facts; an AI label or missing source
+alone does not establish falsehood. The top-level `judgment` is a batch summary.
+Single-link calls may continue to use the top-level `judgment` alone.
+
+The current backend takes one task-level judgment. The plugin therefore creates
+one task per link, sending only its own reason and classification. It validates
+all reasons and obtains missing classifications before any submission. Explicit
+`role` identifies the reporter; `subjectScope` identifies the affected subject
+and must not override a personal reporter's selected identity.
+
+Batch results list `submittedLinks`. On a backend rejection, they also identify
+`failedLinks` and the remaining `pendingLinks`; a transport exception instead
+returns `unknownLinks`, which must be checked before retrying. Do not resubmit the
+whole batch or describe partial submission as complete. Submission confirms only
+backend acceptance, not platform acceptance or removal. Legacy detection-based
+submissions retain their existing backend behavior.
+
 `opinion_analyze` remains available for background reports and batch analysis.
 Its `RiskEvaluation` result is an opinion report, not a content-detection job.
 It cannot be passed to the legacy backend letter generator as a detection result.
