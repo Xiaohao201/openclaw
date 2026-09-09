@@ -1,9 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { parseLegacyReferences, validateSkillResources } from "../../infra/skill-resources.js";
 import {
   createSkill,
   getSkillByName,
+  getSkillResourcesForUser,
   invalidateSkillsMaterializeCache,
   listSkills,
   materializeSkillsForUser,
@@ -93,6 +95,27 @@ const SkillSaveToolSchema = Type.Object({
     }),
   ),
   category: Type.Optional(Type.String({ description: "Optional grouping label." })),
+  references: Type.Optional(
+    Type.String({ maxLength: 500, description: "Legacy reference text; omit to preserve it." }),
+  ),
+  resources: Type.Optional(
+    Type.Array(
+      Type.Object({
+        path: Type.String({ description: "Relative attachment path, e.g. references/guide.md." }),
+        mediaType: Type.Union([
+          Type.Literal("text/markdown"),
+          Type.Literal("text/plain"),
+          Type.Literal("application/json"),
+        ]),
+        content: Type.String(),
+      }),
+      {
+        maxItems: 64,
+        description:
+          "Complete replacement attachment collection. Omit to preserve attachments; [] removes all formal attachments. Matching legacy attachment copies retire with edits; executable scripts are managed separately.",
+      },
+    ),
+  ),
 });
 
 const SkillGetToolSchema = Type.Object({
@@ -161,6 +184,12 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
         );
       }
       const category = readStringParam(params, "category");
+      const resources =
+        params.resources === undefined ? undefined : validateSkillResources(params.resources);
+      const references =
+        params.references === undefined
+          ? undefined
+          : readStringParam(params, "references", { allowEmpty: true, trim: false });
       if (category && category.length > MAX_CATEGORY_LEN) {
         throw new ToolInputError(`category too long (max ${MAX_CATEGORY_LEN} characters)`);
       }
@@ -180,6 +209,8 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
               source: SKILL_SOURCE,
               ...(category ? { category } : {}),
               is_enable: 1,
+              ...(resources !== undefined ? { resources } : {}),
+              ...(references !== undefined ? { references } : {}),
             },
             userId,
           );
@@ -194,6 +225,8 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
               content,
               source: SKILL_SOURCE,
               category,
+              ...(resources !== undefined ? { resources } : {}),
+              ...(references !== undefined ? { references } : {}),
             },
             userId,
           );
@@ -262,6 +295,12 @@ export function createSkillGetTool(opts?: SkillToolOptions): AnyAgentTool {
           note: "No skill with that name in this user's library. Use skill_list to see the exact names.",
         });
       }
+      let resources;
+      try {
+        resources = await getSkillResourcesForUser(row.id, userId);
+      } catch {
+        throw new ToolInputError("Could not read skill attachments right now. Please try again.");
+      }
       return jsonResult({
         ok: true,
         found: true,
@@ -272,6 +311,12 @@ export function createSkillGetTool(opts?: SkillToolOptions): AnyAgentTool {
         category: row.category ?? undefined,
         enabled: row.is_enable === 1,
         content: row.content ?? "",
+        references: parseLegacyReferences(row.references),
+        resources: resources.map((resource) => ({
+          path: resource.path,
+          mediaType: resource.mediaType,
+          bytes: Buffer.byteLength(resource.content, "utf8"),
+        })),
       });
     },
   };

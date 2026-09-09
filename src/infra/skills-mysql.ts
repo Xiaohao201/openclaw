@@ -14,6 +14,14 @@ import type {
 } from "../agents/skills/types.js";
 import { loadConfig } from "../config/config.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { writeFileWithinRoot } from "./fs-safe.js";
+import { getManagedResourcePaths, syncSkillResourceFiles } from "./skill-resource-files.js";
+import {
+  readSkillResources,
+  replaceSkillResources,
+  withSkillTransaction,
+} from "./skill-resource-store.js";
+import { resourceIndex, validateSkillResources, type SkillResource } from "./skill-resources.js";
 import { resolveStorageSkillSlug, withStorageSkillIdentity } from "./skill-storage-identity.js";
 import { getSkillsDbCachedUserId, setSkillsDbCache } from "./skills-db-cache.js";
 
@@ -168,6 +176,9 @@ export async function closePool(): Promise<void> {
   }
   cachedEntries = null;
   publicSkillsSeeded = false;
+  materializedKey = null;
+  materializedAt = 0;
+  lastFailureAt = 0;
 }
 
 function extractBundledSkillDescription(content: string): string {
@@ -327,13 +338,29 @@ export async function listSkills(
   return { skills: rows as SkillRow[], total };
 }
 
-export async function getSkillById(id: number, userId: number): Promise<SkillRow | null> {
-  const p = getPool();
+export async function getSkillById(
+  id: number,
+  userId: number,
+  connection?: mysql.PoolConnection,
+): Promise<SkillRow | null> {
+  const p = connection ?? getPool();
   const [rows] = await p.execute<mysql.RowDataPacket[]>(
-    "SELECT id, user_id, COALESCE(slug, name) AS slug, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE id = ? AND user_id = ?",
+    "SELECT id, user_id, COALESCE(slug, name) AS slug, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE id = ? AND user_id = ?" +
+      (connection ? " FOR UPDATE" : ""),
     [id, userId],
   );
   return (rows[0] as SkillRow) ?? null;
+}
+
+export async function getSkillResourcesForUser(
+  id: number,
+  userId: number,
+): Promise<SkillResource[]> {
+  const row = await getSkillById(id, userId);
+  if (!row) {
+    return [];
+  }
+  return (await readSkillResources(getPool(), [row.id])).get(row.id) ?? [];
 }
 
 /**
@@ -358,10 +385,25 @@ export async function createSkill(
     content?: string;
     source?: string;
     category?: string;
+    references?: string;
+    resources?: SkillResource[];
   },
   userId: number,
+  connection?: mysql.PoolConnection,
 ): Promise<SkillRow> {
-  const p = getPool();
+  if (data.resources !== undefined && !connection) {
+    validateSkillResources(data.resources);
+    const row = await withSkillTransaction(getPool(), (conn) => createSkill(data, userId, conn));
+    invalidateSkillsMaterializeCache();
+    return row;
+  }
+  const p = connection ?? getPool();
+  if (
+    data.references !== undefined &&
+    (typeof data.references !== "string" || data.references.length > 500)
+  ) {
+    throw new Error("Invalid legacy references");
+  }
   const now = new Date();
   const slug = resolveStorageSkillSlug(data.name, data.content ?? "", data.slug);
   const content = withStorageSkillIdentity(data.content ?? "", slug, data.name);
@@ -370,7 +412,7 @@ export async function createSkill(
   // default value". `source` must be a valid enum member (see skill-tool's
   // SKILL_SOURCE); default to 'workspace' rather than the invalid 'manual'.
   const [result] = await p.execute<mysql.ResultSetHeader>(
-    "INSERT INTO skills (user_id, slug, name, description, content, source, category, is_enable, `references`, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)",
+    "INSERT INTO skills (user_id, slug, name, description, content, source, category, is_enable, `references`, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
     [
       userId,
       slug,
@@ -379,11 +421,15 @@ export async function createSkill(
       content,
       data.source ?? "workspace",
       data.category ?? null,
+      data.references ?? "",
       now,
       now,
     ],
   );
-  const inserted = await getSkillById(result.insertId, userId);
+  if (data.resources !== undefined) {
+    await replaceSkillResources(p, result.insertId, data.resources);
+  }
+  const inserted = await getSkillById(result.insertId, userId, connection);
   if (!inserted) {
     throw new Error("Failed to retrieve inserted skill");
   }
@@ -400,11 +446,22 @@ export async function updateSkill(
     source: string;
     category: string;
     is_enable: number;
+    references: string;
+    resources: SkillResource[];
   }>,
   userId: number,
+  connection?: mysql.PoolConnection,
 ): Promise<SkillRow | null> {
-  const p = getPool();
-  const existing = await getSkillById(id, userId);
+  if (data.resources !== undefined && !connection) {
+    validateSkillResources(data.resources);
+    const row = await withSkillTransaction(getPool(), (conn) =>
+      updateSkill(id, data, userId, conn),
+    );
+    invalidateSkillsMaterializeCache();
+    return row;
+  }
+  const p = connection ?? getPool();
+  const existing = await getSkillById(id, userId, connection);
   if (!existing) {
     return null;
   }
@@ -458,8 +515,18 @@ export async function updateSkill(
     sets.push("is_enable = ?");
     values.push(data.is_enable);
   }
+  if (data.references !== undefined) {
+    if (typeof data.references !== "string" || data.references.length > 500) {
+      throw new Error("Invalid legacy references");
+    }
+    sets.push("`references` = ?");
+    values.push(data.references);
+  }
+  if (data.resources !== undefined) {
+    await replaceSkillResources(p, id, data.resources);
+  }
 
-  if (sets.length === 0) {
+  if (sets.length === 0 && data.resources === undefined) {
     return getSkillById(id, userId);
   }
 
@@ -482,7 +549,7 @@ export async function updateSkill(
     throw new Error("Skill changed during update; reload before saving");
   }
 
-  return getSkillById(id, userId);
+  return getSkillById(id, userId, connection);
 }
 
 export async function deleteSkill(id: number, userId: number): Promise<boolean> {
@@ -618,7 +685,7 @@ export async function materializeSkillsForUser(
   userId?: string,
 ): Promise<SkillEntry[]> {
   const numericUserId = userId ? Number(userId) : undefined;
-  if (numericUserId === undefined || Number.isNaN(numericUserId)) {
+  if (numericUserId === undefined || !Number.isSafeInteger(numericUserId) || numericUserId <= 0) {
     return [];
   }
 
@@ -630,7 +697,9 @@ export async function materializeSkillsForUser(
   // Recently failed (DB unreachable/misconfigured): skip without re-blocking the
   // turn. Degrade to whatever was last materialized, or to filesystem skills.
   if (Date.now() - lastFailureAt < FAILURE_COOLDOWN_MS) {
-    return cachedEntries ?? [];
+    return key === materializedKey && getSkillsDbCachedUserId() === numericUserId
+      ? (cachedEntries ?? [])
+      : [];
   }
 
   try {
@@ -653,6 +722,10 @@ async function doMaterializeSkills(
   const p = getPool();
   const skillRows = await fetchVisibleSkillRows(p, numericUserId);
   const scriptsBySkill = await fetchSkillScripts(skillRows.map((r) => r.id));
+  const resourcesBySkill = await readSkillResources(
+    p,
+    skillRows.map((r) => r.id),
+  );
 
   const skillsRoot = path.join(workspaceDir, "skills");
   const publicSkillsRoot = path.join(workspaceDir, ".openclaw-public-skills");
@@ -672,16 +745,32 @@ async function doMaterializeSkills(
       });
     }
     await fs.mkdir(baseDir, { recursive: true });
+    if ((await fs.lstat(baseDir)).isSymbolicLink()) {
+      throw new Error("Skill directory cannot be a symlink");
+    }
     const skillMdPath = path.join(baseDir, "SKILL.md");
-    await fs.writeFile(
-      skillMdPath,
-      withStorageSkillIdentity(row.content ?? "", rowSlug(row), row.name),
-      "utf8",
+    const resources = resourcesBySkill.get(row.id) ?? [];
+    const managedPaths = new Set(
+      (await getManagedResourcePaths(baseDir)).map((file) => file.toLowerCase()),
+    );
+    const legacyScripts = (scriptsBySkill.get(row.id) ?? []).filter(
+      (script) => !managedPaths.has(sanitizeSkillSegment(script.script_name).toLowerCase()),
+    );
+    const attachmentIndex = resourceIndex(
+      resources,
+      row.references,
+      legacyScripts.map((script) => sanitizeSkillSegment(script.script_name)),
     );
 
-    for (const script of scriptsBySkill.get(row.id) ?? []) {
+    for (const script of legacyScripts) {
       const safeScript = sanitizeSkillSegment(script.script_name);
-      if (!safeScript) {
+      if (
+        !safeScript ||
+        ["skill.md", ".openclaw-resource-files.json"].includes(safeScript.toLowerCase())
+      ) {
+        continue;
+      }
+      if (resources.some((resource) => resource.path.toLowerCase() === safeScript.toLowerCase())) {
         continue;
       }
       const scriptPath = path.join(baseDir, safeScript);
@@ -694,6 +783,12 @@ async function doMaterializeSkills(
         }
       }
     }
+    await syncSkillResourceFiles(baseDir, resources);
+    await writeFileWithinRoot({
+      rootDir: baseDir,
+      relativePath: "SKILL.md",
+      data: withStorageSkillIdentity((row.content ?? "") + attachmentIndex, rowSlug(row), row.name),
+    });
 
     entries.push(rowToSkillEntry(row, { filePath: skillMdPath, baseDir }));
   }
