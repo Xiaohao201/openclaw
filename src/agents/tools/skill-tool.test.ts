@@ -10,6 +10,7 @@ vi.mock("../../infra/skills-mysql.js", async (importActual) => {
   return {
     ...actual,
     getSkillByName: vi.fn(),
+    getSkillResourcesForUser: vi.fn(),
     createSkill: vi.fn(),
     updateSkill: vi.fn(),
     listSkills: vi.fn(),
@@ -66,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   materializeSkillsForUser.mockResolvedValue([]);
   listSkills.mockResolvedValue({ skills: [], total: 0 });
+  vi.mocked(skillsMysql.getSkillResourcesForUser).mockResolvedValue([]);
 });
 
 describe("skill_save", () => {
