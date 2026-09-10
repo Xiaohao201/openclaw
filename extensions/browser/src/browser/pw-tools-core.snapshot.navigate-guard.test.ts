@@ -63,38 +63,47 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).not.toHaveBeenCalled();
   });
 
-  it("navigates valid network URLs with clamped timeout", async () => {
-    const goto = vi.fn(async () => {});
-    setPwToolsCoreCurrentPage({
-      goto,
-      url: vi.fn(() => "https://example.com"),
-    });
+  it.each([
+    { timeoutMs: undefined, expectedTimeout: 60_000 },
+    { timeoutMs: 10, expectedTimeout: 1000 },
+    { timeoutMs: 180_000, expectedTimeout: 120_000 },
+  ])(
+    "navigates with timeout $timeoutMs (effective $expectedTimeout)",
+    async ({ timeoutMs, expectedTimeout }) => {
+      const goto = vi.fn(async () => {});
+      setPwToolsCoreCurrentPage({
+        goto,
+        url: vi.fn(() => "https://example.com"),
+      });
 
-    const result = await mod.navigateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "https://example.com",
-      timeoutMs: 10,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+      const result = await mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com",
+        timeoutMs,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
 
-    expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: 1000 });
-    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page: expect.anything(),
-      ssrfPolicy: { allowPrivateNetwork: true },
-      targetId: undefined,
-      timeoutMs: 1000,
-      url: "https://example.com",
-    });
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page: expect.anything(),
-      response: null,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      targetId: undefined,
-    });
-    expect(result.url).toBe("https://example.com");
-  });
+      expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: expectedTimeout });
+      expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith({
+        cdpUrl: "http://127.0.0.1:18792",
+        page: expect.anything(),
+        ssrfPolicy: { allowPrivateNetwork: true },
+        targetId: undefined,
+        timeoutMs: expectedTimeout,
+        url: "https://example.com",
+      });
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page: expect.anything(),
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: true },
+          targetId: undefined,
+        },
+      );
+      expect(result.url).toBe("https://example.com");
+    },
+  );
 
   it("reconnects and retries once when navigation detaches frame", async () => {
     const goto = vi

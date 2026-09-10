@@ -9,6 +9,7 @@ import { asRecord } from "../record-shared.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
+import { DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS } from "./navigation-timeouts.js";
 
 type ChromeMcpStructuredPage = {
   id: number;
@@ -43,7 +44,7 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "--experimental-page-id-routing",
 ];
 const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
-const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
+const CHROME_MCP_NAVIGATE_TIMEOUT_MS = DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS;
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
@@ -310,15 +311,18 @@ async function callTool(
   userDataDir: string | undefined,
   name: string,
   args: Record<string, unknown> = {},
+  requestTimeoutMs?: number,
 ): Promise<ChromeMcpToolResult> {
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
   const session = await getSession(profileName, userDataDir);
   let result: ChromeMcpToolResult;
   try {
-    result = (await session.client.callTool({
-      name,
-      arguments: args,
-    })) as ChromeMcpToolResult;
+    const request = { name, arguments: args };
+    result = (await (requestTimeoutMs === undefined
+      ? session.client.callTool(request)
+      : session.client.callTool(request, undefined, {
+          timeout: requestTimeoutMs,
+        }))) as ChromeMcpToolResult;
   } catch (err) {
     // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(cacheKey);
@@ -460,12 +464,19 @@ export async function navigateChromeMcpPage(params: {
   url: string;
   timeoutMs?: number;
 }): Promise<{ url: string }> {
-  await callTool(params.profileName, params.userDataDir, "navigate_page", {
-    pageId: parsePageId(params.targetId),
-    type: "url",
-    url: params.url,
-    ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-  });
+  const timeoutMs = params.timeoutMs ?? DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS;
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "navigate_page",
+    {
+      pageId: parsePageId(params.targetId),
+      type: "url",
+      url: params.url,
+      timeout: timeoutMs,
+    },
+    timeoutMs + 10_000,
+  );
   const page = await findPageById(
     params.profileName,
     parsePageId(params.targetId),

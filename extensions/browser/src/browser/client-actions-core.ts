@@ -6,6 +6,7 @@ import type {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import { BROWSER_NAVIGATION_REQUEST_TIMEOUT_MS } from "./navigation-timeouts.js";
 
 export type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 
@@ -53,7 +54,7 @@ export async function browserNavigate(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
+    timeoutMs: BROWSER_NAVIGATION_REQUEST_TIMEOUT_MS,
   });
 }
 
