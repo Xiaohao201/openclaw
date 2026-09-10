@@ -192,14 +192,19 @@ export class HistoryManager {
       values.push(params.beforeId);
     }
 
-    const limit = Math.min(100, Math.max(1, Math.floor(params.limit ?? 50)));
-    values.push(limit + 1);
+    const requestedLimit = params.limit ?? 50;
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(100, Math.max(1, Math.floor(requestedLimit)))
+      : 50;
+    // Inline only the bounded integer to avoid prepared-statement LIMIT binding
+    // incompatibilities. All user-controlled filters remain bound parameters.
+    const fetchLimit = limit + 1;
     const [rows] = await pool.execute<mysql.RowDataPacket[]>(
       `SELECT id, session_id, message, response, created_at
        FROM ${this.tableSql}
        WHERE ${clauses.join(" AND ")}
        ORDER BY id DESC
-       LIMIT ?`,
+       LIMIT ${fetchLimit}`,
       values,
     );
     const selectedRows = rows ?? [];
