@@ -25,6 +25,8 @@ Docs: https://docs.openclaw.ai
 - Leading v2/complaints: add a read-only `complaint_task_status` tool for authenticated complaint-task lists and per-link submission, failure, and takedown status so Suheng no longer infers queue progress without backend evidence.
 - Agents/session diagnostics: store each enabled deployment conversation as a dedicated JSONL file under its session directory, with one redacted input/output record per model step.
 
+- Leading v2/tools: retire the legacy opinion analysis, content generation, report export, download, sheet-report creation, and report status/stop tools; retain monitoring queries and complaint workflows.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
