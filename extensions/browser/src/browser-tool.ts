@@ -7,6 +7,7 @@ import {
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
+import { BROWSER_NAVIGATION_REQUEST_TIMEOUT_MS } from "./browser/navigation-timeouts.js";
 import {
   type AnyAgentTool,
   type NodeListNode,
@@ -624,6 +625,7 @@ export function createBrowserTool(opts?: {
             const result = await proxyRequest({
               method: "POST",
               path: "/navigate",
+              timeoutMs: BROWSER_NAVIGATION_REQUEST_TIMEOUT_MS,
               profile,
               body: {
                 url: targetUrl,

@@ -458,6 +458,28 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("allows a full minute for navigation through a node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: { result: { ok: true, url: "https://example.com" } },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      target: "node",
+      url: "https://example.com",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 75_000 },
+      expect.objectContaining({
+        params: expect.objectContaining({ path: "/navigate", timeoutMs: 70_000 }),
+      }),
+    );
+  });
+
   it("keeps sandbox bridge url when node proxy is available", async () => {
     mockSingleBrowserProxyNode();
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });

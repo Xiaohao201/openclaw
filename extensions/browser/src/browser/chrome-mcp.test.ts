@@ -3,6 +3,7 @@ import {
   buildChromeMcpArgs,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
+  navigateChromeMcpPage,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -143,6 +144,26 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("allows a full minute for navigation before the MCP request expires", async () => {
+    const session = createFakeSession();
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await navigateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "1",
+      url: "https://example.com/",
+    });
+
+    expect(session.client.callTool).toHaveBeenCalledWith(
+      {
+        name: "navigate_page",
+        arguments: { pageId: 1, type: "url", url: "https://example.com/", timeout: 60_000 },
+      },
+      undefined,
+      { timeout: 70_000 },
+    );
   });
 
   it("opens about:blank directly without an extra navigate", async () => {

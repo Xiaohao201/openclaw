@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS } from "./navigation-timeouts.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -222,7 +223,10 @@ export async function navigateViaPlaywright(opts: {
     url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
-  const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
+  const timeout = Math.max(
+    1000,
+    Math.min(120_000, opts.timeoutMs ?? DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS),
+  );
   let page = await getPageForTargetId(opts);
   ensurePageState(page);
   const navigate = async () =>
