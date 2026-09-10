@@ -4,7 +4,7 @@ import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
 describe("SUHENG_RUNTIME_SYSTEM_PROMPT", () => {
   it("uses current evidence for single-link complaint documents instead of chaining incompatible tasks", () => {
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("单篇链接的侵权研判与投诉文书");
-    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("RiskEvaluation 不是内容检测任务");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("舆情报告不是内容检测任务");
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("不能替代目标链接原文");
   });
   it("uses the actual browser tool and distinguishes channel capabilities", () => {

@@ -51,7 +51,7 @@ describe("resolveToolCategory", () => {
   it("maps expanded tools onto sanitized categories", () => {
     expect(resolveToolCategory("schedule_create")).toBe("schedule");
     expect(resolveToolCategory("link_batch_create")).toBe("check");
-    expect(resolveToolCategory("opinion_report_export")).toBe("report");
+    expect(resolveToolCategory("report_create")).toBe("report");
     expect(resolveToolCategory("complaint_task_status")).toBe("query");
     expect(resolveToolCategory("x_search")).toBe("search");
   });
@@ -66,7 +66,7 @@ describe("resolveStepDetail", () => {
 
   it("maps a report period enum to a fixed label", () => {
     expect(resolveStepDetail("report_create", { period: "weekly" })).toBe("周报");
-    expect(resolveStepDetail("sheet_report_create", { type: "MONTHLY" })).toBe("月报");
+    expect(resolveStepDetail("report_create", { type: "MONTHLY" })).toBe("月报");
   });
 
   it("returns undefined for non-whitelisted tools", () => {

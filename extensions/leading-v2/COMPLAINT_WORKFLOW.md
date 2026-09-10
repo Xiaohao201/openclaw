@@ -27,17 +27,14 @@ whole batch or describe partial submission as complete. Submission confirms only
 backend acceptance, not platform acceptance or removal. Legacy detection-based
 submissions retain their existing backend behavior.
 
-`opinion_analyze` remains available for background reports and batch analysis.
-Its `RiskEvaluation` result is an opinion report, not a content-detection job.
-It cannot be passed to the legacy backend letter generator as a detection result.
+Create opinion reports and response documents from the available evidence using
+the selected skill/template and file-generation tools. The legacy backend opinion
+analysis, content generation, report export, and download tools have been retired.
+An opinion report is not a content-detection job and cannot be passed to the legacy
+backend letter generator as a detection result.
 
 Task references are carried in tool results and conversation history:
 
-- `opinion_analyze`, `opinion_report_export`, and `sheet_report_create` return
-  `slug`. Pass that same value to `opinion_download_status`.
-- `opinion_download_list` exposes `slug` for recovering a selected historical
-  task. Status lookup does not fall back to the account's newest task; the current
-  lookup searches the latest 50 downloads and reports an unknown result honestly.
 - `job_list` exposes `jobId`, link, label, and status for selecting the relevant
   content-detection job. Do not select an unrelated job merely because it is new.
 - `letter_generate` requires this explicit `jobId`, fetches that exact job through

@@ -53,21 +53,6 @@ import {
   createMonthlyStatsToolFactory,
   createTopicListToolFactory,
 } from "./src/opinion/opinion-read-tools.js";
-import {
-  createOpinionAnalyzeToolFactory,
-  createOpinionDownloadContentToolFactory,
-  createOpinionDownloadListToolFactory,
-  createOpinionDownloadStatusToolFactory,
-  createOpinionExportToolFactory,
-  createSheetReportToolFactory,
-  type RecentDownload,
-} from "./src/opinion/opinion-task-tools.js";
-import {
-  createOpinionContentToolFactory,
-  createReportStatusToolFactory,
-  createReportStopToolFactory,
-  type RecentReport,
-} from "./src/report/report-tools.js";
 import { buildRunners } from "./src/schedule/actions/registry.js";
 import { getSharedScheduleStore } from "./src/schedule/schedule-store.js";
 import {
@@ -108,38 +93,7 @@ export default definePluginEntry({
       name: "link_batch_list",
     });
 
-    // --- industry-report (评论/回应生成) ---
-    const reports = new RecentTaskStore<RecentReport>();
-    api.registerTool(createOpinionContentToolFactory(api, resolver, reports), {
-      name: "opinion_content_create",
-    });
-    api.registerTool(createReportStatusToolFactory(api, resolver, reports), {
-      name: "report_status",
-    });
-    api.registerTool(createReportStopToolFactory(api, resolver, reports), {
-      name: "report_stop",
-    });
-
-    // --- pub-opinion (舆情监测/研判) ---
-    const downloads = new RecentTaskStore<RecentDownload>();
-    api.registerTool(createOpinionAnalyzeToolFactory(api, resolver, downloads), {
-      name: "opinion_analyze",
-    });
-    api.registerTool(createOpinionExportToolFactory(api, resolver, downloads), {
-      name: "opinion_report_export",
-    });
-    api.registerTool(createSheetReportToolFactory(api, resolver, downloads), {
-      name: "sheet_report_create",
-    });
-    api.registerTool(createOpinionDownloadStatusToolFactory(api, resolver, downloads), {
-      name: "opinion_download_status",
-    });
-    api.registerTool(createOpinionDownloadListToolFactory(api, resolver), {
-      name: "opinion_download_list",
-    });
-    api.registerTool(createOpinionDownloadContentToolFactory(api, resolver), {
-      name: "opinion_download_content",
-    });
+    // --- pub-opinion (舆情监测) ---
     api.registerTool(createFeedListToolFactory(api, resolver), { name: "feed_list" });
     api.registerTool(createTopicListToolFactory(api, resolver), { name: "topic_list" });
     api.registerTool(createFeedReanalyzeToolFactory(api, resolver), { name: "feed_reanalyze" });

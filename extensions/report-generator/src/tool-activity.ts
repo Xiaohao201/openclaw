@@ -97,21 +97,12 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   // 报告生成
   report: "正在生成报告",
   report_create: "正在生成报告",
-  report_status: "正在确认报告进度",
-  report_stop: "正在停止报告生成",
-  sheet_report_create: "正在生成表格报告",
-  opinion_report_export: "正在导出舆情报告",
-  opinion_content_create: "正在生成回应内容",
   // 舆情监测 / 分析
   feed_list: "正在浏览舆情列表",
   feed_reanalyze: "正在重新分析舆情",
   topic_list: "正在查看监测主题",
   monthly_stats: "正在统计舆情数据",
-  opinion_analyze: "正在分析舆情",
   risk_judge: "正在研判舆情风险",
-  opinion_download_status: "正在确认下载进度",
-  opinion_download_list: "正在获取下载列表",
-  opinion_download_content: "正在读取报告正文",
   // 维权文书 / 任务
   letter_generate: "正在生成维权文书",
   letter_fetch: "正在查询维权文书",
@@ -177,20 +168,11 @@ const TOOL_CATEGORIES: Readonly<Record<string, StepCategory>> = {
   legal_check_status: "check",
   report: "report",
   report_create: "report",
-  report_status: "report",
-  report_stop: "report",
-  sheet_report_create: "report",
-  opinion_report_export: "report",
-  opinion_content_create: "report",
   feed_list: "query",
   feed_reanalyze: "query",
   topic_list: "query",
   monthly_stats: "query",
-  opinion_analyze: "query",
   risk_judge: "query",
-  opinion_download_status: "report",
-  opinion_download_list: "report",
-  opinion_download_content: "report",
   letter_generate: "report",
   letter_fetch: "report",
   complaint_submit: "report",
@@ -471,13 +453,7 @@ const STEP_DETAIL_RULES: Readonly<
     const n = readCount(a, LIMIT_KEYS);
     return n ? `获取 ${n} 条` : undefined;
   },
-  opinion_analyze: (a) => {
-    const n = readCount(a, LIMIT_KEYS);
-    return n ? `分析 ${n} 条` : undefined;
-  },
   report_create: (a) => readEnumLabel(a, PERIOD_KEYS, PERIOD_LABELS),
-  sheet_report_create: (a) => readEnumLabel(a, PERIOD_KEYS, PERIOD_LABELS),
-  opinion_report_export: (a) => readEnumLabel(a, PERIOD_KEYS, PERIOD_LABELS),
 };
 
 /** Defense in depth: only CJK, digits and spaces may reach the frontend. */
