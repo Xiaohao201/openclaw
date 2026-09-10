@@ -255,7 +255,8 @@ describe("HistoryManager.queryCollaborationHistory", () => {
     expect(result).toMatchObject({ status: "ok", access: "self", targetUserId: "42" });
     expect(mockExecute).toHaveBeenCalledOnce();
     expect(mockExecute.mock.calls[0]?.[0]).toContain("WHERE user_id = ?");
-    expect(mockExecute.mock.calls[0]?.[1]).toEqual(["42", 21]);
+    expect(mockExecute.mock.calls[0]?.[0]).toMatch(/LIMIT 21\s*$/u);
+    expect(mockExecute.mock.calls[0]?.[1]).toEqual(["42"]);
   });
 
   it("denies cross-user reads before querying history when requester is not an administrator", async () => {
@@ -304,13 +305,60 @@ describe("HistoryManager.queryCollaborationHistory", () => {
     expect(mockExecute.mock.calls[1]?.[0]).toContain("created_at >= ?");
     expect(mockExecute.mock.calls[1]?.[0]).toContain("created_at < ?");
     expect(mockExecute.mock.calls[1]?.[0]).toContain("id < ?");
+    expect(mockExecute.mock.calls[1]?.[0]).toMatch(/LIMIT 11\s*$/u);
     expect(mockExecute.mock.calls[1]?.[1]).toEqual([
       "99",
       "2026-08-01T00:00:00.000Z",
       "2026-09-01T00:00:00.000Z",
       30,
-      11,
     ]);
+  });
+
+  it.each([
+    [undefined, 51],
+    [0, 2],
+    [-5, 2],
+    [2.9, 3],
+    [1000, 101],
+    [Number.NaN, 51],
+    [Number.POSITIVE_INFINITY, 51],
+  ])("uses a bounded integer SQL limit for %s", async (limit, fetchLimit) => {
+    mockExecute.mockResolvedValueOnce([[], undefined]);
+
+    await manager.queryCollaborationHistory({
+      requesterUserId: "42",
+      targetUserId: "42",
+      limit,
+    });
+
+    expect(mockExecute.mock.calls[0]?.[0]).toMatch(new RegExp(`LIMIT ${fetchLimit}\\s*$`, "u"));
+    expect(mockExecute.mock.calls[0]?.[1]).toEqual(["42"]);
+  });
+
+  it("uses the extra row only to detect the next page", async () => {
+    mockExecute.mockResolvedValueOnce([
+      [8, 7, 6].map((id) => ({
+        id,
+        session_id: "session-a",
+        message: "question",
+        response: null,
+        created_at: new Date("2026-08-01T00:00:00.000Z"),
+      })),
+      undefined,
+    ]);
+
+    const result = await manager.queryCollaborationHistory({
+      requesterUserId: "42",
+      targetUserId: "42",
+      limit: 2,
+    });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      records: [{ id: 8 }, { id: 7 }],
+      hasMore: true,
+      nextBeforeId: 7,
+    });
   });
 });
 
