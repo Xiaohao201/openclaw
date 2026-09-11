@@ -597,6 +597,14 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test.each([true, false])("forwards disableTools=%s for a single run", async (disableTools) => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    await runtime.run({ sessionKey: "s-tool-control", message: "Write a summary", disableTools });
+    expect(getLastDispatchedParams()).toMatchObject({ disableTools });
+    await runtime.run({ sessionKey: "s-normal", message: "Continue normally" });
+    expect(getLastDispatchedParams()).not.toHaveProperty("disableTools");
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

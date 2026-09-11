@@ -15,6 +15,8 @@ export type SubagentRunParams = {
   skillFilter?: string[];
   /** Optional per-run tool allowlist. This can only narrow the target agent's tool policy. */
   toolsAllow?: string[];
+  /** Disable all tools for this run, including when toolsAllow is also provided. */
+  disableTools?: boolean;
   /** Optional system-prompt profile override for trusted in-process runs. */
   systemPromptMode?: "full" | "minimal";
   /** Optional workspace bootstrap-context mode for this run. */

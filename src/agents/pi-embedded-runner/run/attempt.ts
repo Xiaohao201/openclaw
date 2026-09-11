@@ -249,6 +249,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import { createRunToolSelection } from "./tool-selection.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -599,7 +600,12 @@ export async function runEmbeddedAttempt(
           }
           return allTools;
         })();
-    const toolsEnabled = supportsModelTools(params.model);
+    const toolSelection = createRunToolSelection({
+      modelSupportsTools: supportsModelTools(params.model),
+      disableTools: params.disableTools,
+      toolsAllow: params.toolsAllow,
+    });
+    const toolsEnabled = toolSelection.enabled;
     const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
@@ -610,7 +616,10 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     });
-    const clientTools = toolsEnabled ? params.clientTools : undefined;
+    const clientTools =
+      toolsEnabled && params.clientTools
+        ? toolSelection.filter(params.clientTools, (tool) => tool.function.name)
+        : undefined;
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -639,18 +648,21 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    const effectiveTools = toolSelection.filter(
+      [...tools, ...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
+      (tool) => tool.name,
+    );
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
     });
     log.info(
       formatToolAvailability({
-        stage: toolsEnabled ? "model-tool-schemas" : "model-tools-unsupported",
+        stage: params.disableTools
+          ? "model-tools-disabled"
+          : toolsEnabled
+            ? "model-tool-schemas"
+            : "model-tools-unsupported",
         available: allowedToolNames,
         before: toolsRaw.map((tool) => tool.name),
         runId: params.runId,

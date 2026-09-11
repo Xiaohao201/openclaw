@@ -20,6 +20,12 @@ let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const internalEvents: AgentInternalEvent[] = [];
 const forwardingCases = [
   {
+    name: "forwards explicit tool disablement to the model attempt",
+    runId: "forward-disableTools",
+    params: { disableTools: true },
+    expected: { disableTools: true },
+  },
+  {
     name: "forwards toolsAllow so the per-job tool allowlist can be honored",
     runId: "forward-toolsAllow",
     params: { toolsAllow: ["exec", "read"] },

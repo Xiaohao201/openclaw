@@ -130,7 +130,11 @@ intersects this list with the target agent's configured skill filter, so a
 plugin cannot use it to widen the agent's existing access.
 
 `toolsAllow` similarly narrows the tools that already pass the target agent's
-normal policy; it cannot grant a tool the agent does not have. Trusted in-process
+normal policy; it cannot grant a tool the agent does not have. An omitted or empty
+list leaves the normal tool policy unchanged. Set `disableTools: true` for a
+text-only run with no tools, even if `toolsAllow` is also provided. This optional
+per-run flag does not change the parent session or the agent's configured tools.
+Trusted in-process
 plugins can use `systemPromptMode: "minimal"` and
 `bootstrapContextMode: "lightweight"` for bounded classifier or domain-agent
 runs that do not need the general OpenClaw guidance or workspace bootstrap files.

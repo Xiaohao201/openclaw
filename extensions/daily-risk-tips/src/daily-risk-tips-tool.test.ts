@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { createDailyRiskTipsToolFactory } from "./daily-risk-tips-tool.js";
 
-type RunParams = { sessionKey: string; message: string; extraSystemPrompt: string };
+type RunParams = {
+  sessionKey: string;
+  message: string;
+  extraSystemPrompt: string;
+  toolsAllow?: string[];
+  disableTools?: boolean;
+};
 type WaitParams = { runId: string; timeoutMs?: number };
 type GetSessionMessagesParams = { sessionKey: string; limit?: number };
 
@@ -53,6 +59,15 @@ describe("daily_risk_tips tool", () => {
     const result = await tool.execute("call-1", { message: "某政策发布" });
 
     expect(result.details).toMatchObject({ success: true, daily_risk_tip: GENERATED_ANSWER });
+    expect(
+      subagent.run.mock.calls.map(([params]) => ({
+        toolsAllow: params.toolsAllow,
+        disableTools: params.disableTools,
+      })),
+    ).toEqual([
+      { toolsAllow: ["milvus_search"], disableTools: undefined },
+      { toolsAllow: undefined, disableTools: true },
+    ]);
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
 
@@ -139,6 +154,7 @@ describe("daily_risk_tips tool", () => {
     const result = await tool.execute("call-1", { message: "某政策发布" });
 
     expect(result.details).toMatchObject({ success: true, daily_risk_tip: GENERATED_ANSWER });
+    expect(subagent.run.mock.calls.at(-1)?.[0].disableTools).toBe(true);
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
 

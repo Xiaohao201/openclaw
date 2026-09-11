@@ -388,6 +388,7 @@ export function runAgentAttempt(params: {
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     toolsAllow: params.opts.toolsAllow,
+    disableTools: params.opts.disableTools,
     systemPromptMode: params.opts.systemPromptMode,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
