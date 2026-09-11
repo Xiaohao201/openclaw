@@ -1321,7 +1321,7 @@ describe("processChatMessage", () => {
     );
 
     expect(capturedMessage).toContain("[suheng-design]");
-    expect(capturedMessage).toContain("Delivery compatibility for ai-assistant");
+    expect(capturedMessage).toContain("适配 ai-assistant 的交付要求");
     expect(capturedMessage).toContain(`[userId:${USER_ID}] 请设计一个可交互的舆情看板`);
   });
 
