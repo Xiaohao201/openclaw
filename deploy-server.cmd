@@ -17,6 +17,10 @@ echo [openclaw-deploy] Building OpenClaw.
 call pnpm build
 if errorlevel 1 goto :failed
 
+echo [openclaw-deploy] Building the Control UI.
+call pnpm ui:build
+if errorlevel 1 goto :failed
+
 echo [openclaw-deploy] Restarting the Gateway.
 call pnpm openclaw gateway restart
 if errorlevel 1 goto :failed
