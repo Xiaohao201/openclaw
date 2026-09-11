@@ -35,7 +35,6 @@ import {
   type VideoProbe,
   VideoAcquisitionError,
   VIDEO_MAX_DURATION_SECONDS,
-  WHOLE_VIDEO_MAX_DURATION_SECONDS,
   WHOLE_VIDEO_TARGET_BYTES,
 } from "./video-understand.runtime.js";
 import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
@@ -47,15 +46,9 @@ const log = createSubsystemLogger("video-understand-tool");
  * `video_understand` — download the video behind a URL and fold its content into
  * the agent's context.
  *
- * Two routes, picked from the clip's own dimensions:
- *
- * - **whole-video** (≤2 min and compressible under the endpoint's byte budget):
- *   one multimodal call over the actual video, which preserves motion and
- *   sequencing.
- * - **decomposed** (everything longer): ffmpeg splits the clip into an audio
- *   track for transcription and a sampled frame timeline for visual/OCR
- *   description. Transcription is the load-bearing signal for news and 舆情
- *   material — it is what the video actually *says*.
+ * Prefer whole-video multimodal understanding, with up to five retries.
+ * If no description is available, ffmpeg supplies an audio track and sampled
+ * frames for the fallback route.
  *
  * Both routes return the same shape so downstream prompts do not branch.
  */
@@ -65,6 +58,7 @@ const TRANSCRIPT_MAX_CHARS = 20_000;
 const DESCRIPTION_MAX_CHARS = 4_000;
 const FRAME_DESCRIPTION_MAX_CHARS = 600;
 const DEFAULT_MAX_FRAMES = 6;
+const WHOLE_VIDEO_MAX_RETRIES = 5;
 const MAX_FRAMES_CAP = 24;
 const DEFAULT_FRAME_INTERVAL_SECONDS = 15;
 const PAGE_FETCH_MAX_BYTES = 2_000_000;
@@ -369,21 +363,30 @@ async function analyzeWholeVideo(params: {
       return undefined;
     }
   }
-  const outputs = await params.deps.describeMedia({
-    capability: "video",
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    files: [{ path: target, mime: "video/mp4" }],
-    prompt: params.prompt,
-    maxChars: DESCRIPTION_MAX_CHARS,
-    maxAttachments: 1,
-    localRoot: params.workDir,
-  });
-  const description = normalizeOptionalString(outputs[0]?.text);
-  if (!description) {
-    params.warnings.push(VIDEO_PROVIDER_HINT);
+  for (let attempt = 0; attempt <= WHOLE_VIDEO_MAX_RETRIES; attempt += 1) {
+    try {
+      const outputs = await params.deps.describeMedia({
+        capability: "video",
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        files: [{ path: target, mime: "video/mp4" }],
+        prompt: params.prompt,
+        maxChars: DESCRIPTION_MAX_CHARS,
+        maxAttachments: 1,
+        localRoot: params.workDir,
+      });
+      const description = normalizeOptionalString(outputs[0]?.text);
+      if (description) {
+        return description;
+      }
+    } catch (error) {
+      if (attempt === WHOLE_VIDEO_MAX_RETRIES) {
+        params.warnings.push(`整片理解重试耗尽：${redactSensitiveText(formatErrorMessage(error))}`);
+      }
+    }
   }
-  return description;
+  params.warnings.push(VIDEO_PROVIDER_HINT);
+  return undefined;
 }
 
 function resolveFrameBudget(
@@ -661,13 +664,6 @@ export async function runVideoUnderstand(params: {
   deps?: Partial<VideoUnderstandToolDeps>;
 }): Promise<VideoUnderstandResult> {
   const deps: VideoUnderstandToolDeps = { ...DEFAULT_DEPS, ...params.deps };
-  if (!deps.ffmpegAvailable()) {
-    throw new ToolInputError(
-      "视频分析需要 ffmpeg（含 ffprobe），但没在可信目录里找到——出于防 PATH 劫持的考虑，OpenClaw 不读取 PATH。" +
-        "请把 ffmpeg 装到系统目录（Windows：<Program Files>\\ffmpeg\\bin），" +
-        "或设置环境变量 OPENCLAW_SYSTEM_BIN_DIRS 指向 ffmpeg 所在目录后重启网关。",
-    );
-  }
   const warnings: string[] = [];
   const prompt = normalizeOptionalString(params.prompt) ?? DEFAULT_VIDEO_PROMPT;
   const requestedMaxFrames = params.maxFrames;
@@ -677,7 +673,12 @@ export async function runVideoUnderstand(params: {
 
   try {
     const acquired = await deps.acquire({ url: target.url, workDir });
-    const probe = await deps.probe(acquired.path);
+    // Metadata is optional for direct multimodal input; ffprobe may be absent.
+    let probeFailed = false;
+    const probe: VideoProbe = await deps.probe(acquired.path).catch(async () => {
+      probeFailed = true;
+      return { sizeBytes: (await fs.stat(acquired.path)).size, hasAudio: false };
+    });
 
     if (probe.durationSeconds && probe.durationSeconds > VIDEO_MAX_DURATION_SECONDS) {
       throw new ToolInputError(
@@ -686,11 +687,7 @@ export async function runVideoUnderstand(params: {
       );
     }
 
-    const shortEnough =
-      probe.durationSeconds !== undefined &&
-      probe.durationSeconds <= WHOLE_VIDEO_MAX_DURATION_SECONDS;
-
-    let route: VideoUnderstandRoute = shortEnough ? "whole-video" : "decomposed";
+    let route: VideoUnderstandRoute = "whole-video";
     let description: string | undefined;
     if (route === "whole-video") {
       try {
@@ -710,6 +707,22 @@ export async function runVideoUnderstand(params: {
       if (!description) {
         route = "decomposed";
       }
+    }
+
+    if (route === "decomposed") {
+      if (!deps.ffmpegAvailable()) {
+        throw new ToolInputError(
+          "视频分析需要 ffmpeg（含 ffprobe），但没在可信目录里找到——出于防 PATH 劫持的考虑，OpenClaw 不读取 PATH。" +
+            "请把 ffmpeg 装到系统目录（Windows：<Program Files>\\ffmpeg\\bin），" +
+            "或设置环境变量 OPENCLAW_SYSTEM_BIN_DIRS 指向 ffmpeg 所在目录后重启网关。",
+        );
+      }
+    }
+
+    // Decomposition needs reliable duration and audio metadata. Never report
+    // silence merely because probing failed during the multimodal attempt.
+    if (route === "decomposed" && probeFailed) {
+      Object.assign(probe, await deps.probe(acquired.path));
     }
 
     const decomposed =
@@ -781,7 +794,7 @@ export function createVideoUnderstandTool(options?: {
     description:
       "Download the video behind a URL and analyze its content. Accepts a direct video URL, an HLS manifest, " +
       "a platform watch page (抖音/哔哩哔哩/微博/快手/YouTube…), or an article URL whose main video is detected automatically. " +
-      "Short clips are analyzed whole by a multimodal model; longer ones are transcribed and sampled into a frame timeline. " +
+      "Videos are analyzed whole by a multimodal model with up to five retries; ffmpeg transcription and sampled frames are the fallback. " +
       "Check the returned audio status and warnings before claiming speech was analyzed; missing transcription does not prove silence. Frames are samples, not exhaustive coverage. " +
       "If visual understanding is unavailable, saved keyframes are returned as MEDIA paths that can be shown to the user.",
     parameters: VideoUnderstandSchema,

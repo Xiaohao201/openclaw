@@ -182,15 +182,24 @@ export async function describeQwenVideo(
       transport: "media-understanding",
     });
 
+  const body = buildOpenAiCompatibleVideoRequestBody({
+    model,
+    prompt,
+    mime,
+    buffer: params.buffer,
+  });
+  // DashScope sampling belongs to the provider, not the shared OpenAI payload.
+  const messages = body.messages.map((message) => ({
+    ...message,
+    content: message.content.map((part) =>
+      part.video_url ? { ...part, video_url: { ...part.video_url, fps: 1 } } : part,
+    ),
+  }));
+
   const { response: res, release } = await postJsonRequest({
     url: `${baseUrl}/chat/completions`,
     headers,
-    body: buildOpenAiCompatibleVideoRequestBody({
-      model,
-      prompt,
-      mime,
-      buffer: params.buffer,
-    }),
+    body: { ...body, messages },
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
