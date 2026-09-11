@@ -27,8 +27,8 @@ describe("Suheng design context", () => {
     expect(context).toContain("[suheng-design]");
     expect(context).toContain("OpenKnot");
     expect(context).toContain("GFM Markdown");
-    expect(context).toContain("standalone HTML");
-    expect(context).toContain("JavaScript, iframe, Mermaid, or ECharts");
+    expect(context).toContain("独立的 HTML/CSS/JavaScript 文件");
+    expect(context).toContain("不会执行 JavaScript、iframe、Mermaid 或 ECharts 配置");
     expect(context.length).toBeLessThan(3_000);
     expect(buildSuhengDesignContext("请设计一个舆情分析网页")).toBe(context);
   });
