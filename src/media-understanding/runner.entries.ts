@@ -19,6 +19,7 @@ import type {
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
+import { assertPublicHostname } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
@@ -640,14 +641,51 @@ export async function runProviderEntry(params: {
   if (!provider.describeVideo) {
     throw new Error(`Video understanding provider "${providerId}" not available.`);
   }
+  const sourceUrl = params.cache.getSourceUrl(params.attachmentIndex);
+  if (sourceUrl && provider.describeVideoUrl) {
+    await assertPublicHostname(new URL(sourceUrl).hostname);
+    await params.cache.getPath({ attachmentIndex: params.attachmentIndex, maxBytes, timeoutMs });
+    const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
+      providerId,
+      cfg,
+      entry,
+      config: params.config,
+      agentDir: params.agentDir,
+    });
+    const describeVideoUrl = provider.describeVideoUrl;
+    const result = await executeWithApiKeyRotation({
+      provider: providerId,
+      apiKeys,
+      execute: (apiKey) =>
+        describeVideoUrl({
+          url: sourceUrl,
+          apiKey,
+          baseUrl,
+          headers,
+          request,
+          model: entry.model,
+          prompt,
+          timeoutMs,
+          fetchFn,
+        }),
+    });
+    return {
+      kind: "video.description",
+      attachmentIndex: params.attachmentIndex,
+      text: trimOutput(result.text, maxChars),
+      provider: providerId,
+      model: result.model ?? entry.model,
+    };
+  }
   const describeVideo = provider.describeVideo;
+  const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
   const media = await params.cache.getBuffer({
     attachmentIndex: params.attachmentIndex,
-    maxBytes,
+    // Reject oversized inline inputs before reading them into memory.
+    maxBytes: Math.min(maxBytes, Math.floor(maxBase64Bytes / 4) * 3),
     timeoutMs,
   });
   const estimatedBase64Bytes = estimateBase64Size(media.size);
-  const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
   if (estimatedBase64Bytes > maxBase64Bytes) {
     throw new MediaUnderstandingSkipError(
       "maxBytes",

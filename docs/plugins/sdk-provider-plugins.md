@@ -765,3 +765,23 @@ providers:
 - [SDK Runtime](/plugins/sdk-runtime) — `api.runtime` helpers (TTS, search, subagent)
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [Plugin Internals](/plugins/architecture#provider-runtime-hooks) — hook details and bundled examples
+
+### Video URL input contract
+
+Media understanding providers can add the optional `describeVideoUrl` hook alongside
+`describeVideo`. The additive version 1 request type `VideoUrlDescriptionRequest`
+is exported from `openclaw/plugin-sdk/media-understanding`. It carries the same
+request settings as `VideoDescriptionRequest`, but replaces `buffer` and `fileName`
+with `url`. The response remains `VideoDescriptionResult`.
+
+Core uses this hook only when an attachment includes a downloaded local file and
+its source HTTP(S) URL. Core checks the public hostname and local file access and
+size limits before invoking the hook. Providers without the hook retain their
+existing inline video behavior. Providers must fetch the URL without forwarding
+the model API credential to the media host.
+
+The Qwen provider defaults to `qwen3.8-flash` for video when no model override is
+configured, with 1 FPS sampling. Direct video downloads stream
+to disk with a 4 GiB download limit. Files up to and including 2 GiB are not
+compressed; larger files are compressed before analysis. Compressed files and
+platform downloads without a reusable direct URL retain inline input limits.

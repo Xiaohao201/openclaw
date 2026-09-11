@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resolveSystemBin } from "../../infra/resolve-system-bin.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
 import { runFfmpeg, runFfprobe } from "../../media/ffmpeg-exec.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
 import { resolveVideoPlatform } from "./web-video-detect.js";
 
 /**
@@ -18,10 +18,11 @@ import { resolveVideoPlatform } from "./web-video-detect.js";
 const execFileAsync = promisify(execFile);
 
 /** Beyond this the download is almost certainly a feature film, not a news clip. */
-export const VIDEO_MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
+export const VIDEO_MAX_DOWNLOAD_BYTES = 4 * 1024 ** 3;
 export const VIDEO_MAX_DURATION_SECONDS = 60 * 60;
 
-/** Whole-video multimodal is only attempted below these thresholds. */
+/** Compression threshold is distinct from the target size of a compressed file. */
+export const WHOLE_VIDEO_COMPRESSION_THRESHOLD_BYTES = 2 * 1024 ** 3;
 export const WHOLE_VIDEO_MAX_DURATION_SECONDS = 120;
 export const WHOLE_VIDEO_TARGET_BYTES = 45 * 1024 * 1024;
 
@@ -108,15 +109,49 @@ async function downloadDirect(params: {
   workDir: string;
   maxBytes: number;
 }): Promise<string> {
-  const fetched = await fetchRemoteMedia({
+  const { response, release } = await fetchWithWebToolsNetworkGuard({
     url: params.url,
-    maxBytes: params.maxBytes,
-    readIdleTimeoutMs: DOWNLOAD_TIMEOUT_MS,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
   });
-  const extension = path.extname(fetched.fileName ?? "") || ".mp4";
+  const extension = path.extname(new URL(params.url).pathname) || ".mp4";
   const target = path.join(params.workDir, `source${extension}`);
-  await fs.writeFile(target, fetched.buffer);
-  return target;
+  try {
+    if (!response.ok || !response.body) {
+      throw new VideoAcquisitionError(`Video download failed (HTTP ${response.status}).`);
+    }
+    const declaredSize = Number(response.headers.get("content-length"));
+    if (declaredSize > params.maxBytes) {
+      throw new VideoAcquisitionError(`Video download exceeds ${params.maxBytes} bytes.`);
+    }
+    // Stream to disk: a multi-GiB video must never be buffered in memory.
+    const file = await fs.open(target, "w");
+    const reader = response.body.getReader();
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        bytes += value.byteLength;
+        if (bytes > params.maxBytes) {
+          throw new VideoAcquisitionError(`Video download exceeds ${params.maxBytes} bytes.`);
+        }
+        await file.writeFile(value);
+      }
+      if (bytes === 0) {
+        throw new VideoAcquisitionError("Downloaded video is empty.");
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+      await file.close();
+    }
+    return target;
+  } finally {
+    await response.body?.cancel().catch(() => {});
+    await release();
+  }
 }
 
 async function downloadHls(params: { url: string; workDir: string }): Promise<string> {

@@ -10,6 +10,7 @@ export type {
   ImagesDescriptionResult,
   MediaUnderstandingProvider,
   VideoDescriptionRequest,
+  VideoUrlDescriptionRequest,
   VideoDescriptionResult,
 } from "../media-understanding/types.js";
 

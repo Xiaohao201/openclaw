@@ -10,6 +10,7 @@ import {
   type MediaUnderstandingProvider,
   type OpenAiCompatibleVideoPayload,
   type VideoDescriptionRequest,
+  type VideoUrlDescriptionRequest,
   type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import { requireApiKey, resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -20,7 +21,8 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
-const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
+const DEFAULT_QWEN_VIDEO_MODEL = "qwen3.8-flash";
+const DEFAULT_QWEN_IMAGE_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 const DEFAULT_QWEN_IMAGE_PROMPT = "Describe the image in detail.";
 
@@ -76,7 +78,7 @@ export async function describeQwenImagesWithApiKey(params: {
   fetchFn?: typeof fetch;
 }): Promise<ImagesDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_IMAGE_MODEL);
   const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_QWEN_IMAGE_PROMPT);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
@@ -162,6 +164,18 @@ async function describeQwenImage(params: ImageDescriptionRequest): Promise<Image
 export async function describeQwenVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
+  return describeQwenVideoInput(params);
+}
+
+export async function describeQwenVideoUrl(
+  params: VideoUrlDescriptionRequest,
+): Promise<VideoDescriptionResult> {
+  return describeQwenVideoInput(params);
+}
+
+async function describeQwenVideoInput(
+  params: VideoDescriptionRequest | VideoUrlDescriptionRequest,
+): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
@@ -186,13 +200,22 @@ export async function describeQwenVideo(
     model,
     prompt,
     mime,
-    buffer: params.buffer,
+    buffer: "buffer" in params ? params.buffer : Buffer.alloc(0),
   });
   // DashScope sampling belongs to the provider, not the shared OpenAI payload.
   const messages = body.messages.map((message) => ({
     ...message,
     content: message.content.map((part) =>
-      part.video_url ? { ...part, video_url: { ...part.video_url, fps: 1 } } : part,
+      part.video_url
+        ? {
+            ...part,
+            video_url: {
+              ...part.video_url,
+              url: "url" in params ? params.url : part.video_url.url,
+              fps: 1,
+            },
+          }
+        : part,
     ),
   }));
 
@@ -234,6 +257,7 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     describeImage: describeQwenImage,
     describeImages: describeQwenImages,
     describeVideo: describeQwenVideo,
+    describeVideoUrl: describeQwenVideoUrl,
   };
 }
 
