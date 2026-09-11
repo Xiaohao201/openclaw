@@ -339,6 +339,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
           ...(params.skillFilter && { skillFilter: params.skillFilter }),
           ...(params.toolsAllow && { toolsAllow: params.toolsAllow }),
+          ...(params.disableTools !== undefined && { disableTools: params.disableTools }),
           ...(params.systemPromptMode && { systemPromptMode: params.systemPromptMode }),
           ...(params.bootstrapContextMode && {
             bootstrapContextMode: params.bootstrapContextMode,

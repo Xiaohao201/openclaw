@@ -10,6 +10,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
+    case notFound = "NOT_FOUND"
     case unavailable = "UNAVAILABLE"
 }
 
@@ -591,6 +592,10 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let skillfilter: [String]?
+    public let toolsallow: [String]?
+    public let disabletools: Bool?
+    public let systempromptmode: AnyCodable?
     public let bootstrapcontextmode: AnyCodable?
     public let bootstrapcontextrunkind: AnyCodable?
     public let internalevents: [[String: AnyCodable]]?
@@ -622,6 +627,10 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        skillfilter: [String]?,
+        toolsallow: [String]?,
+        disabletools: Bool?,
+        systempromptmode: AnyCodable?,
         bootstrapcontextmode: AnyCodable?,
         bootstrapcontextrunkind: AnyCodable?,
         internalevents: [[String: AnyCodable]]?,
@@ -652,6 +661,10 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.skillfilter = skillfilter
+        self.toolsallow = toolsallow
+        self.disabletools = disabletools
+        self.systempromptmode = systempromptmode
         self.bootstrapcontextmode = bootstrapcontextmode
         self.bootstrapcontextrunkind = bootstrapcontextrunkind
         self.internalevents = internalevents
@@ -684,6 +697,10 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case skillfilter = "skillFilter"
+        case toolsallow = "toolsAllow"
+        case disabletools = "disableTools"
+        case systempromptmode = "systemPromptMode"
         case bootstrapcontextmode = "bootstrapContextMode"
         case bootstrapcontextrunkind = "bootstrapContextRunKind"
         case internalevents = "internalEvents"

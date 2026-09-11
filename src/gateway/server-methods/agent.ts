@@ -319,6 +319,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       skillFilter?: string[];
       toolsAllow?: string[];
+      disableTools?: boolean;
       systemPromptMode?: "full" | "minimal";
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
@@ -882,6 +883,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         extraSystemPrompt: request.extraSystemPrompt,
         skillFilter: request.skillFilter,
         toolsAllow: request.toolsAllow,
+        disableTools: request.disableTools,
         systemPromptMode: request.systemPromptMode,
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,

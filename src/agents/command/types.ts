@@ -82,6 +82,8 @@ export type AgentCommandOpts = {
   skillFilter?: string[];
   /** Optional per-run tool allowlist; only tools that also pass normal policy are exposed. */
   toolsAllow?: string[];
+  /** Disable all tools for this run. */
+  disableTools?: boolean;
   /** Optional system-prompt profile override for trusted in-process runs. */
   systemPromptMode?: "full" | "minimal";
   /** Bootstrap workspace context injection mode for this run. */

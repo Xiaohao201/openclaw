@@ -121,6 +121,7 @@ async function runStyleExtractionTurn(args: StyleExtractionArgs): Promise<string
       topK: config.topK,
     }),
     extraSystemPrompt: STYLE_EXTRACTION_SYSTEM_PROMPT,
+    toolsAllow: ["milvus_search"],
     deliver: false,
   });
   const wait = await subagent.waitForRun({ runId: run.runId, timeoutMs: config.styleTimeoutMs });
@@ -224,6 +225,8 @@ export function createDailyRiskTipsToolFactory(api: OpenClawPluginApi) {
             sessionKey: generateSessionKey,
             message: buildGenerationUserMessage({ message, requirement }),
             extraSystemPrompt: styleRules.trim() ? styleRules : FALLBACK_STYLE_PROMPT,
+            // This leaf turn must write the tip, never delegate back to this tool.
+            disableTools: true,
             deliver: false,
           });
           const waitB = await subagent.waitForRun({

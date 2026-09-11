@@ -149,6 +149,7 @@ export const AgentParamsSchema = Type.Object(
     extraSystemPrompt: Type.Optional(Type.String()),
     skillFilter: Type.Optional(Type.Array(NonEmptyString, { maxItems: 200 })),
     toolsAllow: Type.Optional(Type.Array(NonEmptyString, { maxItems: 200 })),
+    disableTools: Type.Optional(Type.Boolean()),
     systemPromptMode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("minimal")])),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
