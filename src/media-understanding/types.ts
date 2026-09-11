@@ -122,6 +122,11 @@ export type VideoDescriptionRequest = {
   fetchFn?: typeof fetch;
 };
 
+/** Version 1 URL input: providers fetch a public URL instead of receiving inline bytes. */
+export type VideoUrlDescriptionRequest = Omit<VideoDescriptionRequest, "buffer" | "fileName"> & {
+  url: string;
+};
+
 export type VideoDescriptionResult = {
   text: string;
   model?: string;
@@ -179,6 +184,7 @@ export type MediaUnderstandingProvider = {
   nativeDocumentInputs?: Array<"pdf">;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
+  describeVideoUrl?: (req: VideoUrlDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
 };

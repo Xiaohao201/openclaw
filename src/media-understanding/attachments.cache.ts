@@ -80,6 +80,25 @@ export class MediaAttachmentCache {
     }
   }
 
+  /** Only downloaded local attachments may opt into provider-side URL fetching. */
+  getSourceUrl(attachmentIndex: number): string | undefined {
+    const attachment = this.entries.get(attachmentIndex)?.attachment;
+    if (!attachment?.path || !attachment.url) {
+      return undefined;
+    }
+    try {
+      const url = new URL(attachment.url);
+      if (
+        (url.protocol === "https:" || url.protocol === "http:") &&
+        !url.username &&
+        !url.password
+      ) {
+        return url.href;
+      }
+    } catch {}
+    return undefined;
+  }
+
   async getBuffer(params: {
     attachmentIndex: number;
     maxBytes: number;

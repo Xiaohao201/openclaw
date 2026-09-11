@@ -36,6 +36,7 @@ import {
   VideoAcquisitionError,
   VIDEO_MAX_DURATION_SECONDS,
   WHOLE_VIDEO_TARGET_BYTES,
+  WHOLE_VIDEO_COMPRESSION_THRESHOLD_BYTES,
 } from "./video-understand.runtime.js";
 import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
 import { detectVideoCandidates, resolveVideoPlatform } from "./web-video-detect.js";
@@ -73,7 +74,7 @@ const DEFAULT_FRAME_PROMPT =
   "on-screen text, captions, or watermarks verbatim. Answer in the language of the text shown.";
 const DEFAULT_TRANSCRIPT_PROMPT = "Transcribe the speech in this audio.";
 const VIDEO_PROVIDER_HINT =
-  "整片理解未返回内容。请配置 tools.media.video 及对应密钥；推荐 qwen/qwen-vl-max-latest，" +
+  "整片理解未返回内容。请配置 tools.media.video 及对应密钥；推荐 qwen/qwen3.8-flash，" +
   "并确保网关进程可读取 QWEN_API_KEY（需使用 DashScope Standard 按量付费密钥）。";
 const IMAGE_PROVIDER_HINT =
   "关键帧描述未返回内容。请配置 tools.media.image 及对应密钥；推荐 qwen/qwen-vl-max-latest，" +
@@ -147,7 +148,7 @@ export type DescribeMediaParams = {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
   agentDir?: string;
-  files: Array<{ path: string; mime: string }>;
+  files: Array<{ path: string; mime: string; url?: string }>;
   prompt: string;
   maxChars: number;
   maxAttachments: number;
@@ -172,6 +173,7 @@ async function describeLocalMedia(
   const attachments: MediaAttachment[] = params.files.map((file, index) => ({
     index,
     path: file.path,
+    url: file.url,
     mime: file.mime,
   }));
   const cache = createMediaAttachmentCache(attachments, {
@@ -182,6 +184,9 @@ async function describeLocalMedia(
     enabled: true,
     prompt: params.prompt,
     maxChars: params.maxChars,
+    maxBytes:
+      params.cfg.tools?.media?.[params.capability]?.maxBytes ??
+      (params.capability === "video" ? WHOLE_VIDEO_COMPRESSION_THRESHOLD_BYTES : undefined),
     // Scope rules gate inbound chat attachments; an agent-invoked tool call has
     // already passed tool-policy gating, so scope must not silently drop it.
     scope: undefined,
@@ -342,6 +347,7 @@ function buildMarkdown(result: Omit<VideoUnderstandResult, "markdown">): string 
 
 async function analyzeWholeVideo(params: {
   filePath: string;
+  sourceUrl?: string;
   workDir: string;
   probe: VideoProbe;
   prompt: string;
@@ -351,7 +357,7 @@ async function analyzeWholeVideo(params: {
   warnings: string[];
 }): Promise<string | undefined> {
   let target = params.filePath;
-  if (params.probe.sizeBytes > WHOLE_VIDEO_TARGET_BYTES) {
+  if (params.probe.sizeBytes > WHOLE_VIDEO_COMPRESSION_THRESHOLD_BYTES) {
     target = await params.deps.compress({
       inputPath: params.filePath,
       workDir: params.workDir,
@@ -369,7 +375,13 @@ async function analyzeWholeVideo(params: {
         capability: "video",
         cfg: params.cfg,
         agentDir: params.agentDir,
-        files: [{ path: target, mime: "video/mp4" }],
+        files: [
+          {
+            path: target,
+            mime: "video/mp4",
+            url: target === params.filePath ? params.sourceUrl : undefined,
+          },
+        ],
         prompt: params.prompt,
         maxChars: DESCRIPTION_MAX_CHARS,
         maxAttachments: 1,
@@ -693,6 +705,7 @@ export async function runVideoUnderstand(params: {
       try {
         description = await analyzeWholeVideo({
           filePath: acquired.path,
+          sourceUrl: acquired.via === "download" ? acquired.sourceUrl : undefined,
           workDir,
           probe,
           prompt,

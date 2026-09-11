@@ -234,9 +234,24 @@ describe("runVideoUnderstand routing", () => {
     });
   });
 
+  it.each([46 * 1024 ** 2, 512 * 1024 ** 2, 2 * 1024 ** 3])(
+    "does not compress %i bytes",
+    async (sizeBytes) => {
+      const { deps, recorder } = makeDeps({ probe: { sizeBytes } });
+      const result = await runVideoUnderstand({
+        url: "https://cdn.example.com/large.mp4",
+        cfg: CFG,
+        deps,
+      });
+      expect(result.route).toBe("whole-video");
+      expect(recorder.compressed).toBe(0);
+      expect(recorder.describeCalls[0]?.files[0]?.url).toBe("https://cdn.example.com/large.mp4");
+    },
+  );
+
   it("compresses before whole-video analysis when the file is oversized", async () => {
     const { deps, recorder } = makeDeps({
-      probe: { durationSeconds: 100, sizeBytes: 200 * 1024 * 1024 },
+      probe: { durationSeconds: 100, sizeBytes: 2 * 1024 ** 3 + 1 },
     });
     const result = await runVideoUnderstand({
       url: "https://cdn.example.com/big.mp4",
@@ -249,7 +264,7 @@ describe("runVideoUnderstand routing", () => {
 
   it("falls back to the decomposed route when compression cannot hit the byte budget", async () => {
     const { deps, recorder } = makeDeps({
-      probe: { durationSeconds: 100, sizeBytes: 200 * 1024 * 1024 },
+      probe: { durationSeconds: 100, sizeBytes: 2 * 1024 ** 3 + 1 },
     });
     deps.compress = async ({ workDir }) => {
       // Sparse file: reports an oversized length without writing 60MB to disk.

@@ -7,6 +7,7 @@ import {
   buildQwenMediaUnderstandingProvider,
   describeQwenImagesWithApiKey,
   describeQwenVideo,
+  describeQwenVideoUrl,
 } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
@@ -68,6 +69,26 @@ describe("describeQwenVideo", () => {
     expect(body.messages?.[0]?.content?.[1]?.video_url?.url).toBe(
       `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
     );
+  });
+
+  it("uses qwen3.8-flash and 1 FPS for a remote video without base64", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      choices: [{ message: { content: "video result" } }],
+    });
+    const result = await describeQwenVideoUrl({
+      url: "https://cdn.example.com/video.mp4",
+      apiKey: "test-key",
+      timeoutMs: 1500,
+      fetchFn,
+    });
+    const body = JSON.parse(String(getRequest().init?.body));
+    expect(result.model).toBe("qwen3.8-flash");
+    expect(body.model).toBe("qwen3.8-flash");
+    expect(body.messages[0].content[1].video_url).toEqual({
+      url: "https://cdn.example.com/video.mp4",
+      fps: 1,
+    });
+    expect(buildQwenMediaUnderstandingProvider().defaultModels?.video).toBe("qwen3.8-flash");
   });
 
   it("maps a Coding Plan host to the Standard endpoint", async () => {
