@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1746,6 +1746,75 @@ describe("processChatMessage", () => {
     expect(capturedMessage).not.toContain("没有 Word/PDF 导出能力");
     // It must NOT use the report-acknowledgement directive (that path is skipped).
     expect(capturedMessage).not.toContain("acknowledge-and-report");
+  });
+
+  it("sends skill bodies once across turns while preserving the serialized request prefix", async () => {
+    const file = path.join(workspaceDir, "skill-session.jsonl");
+    const enterprise = "<enterprise-default-skill>完整企业技能说明</enterprise-default-skill>";
+    const custom = { id: 3, name: "测试技能", content: "完整自定义技能说明", description: null };
+    const skillLookup = { resolveMany: vi.fn(async () => [custom]) } as unknown as SkillLookup;
+    const calls: SubagentRunParams[] = [];
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        calls.push(args);
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    let transcript =
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "s1",
+        timestamp: new Date().toISOString(),
+        cwd: workspaceDir,
+      }) + "\n";
+    for (let turn = 0; turn < 3; turn++) {
+      await writeFile(file, transcript);
+      snapshotMocks.prepare.mockResolvedValueOnce(file);
+      await processChatMessage(
+        {
+          ...createChatMessage(),
+          message: `${enterprise}\n<user-task>问题 ${turn}</user-task>`,
+          skillIds: [3],
+        },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        skillLookup,
+      );
+      expect(await readFile(file, "utf8")).toBe(transcript);
+      expect(calls[turn].message).toContain(`问题 ${turn}`);
+      transcript +=
+        JSON.stringify({
+          type: "message",
+          id: `m${turn}`,
+          parentId: turn ? `m${turn - 1}` : null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: calls[turn].message, timestamp: Date.now() },
+        }) + "\n";
+    }
+    expect(
+      calls
+        .map((call) => call.message)
+        .join("\n")
+        .match(/完整企业技能说明/g),
+    ).toHaveLength(1);
+    expect(
+      calls
+        .map((call) => call.message)
+        .join("\n")
+        .match(/完整自定义技能说明/g),
+    ).toHaveLength(1);
+    expect(calls[1].extraSystemPrompt).toBe(calls[0].extraSystemPrompt);
   });
 
   it("injects active custom skills into the subagent context, not the visible message", async () => {

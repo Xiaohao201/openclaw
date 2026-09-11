@@ -26,6 +26,7 @@ import { computeDateScope, type ReportPeriod } from "./report-period.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { normalizeChineseProseQuotes, sanitizeInternalRefs } from "./sanitize-output.js";
+import { deduplicateSkillContext, readActiveSkillHistory } from "./session-skill-context.js";
 import { prepareHistorySessionSnapshot } from "./session-snapshot.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
@@ -1136,7 +1137,7 @@ export async function processChatMessage(
       // provider, agent, owner, sandbox and subagent restrictions on every run.
 
       // Continue in this history row's full snapshot before the agent appends.
-      await prepareHistorySessionSnapshot({
+      const sessionFile = await prepareHistorySessionSnapshot({
         history: record,
         userId,
         sessionKey,
@@ -1147,9 +1148,25 @@ export async function processChatMessage(
       // Open accounting after the copy so inherited messages stay in past turns.
       usageContext = { sessionKey, agentId, sinceMs: Date.now() };
 
+      let turnSkillContext = { message: userMessage, skillContext };
+      if (skillContext || userMessage.includes("<enterprise-default-skill>")) {
+        try {
+          turnSkillContext = deduplicateSkillContext(
+            userMessage,
+            skillContext,
+            await readActiveSkillHistory(sessionFile),
+          );
+        } catch {
+          // Availability first: uncertain history must not drop skill instructions.
+          logger.warn(
+            "[CHAT_PIPELINE] Could not read active skill history; retaining instructions",
+          );
+        }
+      }
+
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
+        message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${turnSkillContext.message}${templateContext}${turnSkillContext.skillContext}`,
         extraSystemPrompt: SUHENG_RUNTIME_SYSTEM_PROMPT,
         systemPromptMode: builtinSkillName ? "full" : "minimal",
         bootstrapContextMode: "lightweight",
