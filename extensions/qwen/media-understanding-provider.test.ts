@@ -64,6 +64,7 @@ describe("describeQwenVideo", () => {
     expect(body.model).toBe("qwen-vl-max");
     expect(body.messages?.[0]?.content?.[0]?.text).toBe("summarize the clip");
     expect(body.messages?.[0]?.content?.[1]?.type).toBe("video_url");
+    expect(body.messages?.[0]?.content?.[1]?.video_url?.fps).toBe(1);
     expect(body.messages?.[0]?.content?.[1]?.video_url?.url).toBe(
       `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
     );

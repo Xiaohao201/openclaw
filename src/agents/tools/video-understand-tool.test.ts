@@ -47,6 +47,7 @@ function makeDeps(options?: {
         throw options.acquireError;
       }
       recorder.acquired.push(url);
+      await fs.writeFile(path.join(workDir, "source.mp4"), "video");
       return { path: `${workDir}/source.mp4`, via: "download", sourceUrl: url };
     },
     probe: async () => ({
@@ -84,6 +85,9 @@ function makeDeps(options?: {
         return options.describe(params);
       }
       if (params.capability === "video") {
+        if ((options?.probe?.durationSeconds ?? 60) > 120) {
+          return [];
+        }
         return [
           { kind: "video.description", attachmentIndex: 0, text: "整片描述", provider: "qwen" },
         ];
@@ -124,6 +128,35 @@ describe("runVideoUnderstand routing", () => {
     expect(recorder.audioExtracted).toBe(0);
   });
 
+  it("tries long videos without ffmpeg and succeeds on the fifth retry", async () => {
+    let attempts = 0;
+    const { deps, recorder } = makeDeps({
+      ffmpegAvailable: false,
+      probe: { durationSeconds: 600 },
+      describe: async () => {
+        attempts += 1;
+        if (attempts < 6) {
+          throw new Error("temporary provider failure");
+        }
+        return [
+          { kind: "video.description", attachmentIndex: 0, text: "success", provider: "qwen" },
+        ];
+      },
+    });
+    deps.probe = async () => {
+      throw new Error("ffprobe missing");
+    };
+    const result = await runVideoUnderstand({
+      url: "https://example.com/video.mp4",
+      cfg: CFG,
+      deps,
+    });
+    expect(result.route).toBe("whole-video");
+    expect(attempts).toBe(6);
+    expect(recorder.audioExtracted).toBe(0);
+    expect(recorder.framesRequested).toEqual([]);
+  });
+
   it("decomposes a long clip into transcript plus frame timeline", async () => {
     const { deps, recorder } = makeDeps({ probe: { durationSeconds: 600 } });
     const result = await runVideoUnderstand({
@@ -137,7 +170,11 @@ describe("runVideoUnderstand routing", () => {
       { at: "00:30", description: "第 1 帧画面" },
       { at: "01:30", description: "第 2 帧画面" },
     ]);
-    expect(recorder.describeCalls.map((call) => call.capability)).toEqual(["audio", "image"]);
+    expect(recorder.describeCalls.map((call) => call.capability)).toEqual([
+      ...Array<string>(6).fill("video"),
+      "audio",
+      "image",
+    ]);
   });
 
   it("starts audio transcription and frame understanding in parallel", async () => {
@@ -186,7 +223,9 @@ describe("runVideoUnderstand routing", () => {
       deps,
     });
 
-    await expect.poll(() => [...started].toSorted()).toEqual(["audio", "image"]);
+    await expect
+      .poll(() => [...started].filter((capability) => capability !== "video").toSorted())
+      .toEqual(["audio", "image"]);
     releaseAudio?.();
     releaseImage?.();
     await expect(pending).resolves.toMatchObject({
@@ -309,6 +348,9 @@ describe("runVideoUnderstand routing", () => {
     const { deps } = makeDeps({
       probe: { durationSeconds: 600 },
       describe: async (params) => {
+        if (params.capability === "video") {
+          return [];
+        }
         if (params.capability === "audio") {
           throw new Error("no asr provider");
         }
@@ -426,7 +468,7 @@ describe("runVideoUnderstand acquisition", () => {
   });
 
   it("fails with an actionable message when ffmpeg is missing", async () => {
-    const { deps } = makeDeps({ ffmpegAvailable: false });
+    const { deps } = makeDeps({ ffmpegAvailable: false, describe: async () => [] });
     await expect(
       runVideoUnderstand({ url: "https://cdn.example.com/clip.mp4", cfg: CFG, deps }),
     ).rejects.toThrow(/ffmpeg/);
@@ -586,6 +628,9 @@ describe("video_understand tool", () => {
       const { deps } = makeDeps({
         probe: { durationSeconds: 600 },
         describe: async (params) => {
+          if (params.capability === "video") {
+            return [];
+          }
           if (params.capability === "audio") {
             params.onDecision?.({
               capability: "audio",
