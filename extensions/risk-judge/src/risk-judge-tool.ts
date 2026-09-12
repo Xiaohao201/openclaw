@@ -147,6 +147,10 @@ export function createRiskJudgeToolFactory(api: OpenClawPluginApi) {
             sessionKey,
             message: userMessage,
             extraSystemPrompt,
+            // Internal grading must not delegate back to risk_judge or another agent.
+            ...(config.enablePrecedentRag
+              ? { toolsAllow: ["milvus_search", "milvus_upsert"] }
+              : { disableTools: true }),
             deliver: false,
           });
           const wait = await subagent.waitForRun({
