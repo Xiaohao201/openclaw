@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "../api.js";
+import type { OpenClawPluginApi, PluginRuntime } from "../api.js";
 import { createRiskJudgeToolFactory } from "./risk-judge-tool.js";
 
 function buildFakeSubagent(sessionMessages: unknown[]) {
   return {
-    run: vi.fn(async (_params: { sessionKey: string; extraSystemPrompt: string }) => ({
+    run: vi.fn(async (_params: Parameters<PluginRuntime["subagent"]["run"]>[0]) => ({
       runId: "run-1",
     })),
     waitForRun: vi.fn(async (_params: { runId: string; timeoutMs?: number }) => ({
@@ -53,6 +53,28 @@ describe("risk_judge tool", () => {
     });
     expect(subagent.deleteSession).toHaveBeenCalled();
   });
+
+  it.each([undefined, false, true])(
+    "restricts internal tools with enablePrecedentRag=%s",
+    async (enablePrecedentRag) => {
+      const subagent = buildFakeSubagent([{ role: "assistant", content: JSON_ANSWER }]);
+      const api = buildFakeApi({ enablePrecedentRag }, subagent);
+      const tool = createRiskJudgeToolFactory(api)({ agentId: "agent1", sessionId: "s1" });
+
+      const result = await tool.execute("call-1", { content: "某舆情内容" });
+
+      expect(result.details).toMatchObject({ success: true, risk_level: "黄色预警" });
+      expect(subagent.run).toHaveBeenCalledTimes(1);
+      const run = subagent.run.mock.calls[0][0];
+      if (enablePrecedentRag) {
+        expect(run.toolsAllow).toEqual(["milvus_search", "milvus_upsert"]);
+        expect(run.disableTools).not.toBe(true);
+      } else {
+        expect(run.disableTools).toBe(true);
+        expect(run.toolsAllow).toBeUndefined();
+      }
+    },
+  );
 
   it("finds the json answer even when a later assistant message is a closing remark", async () => {
     // Simulates a tool-using turn: search -> json answer -> upsert -> closing remark.
