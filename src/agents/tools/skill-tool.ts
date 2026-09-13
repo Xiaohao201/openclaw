@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { SkillResourceWrite } from "../../infra/skill-resource-store.js";
 import { parseLegacyReferences, validateSkillResources } from "../../infra/skill-resources.js";
 import {
   createSkill,
@@ -77,6 +78,16 @@ function validateSkillName(name: string): string {
   return name;
 }
 
+const SkillResourceSchema = Type.Object({
+  path: Type.String({ description: "Relative attachment path, e.g. references/guide.md." }),
+  mediaType: Type.Union([
+    Type.Literal("text/markdown"),
+    Type.Literal("text/plain"),
+    Type.Literal("application/json"),
+  ]),
+  content: Type.String(),
+});
+
 const SkillSaveToolSchema = Type.Object({
   name: Type.String({
     description:
@@ -98,23 +109,19 @@ const SkillSaveToolSchema = Type.Object({
   references: Type.Optional(
     Type.String({ maxLength: 500, description: "Legacy reference text; omit to preserve it." }),
   ),
+  resourceUpdates: Type.Optional(
+    Type.Array(SkillResourceSchema, {
+      maxItems: 64,
+      description:
+        "Recommended attachment write mode: add new paths and update existing paths without DELETE permission. Omitted paths and [] keep existing attachments. Mutually exclusive with resources.",
+    }),
+  ),
   resources: Type.Optional(
-    Type.Array(
-      Type.Object({
-        path: Type.String({ description: "Relative attachment path, e.g. references/guide.md." }),
-        mediaType: Type.Union([
-          Type.Literal("text/markdown"),
-          Type.Literal("text/plain"),
-          Type.Literal("application/json"),
-        ]),
-        content: Type.String(),
-      }),
-      {
-        maxItems: 64,
-        description:
-          "Complete replacement attachment collection. Omit to preserve attachments; [] removes all formal attachments. Matching legacy attachment copies retire with edits; executable scripts are managed separately.",
-      },
-    ),
+    Type.Array(SkillResourceSchema, {
+      maxItems: 64,
+      description:
+        "Legacy complete replacement attachment collection (requires DELETE permission). Prefer resourceUpdates for additions and edits. Mutually exclusive with resourceUpdates. Omit to preserve attachments; [] removes all formal attachments. Matching legacy attachment copies retire with edits; executable scripts are managed separately.",
+    }),
   ),
 });
 
@@ -161,7 +168,7 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
   return {
     label: "Save skill",
     name: "skill_save",
-    description: `Create or edit a skill in this user's skill library (DB-backed). This is the ONLY way to change a skill. ${DB_IS_SOURCE_OF_TRUTH_NOTE} When the user asks to modify an existing skill, call skill_get for its current body, then call skill_save with the same \`name\` — fields you omit keep their current value. \`description\` and \`content\` are required only when creating a new skill. The change takes effect from the user's next message (no restart).`,
+    description: `Create or edit a skill in this user's skill library (DB-backed). This is the ONLY way to change a skill. ${DB_IS_SOURCE_OF_TRUTH_NOTE} When the user asks to modify an existing skill, call skill_get for its current body, then call skill_save with the same \`name\` — fields you omit keep their current value. \`description\` and \`content\` are required only when creating a new skill. Use \`resourceUpdates\` to add or edit independent attachments without deleting existing files. The change takes effect from the user's next message (no restart).`,
     parameters: SkillSaveToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -184,8 +191,15 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
         );
       }
       const category = readStringParam(params, "category");
-      const resources =
-        params.resources === undefined ? undefined : validateSkillResources(params.resources);
+      if (params.resources !== undefined && params.resourceUpdates !== undefined) {
+        throw new ToolInputError("resources and resourceUpdates are mutually exclusive");
+      }
+      const resourceWrite: SkillResourceWrite =
+        params.resourceUpdates !== undefined
+          ? { resourceUpdates: validateSkillResources(params.resourceUpdates) }
+          : params.resources !== undefined
+            ? { resources: validateSkillResources(params.resources) }
+            : {};
       const references =
         params.references === undefined
           ? undefined
@@ -209,7 +223,7 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
               source: SKILL_SOURCE,
               ...(category ? { category } : {}),
               is_enable: 1,
-              ...(resources !== undefined ? { resources } : {}),
+              ...resourceWrite,
               ...(references !== undefined ? { references } : {}),
             },
             userId,
@@ -225,7 +239,7 @@ export function createSkillSaveTool(opts?: SkillToolOptions): AnyAgentTool {
               content,
               source: SKILL_SOURCE,
               category,
-              ...(resources !== undefined ? { resources } : {}),
+              ...resourceWrite,
               ...(references !== undefined ? { references } : {}),
             },
             userId,

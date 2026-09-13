@@ -19,9 +19,12 @@ import { getManagedResourcePaths, syncSkillResourceFiles } from "./skill-resourc
 import {
   readSkillResources,
   replaceSkillResources,
+  updateSkillResources,
+  validateSkillResourceWrite,
+  type SkillResourceWrite,
   withSkillTransaction,
 } from "./skill-resource-store.js";
-import { resourceIndex, validateSkillResources, type SkillResource } from "./skill-resources.js";
+import { resourceIndex, type SkillResource } from "./skill-resources.js";
 import { resolveStorageSkillSlug, withStorageSkillIdentity } from "./skill-storage-identity.js";
 import { getSkillsDbCachedUserId, setSkillsDbCache } from "./skills-db-cache.js";
 
@@ -386,13 +389,12 @@ export async function createSkill(
     source?: string;
     category?: string;
     references?: string;
-    resources?: SkillResource[];
-  },
+  } & SkillResourceWrite,
   userId: number,
   connection?: mysql.PoolConnection,
 ): Promise<SkillRow> {
-  if (data.resources !== undefined && !connection) {
-    validateSkillResources(data.resources);
+  validateSkillResourceWrite(data);
+  if ((data.resources !== undefined || data.resourceUpdates !== undefined) && !connection) {
     const row = await withSkillTransaction(getPool(), (conn) => createSkill(data, userId, conn));
     invalidateSkillsMaterializeCache();
     return row;
@@ -429,6 +431,9 @@ export async function createSkill(
   if (data.resources !== undefined) {
     await replaceSkillResources(p, result.insertId, data.resources);
   }
+  if (data.resourceUpdates !== undefined) {
+    await updateSkillResources(p, result.insertId, data.resourceUpdates);
+  }
   const inserted = await getSkillById(result.insertId, userId, connection);
   if (!inserted) {
     throw new Error("Failed to retrieve inserted skill");
@@ -447,13 +452,13 @@ export async function updateSkill(
     category: string;
     is_enable: number;
     references: string;
-    resources: SkillResource[];
-  }>,
+  }> &
+    SkillResourceWrite,
   userId: number,
   connection?: mysql.PoolConnection,
 ): Promise<SkillRow | null> {
-  if (data.resources !== undefined && !connection) {
-    validateSkillResources(data.resources);
+  validateSkillResourceWrite(data);
+  if ((data.resources !== undefined || data.resourceUpdates !== undefined) && !connection) {
     const row = await withSkillTransaction(getPool(), (conn) =>
       updateSkill(id, data, userId, conn),
     );
@@ -525,8 +530,11 @@ export async function updateSkill(
   if (data.resources !== undefined) {
     await replaceSkillResources(p, id, data.resources);
   }
+  if (data.resourceUpdates !== undefined) {
+    await updateSkillResources(p, id, data.resourceUpdates);
+  }
 
-  if (sets.length === 0 && data.resources === undefined) {
+  if (sets.length === 0 && data.resources === undefined && data.resourceUpdates === undefined) {
     return getSkillById(id, userId);
   }
 

@@ -27,6 +27,8 @@ Docs: https://docs.openclaw.ai
 
 - Leading v2/tools: retire the legacy opinion analysis, content generation, report export, download, sheet-report creation, and report status/stop tools; retain monitoring queries and complaint workflows.
 
+- Agents/skills: support incremental attachment saves through `skill_save.resourceUpdates`, preserving omitted files and allowing additions and edits without database DELETE permission.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

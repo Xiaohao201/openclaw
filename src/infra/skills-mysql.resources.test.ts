@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   closePool,
+  createSkill,
   getSkillResourcesForUser,
   invalidateSkillsMaterializeCache,
   materializeSkillsForUser,
@@ -78,6 +79,136 @@ beforeEach(() => {
     }
     return [{ affectedRows: 1 }];
   });
+});
+
+it("adds and updates attachments without DELETE permission, preserving omitted paths", async () => {
+  resources.push({ skill_id: 337, path: "keep.md", media_type: "text/markdown", content: "keep" });
+  const execute = db.execute.getMockImplementation()!;
+  db.execute.mockImplementation(async (sql: string, values?: unknown[]) => {
+    if (sql.startsWith("DELETE")) {
+      throw new Error("DELETE denied");
+    }
+    if (sql.startsWith("UPDATE skill_resources")) {
+      const entry = resources.find((r) => r.skill_id === values?.[2] && r.path === values?.[3])!;
+      entry.media_type = String(values?.[0]);
+      entry.content = String(values?.[1]);
+      return [{ affectedRows: 1 }];
+    }
+    if (sql.startsWith("INSERT INTO skill_resources")) {
+      resources.push({
+        skill_id: Number(values?.[0]),
+        path: String(values?.[1]),
+        media_type: String(values?.[2]),
+        content: String(values?.[3]),
+      });
+      return [{ affectedRows: 1 }];
+    }
+    return execute(sql, values);
+  });
+  const resourceUpdates = [
+    { path: "references/guide.md", mediaType: "text/markdown", content: "guide v2" },
+    { path: "new.txt", mediaType: "text/plain", content: "new" },
+  ];
+  await updateSkill(337, { resourceUpdates }, 1749);
+  await updateSkill(337, { resourceUpdates }, 1749);
+  await updateSkill(337, { resourceUpdates: [] }, 1749);
+  expect(resources).toHaveLength(3);
+  expect(resources.find((r) => r.path === "references/guide.md")?.content).toBe("guide v2");
+  expect(resources.find((r) => r.path === "keep.md")?.content).toBe("keep");
+  expect(db.commit).toHaveBeenCalledTimes(3);
+  expect(db.execute.mock.calls.some(([sql]) => String(sql).includes("skill_scripts"))).toBe(false);
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "incremental-skill-resources-"));
+  roots.push(workspace);
+  const [entry] = await materializeSkillsForUser(workspace, "1749");
+  expect(await fs.readFile(path.join(entry.skill.baseDir, "references/guide.md"), "utf8")).toBe(
+    "guide v2",
+  );
+  expect(await fs.readFile(path.join(entry.skill.baseDir, "new.txt"), "utf8")).toBe("new");
+  expect(await fs.readFile(path.join(entry.skill.baseDir, "keep.md"), "utf8")).toBe("keep");
+  expect(await fs.readFile(path.join(entry.skill.baseDir, "legacy.md"), "utf8")).toBe(
+    "legacy data",
+  );
+});
+
+it("checks ownership before incremental writes and rejects mixed modes", async () => {
+  expect(await updateSkill(337, { resourceUpdates: [] }, 999)).toBeNull();
+  expect(db.execute.mock.calls.some(([sql]) => String(sql).includes("skill_resources"))).toBe(
+    false,
+  );
+  await expect(
+    updateSkill(
+      337,
+      { resources: [], resourceUpdates: [] } as unknown as Parameters<typeof updateSkill>[1],
+      1749,
+    ),
+  ).rejects.toThrow(/mutually exclusive/);
+});
+
+it.each(["count", "bytes"])("validates merged attachment %s before writing", async (limit) => {
+  resources = Array.from({ length: limit === "count" ? 64 : 4 }, (_, i) => ({
+    skill_id: 337,
+    path: `file${i}.txt`,
+    media_type: "text/plain",
+    content: limit === "bytes" ? "x".repeat(1_048_576) : "ok",
+  }));
+  await expect(
+    updateSkill(
+      337,
+      {
+        resourceUpdates: [{ path: "overflow.txt", mediaType: "text/plain", content: "x" }],
+      },
+      1749,
+    ),
+  ).rejects.toThrow(limit === "count" ? "Invalid resources array" : "Resources too large");
+  expect(db.execute.mock.calls.some(([sql]) => /^(INSERT|UPDATE|DELETE)/u.test(String(sql)))).toBe(
+    false,
+  );
+  expect(db.rollback).toHaveBeenCalledOnce();
+});
+
+it("preserves stored path casing during incremental updates", async () => {
+  await updateSkill(
+    337,
+    {
+      resourceUpdates: [
+        { path: "References/Guide.md", mediaType: "text/markdown", content: "new" },
+      ],
+    },
+    1749,
+  );
+  expect(db.execute).toHaveBeenCalledWith(
+    "UPDATE skill_resources SET media_type = ?, content = ? WHERE skill_id = ? AND path = ?",
+    ["text/markdown", "new", 337, "references/guide.md"],
+  );
+  expect(
+    db.execute.mock.calls.some(([sql]) => String(sql).startsWith("INSERT INTO skill_resources")),
+  ).toBe(false);
+});
+
+it("creates attachments without DELETE and rolls back incremental write failures", async () => {
+  const execute = db.execute.getMockImplementation()!;
+  db.execute.mockImplementation(async (sql: string, values?: unknown[]) => {
+    if (sql.startsWith("DELETE")) {
+      throw new Error("DELETE denied");
+    }
+    if (sql.startsWith("INSERT INTO skills ")) {
+      return [{ insertId: 337 }];
+    }
+    return execute(sql, values);
+  });
+  const resourceUpdates = [{ path: "new.txt", mediaType: "text/plain", content: "new" }];
+  await createSkill({ name: "weekly-report", resourceUpdates }, 1749);
+  expect(db.commit).toHaveBeenCalledOnce();
+  db.commit.mockClear();
+  db.execute.mockImplementation(async (sql: string, values?: unknown[]) => {
+    if (sql.startsWith("INSERT INTO skill_resources")) {
+      throw new Error("write failed");
+    }
+    return execute(sql, values);
+  });
+  await expect(updateSkill(337, { resourceUpdates }, 1749)).rejects.toThrow("write failed");
+  expect(db.rollback).toHaveBeenCalledOnce();
+  expect(db.commit).not.toHaveBeenCalled();
 });
 afterEach(async () => {
   await closePool();

@@ -3,6 +3,57 @@ import { validateSkillResources, type SkillResource } from "./skill-resources.js
 
 type Executor = Pick<mysql.Pool, "execute">;
 
+export type SkillResourceWrite =
+  | { resources?: SkillResource[]; resourceUpdates?: never }
+  | { resources?: never; resourceUpdates: SkillResource[] };
+
+export function validateSkillResourceWrite(data: SkillResourceWrite): void {
+  if (data.resources !== undefined && data.resourceUpdates !== undefined) {
+    throw new Error("resources and resourceUpdates are mutually exclusive");
+  }
+  const input = data.resources ?? data.resourceUpdates;
+  if (input !== undefined) {
+    validateSkillResources(input);
+  }
+}
+
+/** Caller holds the ownership-checked parent row lock for the entire transaction. */
+export async function updateSkillResources(
+  db: Executor,
+  skillId: number,
+  input: unknown,
+): Promise<void> {
+  const updates = validateSkillResources(input);
+  if (!updates.length) {
+    return;
+  }
+  const existing = (await readSkillResources(db, [skillId])).get(skillId) ?? [];
+  const byPath = new Map(existing.map((resource) => [resource.path.toLowerCase(), resource]));
+  const merged = new Map(byPath);
+  for (const resource of updates) {
+    merged.set(resource.path.toLowerCase(), resource);
+  }
+  // Enforce collection limits across retained attachments as well as this patch.
+  validateSkillResources([...merged.values()]);
+  for (const resource of updates) {
+    const previous = byPath.get(resource.path.toLowerCase());
+    if (previous) {
+      // Preserve canonical path casing so projections remain stable on every host.
+      await db.execute(
+        "UPDATE skill_resources SET media_type = ?, content = ? WHERE skill_id = ? AND path = ?",
+        [resource.mediaType, resource.content, skillId, previous.path],
+      );
+    } else {
+      await db.execute(
+        "INSERT INTO skill_resources (skill_id, path, media_type, content) VALUES (?, ?, ?, ?)",
+        [skillId, resource.path, resource.mediaType, resource.content],
+      );
+    }
+  }
+  // Formal resources already take precedence over legacy copies during projection.
+  // Incremental writes retain those copies and never need DELETE privileges.
+}
+
 /** IDs must come from an owner/visibility-scoped parent query. */
 export async function readSkillResources(
   db: Executor,
