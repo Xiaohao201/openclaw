@@ -132,6 +132,7 @@ _任何帮助你完成工作的特殊配置或注意事项_
 - `skill_list`：列出该用户已存的技能，先用它确认用户说的是哪一个（拿到准确的 name）。
 - `skill_get`：从技能库读出该技能的**当前正文**（description + 完整 SKILL.md）。
 - `skill_save`：新建或**按名改写**一个技能（写入该用户自己的技能库，下一条消息起生效，无需重启）。改已有技能时，`description`/`content` 不传就保持原值，只改你要改的那一项。
+- For independent attachments, use `skill_save` with the same `name` and `resourceUpdates: [{ path: "references/guide.md", mediaType: "text/markdown", content: "..." }]`. Existing paths are updated and new paths are inserted; omitted paths and an empty array preserve existing attachments. This mode requires no DELETE permission. Do not combine it with the legacy `resources` field, which still replaces the full collection and requires DELETE permission.
 
 **⚠️ 对用户自建技能而言，技能库（数据库）才是唯一正本。** 工作区里的 `skills/<name>/SKILL.md` 只是用户技能库的一份投影，每轮都会被技能库重新覆盖写出来；OpenClaw 随包发布的内置技能不属于这套投影。所以：
 

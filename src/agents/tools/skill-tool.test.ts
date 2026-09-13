@@ -71,6 +71,41 @@ beforeEach(() => {
 });
 
 describe("skill_save", () => {
+  it.each([true, false])(
+    "passes incremental attachments through (existing=%s)",
+    async (existing) => {
+      getSkillByName.mockResolvedValue(existing ? row() : null);
+      updateSkill.mockResolvedValue(row());
+      createSkill.mockResolvedValue(row());
+      const resourceUpdates = [
+        { path: "references/guide.md", mediaType: "text/markdown", content: "guide" },
+      ];
+      await saveTool().execute?.("id", {
+        name: "flow",
+        description: "d",
+        content: "c",
+        resourceUpdates,
+      });
+      const patch = existing ? updateSkill.mock.calls[0][1] : createSkill.mock.calls[0][0];
+      expect(patch).toMatchObject({ resourceUpdates });
+      expect(patch).not.toHaveProperty("resources");
+    },
+  );
+
+  it("rejects mixed attachment modes and unsafe incremental paths", async () => {
+    getSkillByName.mockResolvedValue(row());
+    await expect(
+      saveTool().execute?.("id", { name: "flow", resources: [], resourceUpdates: [] }),
+    ).rejects.toThrow(/mutually exclusive/);
+    await expect(
+      saveTool().execute?.("id", {
+        name: "flow",
+        resourceUpdates: [{ path: "../bad.md", mediaType: "text/markdown", content: "bad" }],
+      }),
+    ).rejects.toThrow(/Invalid resource path/);
+    expect(updateSkill).not.toHaveBeenCalled();
+  });
+
   it("rejects sessions without a numeric user id", async () => {
     const tool = createSkillSaveTool({
       agentSessionKey: "agent:main:main",
