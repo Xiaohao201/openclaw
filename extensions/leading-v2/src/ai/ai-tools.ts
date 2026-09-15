@@ -6,6 +6,8 @@ import { type FieldValue, getJson, postForm, resolveConfig } from "../client/htt
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
+import { ComplaintBatchStore } from "../complaint/complaint-batch-store.js";
+import { submitComplaintBatch } from "../complaint/complaint-batch-submit.js";
 import {
   DEFAULT_WORKSPACE,
   JOB_STATUS_LABELS,
@@ -150,6 +152,7 @@ const ComplaintSubmitSchema = Type.Object(
     ),
     links: Type.Optional(
       Type.Array(Type.String(), {
+        maxItems: 1000,
         description:
           "待举报的侵权链接。省略则复用最近一次内容检测任务提交的原始链接。" +
           "先用 complaint_taxonomy 查询当前链接分类，不得根据固定平台名单过滤链接。",
@@ -459,7 +462,9 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         "直接研判首次调用不要猜分类、不要传 classifications；工具会返回当前平台分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
         "支持范围动态变化；查询 complaint_taxonomy 获取当前平台和逐链接分类，不得凭旧名单拒绝。" +
-        "异步执行——提交成功后告知用户「举报任务已提交」，无需再调用任何工具。",
+        "异步执行——success=true、submitted=true 和 submittedLinks 仅表示举报服务已接收任务，不表示已提交到目标平台。" +
+        "请告知用户「举报任务已提交至举报服务，是否已提交到目标平台尚待状态查询确认」，禁止笼统宣称「举报提交成功」。" +
+        "用户询问进度或需要确认平台提交结果时，调用 complaint_task_status，优先传本次返回的 batchId 一次查询整批逐链接状态；不要高频轮询。",
       parameters: ComplaintSubmitSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_submit");
@@ -493,6 +498,12 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           : [];
         const jobLink = asString(job?.link);
         const links = provided.length > 0 ? provided : jobLink ? [jobLink] : [];
+        if (links.length > 1000 || new Set(links).size !== links.length) {
+          return jsonResult({
+            success: false,
+            error: "单次举报最多 1000 条链接，且同一批次内不得重复链接。",
+          });
+        }
         if (links.length === 0) {
           return jsonResult({
             success: false,
@@ -638,17 +649,11 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           fields.judgment = direct.basis.judgment;
           fields.classifications = JSON.stringify(classifications);
         }
-        if (direct.code === "valid" && linkJudgments.size > 0) {
-          const submittedLinks: string[] = [];
-          for (const [index, link] of links.entries()) {
-            // The backend only accepts task-level judgment: never send a batch
-            // summary with multiple links and rely on it to split the prose.
-            let response: Record<string, unknown>;
-            try {
-              response = await postForm(
-                config,
-                "/legal/save-complaint-job",
-                {
+        const requests =
+          direct.code === "valid" && linkJudgments.size > 0
+            ? links.map((link) => ({
+                links: [link],
+                fields: {
                   ...fields,
                   links: JSON.stringify([link]),
                   judgment: linkJudgments.get(link)!,
@@ -656,61 +661,18 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                     classifications.filter((item) => item.link === link),
                   ),
                 },
-                keyed.apiKey,
-              );
-            } catch {
-              return jsonResult({
-                success: false,
-                submitted: false,
-                submittedLinks,
-                unknownLinks: [link],
-                pendingLinks: links.slice(index + 1),
-                error:
-                  "提交连接异常，该链接是否入队未知。请先核对后台状态，不要自动重试或重提整批。",
-              });
-            }
-            if (response.code !== "success") {
-              return jsonResult({
-                success: false,
-                submitted: false,
-                submittedLinks,
-                failedLinks: [link],
-                pendingLinks: links.slice(index + 1),
-                error: asString(response.message) ?? "后端拒绝了该链接的举报请求。",
-                agentInstruction: "如实报告逐条结果；已提交链接不要重复提交。",
-              });
-            }
-            submittedLinks.push(link);
-          }
-          return jsonResult({
-            success: true,
-            submitted: true,
-            submittedLinks,
-            message: "已按链接分别提交举报任务，每条使用独立事由。",
-            agentInstruction:
-              "告知用户逐链接任务已提交，不代表平台已受理或处置。无需继续调用工具。",
-          });
-        }
-        let res: Record<string, unknown>;
-        try {
-          res = await postForm(config, "/legal/save-complaint-job", fields, keyed.apiKey);
-        } catch (error) {
-          return failure(api, "complaint_submit", userId, error);
-        }
-        if (res.code !== "success") {
-          // e.g. "一键举报功能当前暂不支持您提供的链接"
-          return jsonResult({
-            success: false,
-            error: asString(res.message) ?? "后端拒绝了举报请求。",
-          });
-        }
-        return jsonResult({
-          success: true,
-          submitted: true,
-          message: asString(res.message) ?? "举报任务已提交，请耐心等待",
-          agentInstruction:
-            "举报任务已提交。请立刻告知用户举报已在后台提交、系统会持续监测被举报链接是否下架。不要再调用任何工具。",
-        });
+              }))
+            : [{ links, fields }];
+        return jsonResult(
+          await submitComplaintBatch({
+            store: new ComplaintBatchStore(() => api.runtime.state.resolveStateDir()),
+            userId,
+            config,
+            apiKey: keyed.apiKey,
+            links,
+            requests,
+          }),
+        );
       },
     };
   };
