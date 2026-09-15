@@ -77,7 +77,7 @@ function createRuntimeMock(options: {
    * DURING waitForRun, i.e. after run() returned and the pipeline captured its
    * runId. Use this (not onRun) to exercise runId-based scoping.
    */
-  onWait?: (listener: AgentEventListener | undefined) => void;
+  onWait?: (listener: AgentEventListener | undefined) => void | Promise<void>;
   sessionMessages?: unknown[];
   onRunArgs?: (args: SubagentRunParams) => void;
   onWaitArgs?: (args: { runId: string; timeoutMs: number }) => void;
@@ -105,7 +105,7 @@ function createRuntimeMock(options: {
       },
       waitForRun: async (args: { runId: string; timeoutMs: number }) => {
         options.onWaitArgs?.(args);
-        options.onWait?.(listener);
+        await options.onWait?.(listener);
         return {
           status: options.waitStatuses?.[waitIndex++] ?? options.waitStatus ?? ("ok" as const),
         };
@@ -527,6 +527,76 @@ describe("processChatMessage", () => {
     }
   });
 
+  it("persists running steps before completion so a reload can restore them", async () => {
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: async (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          data: { phase: "start", name: "exec", toolCallId: "t1" },
+        });
+        await vi.waitFor(() => {
+          expect(updateMetadata).toHaveBeenCalledWith(1, {
+            steps: expect.arrayContaining([
+              expect.objectContaining({ status: "running", label: "正在查询分析数据" }),
+            ]),
+          });
+        });
+      },
+    });
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+  });
+
+  it("serializes snapshots and saves the terminal state after a failed live write", async () => {
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+    let releaseWrite: (() => void) | undefined;
+    updateMetadata.mockRejectedValueOnce(new Error("temporary database failure"));
+    updateMetadata.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        }),
+    );
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: async (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          data: { phase: "start", name: "exec", toolCallId: "t1" },
+        });
+        await vi.waitFor(() => expect(releaseWrite).toBeTypeOf("function"));
+        listener?.({
+          runId: "r1",
+          seq: 2,
+          stream: "tool",
+          ts: 2,
+          data: { phase: "end", name: "exec", toolCallId: "t1" },
+        });
+        await Promise.resolve();
+        expect(updateMetadata).toHaveBeenCalledTimes(2);
+        releaseWrite?.();
+      },
+    });
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+    const [, metadata] = updateMetadata.mock.calls.at(-1) as unknown as [
+      number,
+      { steps: Array<{ status: string }> },
+    ];
+    expect(metadata.steps.every((step) => step.status !== "running")).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Persisting running steps failed"),
+    );
+  });
+
   it("finalizes a still-running tool step before persisting the history timeline", async () => {
     // A tool `start` whose matching `end` never arrives leaves the step
     // "running". The live panel finalizes such stragglers on the stream's
@@ -559,8 +629,8 @@ describe("processChatMessage", () => {
 
     await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
 
-    expect(updateMetadata).toHaveBeenCalledTimes(1);
-    const [historyId, metadata] = updateMetadata.mock.calls[0] as unknown as [
+    expect(updateMetadata).toHaveBeenCalled();
+    const [historyId, metadata] = updateMetadata.mock.calls.at(-1) as unknown as [
       number,
       { steps: Array<{ label: string; status: string }> },
     ];
