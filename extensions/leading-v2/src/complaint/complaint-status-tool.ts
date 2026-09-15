@@ -6,12 +6,26 @@ import { type FieldValue, getJson, resolveConfig } from "../client/http-client.j
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
+import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
 
 const DEFAULT_PAGE_SIZE = 5;
 const MAX_PAGE_SIZE = 20;
 
 const ComplaintTaskStatusSchema = Type.Object(
   {
+    batchId: Type.Optional(
+      Type.String({
+        format: "uuid",
+        description:
+          "本次 complaint_submit 返回的批次 ID；一次查询该批次全部链接，不受任务列表分页限制。",
+      }),
+    ),
+    listBatches: Type.Optional(
+      Type.Boolean({
+        description:
+          "列出当前用户保存的举报批次，结合链接及时间选择 batchId；可用 page、size 分页。",
+      }),
+    ),
     taskId: Type.Optional(
       Type.Integer({
         minimum: 1,
@@ -176,6 +190,83 @@ function responseError(response: Record<string, unknown>): string | null {
   return null;
 }
 
+async function queryBatch(batch: ComplaintBatch, config: BackendConfig, apiKey: string) {
+  const taskIds = [
+    ...new Set(batch.entries.flatMap((entry) => (entry.taskId === null ? [] : [entry.taskId]))),
+  ].toSorted((a, b) => a - b);
+  const results = new Map<number, ReturnType<typeof normalizeComplaint>[]>();
+  // Bounded parallel reads keep a 100-link batch practical without flooding the backend.
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, taskIds.length) }, async () => {
+      while (next < taskIds.length) {
+        const taskId = taskIds[next++];
+        try {
+          const response = await getJson(config, `/legal/fetch-complaints/${taskId}`, {}, apiKey);
+          if (!responseError(response) && Array.isArray(response.list)) {
+            results.set(taskId, response.list.map(normalizeComplaint));
+          }
+        } catch {
+          /* Missing results remain unknown; other tasks can still be reported. */
+        }
+      }
+    }),
+  );
+  const links = batch.entries.map((entry) => {
+    const matches =
+      entry.taskId === null
+        ? []
+        : (results.get(entry.taskId) ?? []).filter(
+            (item) => item.taskId === entry.taskId && item.link === entry.link,
+          );
+    // Never select an arbitrary duplicate or borrow another task's/link's status.
+    const complaint = matches.length === 1 ? matches[0] : null;
+    const state =
+      complaint?.state ??
+      (entry.acceptance === "not_attempted"
+        ? "not_submitted"
+        : entry.acceptance === "rejected" && entry.taskId === null
+          ? "failed"
+          : "unknown");
+    return {
+      ...entry,
+      state,
+      submissionStatus: complaint?.submissionStatus ?? null,
+      failureReason: complaint?.failureReason ?? null,
+      offline: complaint?.offline ?? null,
+      offlineCheckDate: complaint?.offlineCheckDate ?? null,
+      queryStatus: complaint
+        ? "found"
+        : entry.taskId === null
+          ? "no_task_id"
+          : results.has(entry.taskId)
+            ? "missing_or_ambiguous"
+            : "query_failed",
+    };
+  });
+  return {
+    success: true,
+    mode: "batch",
+    batchId: batch.batchId,
+    createdAt: batch.createdAt,
+    summary: {
+      total: links.length,
+      submitted: links.filter((item) => item.state === "done").length,
+      processing: links.filter((item) => item.state === "pending" || item.state === "running")
+        .length,
+      failed: links.filter((item) => item.state === "failed").length,
+      stopped: links.filter((item) => item.state === "stopped").length,
+      unknown: links.filter((item) => item.state === "unknown").length,
+      notSubmitted: links.filter((item) => item.state === "not_submitted").length,
+      offline: links.filter((item) => item.offline === true).length,
+    },
+    links,
+    agentInstruction:
+      "这是指定批次的全部链接，按 summary 汇总并按需列出逐链接状态及失败原因。success=true 仅表示完成查询流程，query_failed、missing_or_ambiguous、no_task_id 或 unknown 均无法确认平台提交结果。" +
+      "acceptance=accepted 仅表示举报服务已接收；只有 state=done 才表示已提交到平台，不代表平台已受理或处置。只有 offline=true 表示已检测到下架或失效。不得自动重提结果未知或已接收的链接。",
+  };
+}
+
 /** Read-only view of complaint task progress and per-link platform/takedown status. */
 export function createComplaintTaskStatusToolFactory(
   api: OpenClawPluginApi,
@@ -193,15 +284,77 @@ export function createComplaintTaskStatusToolFactory(
       name: "complaint_task_status",
       label: "查询举报任务状态",
       description:
+        "优先传 complaint_submit 返回的 batchId，按当前用户保存的精确任务 ID 一次汇总整批链接；忘记批次 ID 时用 listBatches=true 查本用户批次。" +
         "只读查询当前账号可见的一键举报任务。省略 taskId 时列出最近任务及真实进度；" +
         "传入 taskId 时返回每条链接的举报提交状态、失败原因和下架复检结果。" +
+        "complaint_submit 成功只表示举报服务已接收任务；是否已提交到目标平台必须查询本工具的逐链接状态确认。" +
         "必须以本工具返回的数据为准；没有任务时禁止声称已受理、已入队或 worker 正在执行。" +
         "注意：举报提交 Done 不等于链接已下架，只有 offline=true 才表示已确认下架或失效。",
       parameters: ComplaintTaskStatusSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        if (
+          [
+            rawParams.batchId !== undefined,
+            rawParams.listBatches === true,
+            rawParams.taskId !== undefined,
+          ].filter(Boolean).length > 1
+        ) {
+          return jsonResult({
+            success: false,
+            error: "batchId、listBatches、taskId 只能选择一种查询方式。",
+          });
+        }
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_task_status");
         if ("error" in keyed) {
           return keyed.error;
+        }
+
+        if (rawParams.batchId !== undefined || rawParams.listBatches === true) {
+          const store = new ComplaintBatchStore(() => api.runtime.state.resolveStateDir());
+          try {
+            if (rawParams.batchId !== undefined) {
+              const batch =
+                typeof rawParams.batchId === "string"
+                  ? await store.get(userId, rawParams.batchId)
+                  : null;
+              if (!batch) {
+                return jsonResult({
+                  success: false,
+                  error: "未找到当前用户的举报批次，请核对 batchId 或使用 listBatches 查询。",
+                });
+              }
+              return jsonResult(await queryBatch(batch, config, keyed.apiKey));
+            }
+            const page = Math.max(1, Math.floor(Number(rawParams.page ?? 1) || 1));
+            const size = Math.min(
+              MAX_PAGE_SIZE,
+              Math.max(
+                1,
+                Math.floor(Number(rawParams.size ?? DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE),
+              ),
+            );
+            const batches = await store.list(userId);
+            return jsonResult({
+              success: true,
+              mode: "batches",
+              total: batches.length,
+              page,
+              size,
+              batches: batches.slice((page - 1) * size, page * size).map((batch) => ({
+                batchId: batch.batchId,
+                createdAt: batch.createdAt,
+                total: batch.entries.length,
+                links: batch.entries.map((entry) => entry.link),
+              })),
+              agentInstruction:
+                "根据本次链接和时间选择明确匹配的 batchId，再查询整批状态；不要默认选择最新批次。这里只是批次记录，不是平台提交结果。",
+            });
+          } catch {
+            return jsonResult({
+              success: false,
+              error: "无法读取举报批次记录，请联系管理员检查存储；不要推断举报状态或重新提交。",
+            });
+          }
         }
 
         if (rawParams.taskId !== undefined) {
@@ -242,8 +395,10 @@ export function createComplaintTaskStatusToolFactory(
             summary,
             complaints,
             agentInstruction:
-              "请逐条报告 submissionStatus 与 failureReason。Done 仅表示举报提交完成；" +
-              "只有 offline=true 才能表述为已确认下架或失效。",
+              "success=true 仅表示查询成功。请逐条报告 submissionStatus 与 failureReason，不能把整批任务接收成功当成平台提交成功。" +
+              "Done 仅表示举报已提交到目标平台，不代表平台已受理、认可举报或完成处置；" +
+              "pending/running 表示等待或处理中，failed/stopped 表示失败或停止，unknown 表示无法确认，均不得宣称已提交到平台。" +
+              "只有 offline=true 才能表述为已确认下架或失效；未查到记录时如实说明无法确认，不要推断正在执行。",
           });
         }
 
@@ -285,7 +440,8 @@ export function createComplaintTaskStatusToolFactory(
           agentInstruction:
             tasks.length === 0
               ? "当前可见范围没有举报任务。请如实告知用户尚未查到已提交任务，禁止声称已受理、已入队或 worker 正在执行。"
-              : "请以返回的 taskId、status 和计数字段说明真实进度；如需逐链接结果，请用对应 taskId 再次调用本工具。",
+              : "请以返回任务的 id、status 和计数字段说明真实进度；确认平台提交结果时，必须将匹配任务的 id 作为 taskId 再次查询逐链接状态。" +
+                "结合链接和时间核对任务，不要仅因任务最新就认定为本次举报。举报服务接收任务不等于已提交到平台，也不等于链接已下架。",
         });
       },
     };

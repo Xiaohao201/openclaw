@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../api.js";
 import { ApiKeyResolver } from "../client/key-resolver.js";
 
@@ -23,7 +26,15 @@ const {
   createInfringeProfileSaveToolFactory,
 } = await import("./ai-tools.js");
 
+let batchStateDir: string;
+beforeEach(async () => {
+  batchStateDir = await mkdtemp(join(tmpdir(), "complaint-tools-"));
+});
+afterEach(async () => {
+  await rm(batchStateDir, { recursive: true, force: true });
+});
 const fakeApi = {
+  runtime: { state: { resolveStateDir: () => batchStateDir } },
   pluginConfig: { backend: { baseUrl: "https://v2.businesstimescn.com", siteId: "legal" } },
   logger: { info() {}, warn() {}, error() {}, debug() {} },
 } as unknown as OpenClawPluginApi;
