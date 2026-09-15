@@ -516,6 +516,22 @@ export async function processChatMessage(
   };
   const storedSteps: StoredStep[] = [];
   let timelinePersisted = false;
+  let pendingTimelineWrite = Promise.resolve();
+  const persistRunningTimeline = () => {
+    if (timelinePersisted) {
+      return;
+    }
+    // Snapshot now, not when the queued write runs: subsequent end events
+    // mutate storedSteps. Serialize writes so an older snapshot cannot win.
+    const steps = storedSteps.map((step) => ({ ...step }));
+    pendingTimelineWrite = pendingTimelineWrite
+      .then(() => historyManager.updateMetadata(chatMsg.historyId, { steps }))
+      .catch((error) => {
+        logger.warn(
+          `[CHAT_PIPELINE] Persisting running steps failed (non-fatal): ${String(error)}`,
+        );
+      });
+  };
   // Finalize and persist the timeline. Any step still "running" is coerced to a
   // terminal status first: the live panel relies on the stream's `done` event to
   // finalize stragglers, but history replay has no `done`, so a leftover running
@@ -527,6 +543,8 @@ export async function processChatMessage(
       return;
     }
     timelinePersisted = true;
+    // Drain live snapshots before writing the authoritative terminal state.
+    await pendingTimelineWrite;
     for (const s of storedSteps) {
       if (s.status === "running") {
         s.status = finalStatus;
@@ -837,6 +855,7 @@ export async function processChatMessage(
     // Push a step to the live frontend AND record it for history persistence.
     const emitStep = (step: ActivityStep) => {
       recordStep(step);
+      persistRunningTimeline();
       void mercure.pushStep(mercureTopic, step, chatMsg.historyId);
     };
 
