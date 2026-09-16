@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { acquireVideo } from "./video-understand.runtime.js";
+import { acquireVideo, buildVideoSegmentRanges } from "./video-understand.runtime.js";
 
 const { guardedFetch, release } = vi.hoisted(() => ({ guardedFetch: vi.fn(), release: vi.fn() }));
 vi.mock("./web-guarded-fetch.js", () => ({ fetchWithWebToolsNetworkGuard: guardedFetch }));
@@ -33,4 +33,14 @@ it.each([true, false])("rejects oversized downloads with content-length=%s", asy
     ).rejects.toThrow("exceeds");
     expect(release).toHaveBeenCalledOnce();
   });
+});
+
+it("builds two-minute segments with five-second overlap", () => {
+  expect(
+    buildVideoSegmentRanges({ durationSeconds: 301, segmentSeconds: 120, overlapSeconds: 5 }),
+  ).toEqual([
+    { startSeconds: 0, endSeconds: 120 },
+    { startSeconds: 115, endSeconds: 235 },
+    { startSeconds: 230, endSeconds: 301 },
+  ]);
 });
