@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/Suheng typography: render paired straight quotes as Chinese quotation marks in live replies and generated reports, including copied and downloaded content, while preserving code, structured data, HTML attributes, and Markdown links.
 - RabbitMQ/Suheng video links: expand allowlisted WeChat Channels `/sph/` short links, including scheme-less share text, before calling the configured video parser while retaining the original and resolved URLs for diagnostics.
 - RabbitMQ/consumer: contain `ack` and `nack` failures when a channel closes during message processing so cancellation and reconnect races no longer terminate the OpenClaw process.
+- Feed search/RabbitMQ: discover authorized monitoring projects separately from article keywords, automatically select the sole authorized project for unnamed requests, and require explicit project IDs on data queries without falling back after a named-project mismatch.
 
 ## 2026.4.15
 

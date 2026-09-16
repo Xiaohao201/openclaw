@@ -63,6 +63,7 @@ const SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY =
 const MONITORING_TOPIC_INTENT_PATTERNS = [
   /(?:(?:舆情|网络|全网)?(?:监测|监控)(?:项目|专题)|舆情(?:项目|专题))/iu,
   /(?:舆情|监测)(?:数据|记录|条目|列表|明细|动态|趋势|分布|声量|热度|来源|信源|预警|统计|结果)/iu,
+  /(?:舆情|监测)(?:情况|状况|概况).{0,8}(?:如何|怎样|怎么样|怎样了|咋样|有没有|有无)/iu,
   /(?:数据|记录|条目|列表|明细|动态|趋势|分布|声量|热度|来源|信源|预警|统计|结果).{0,4}(?:舆情|监测)/iu,
   /(?:查询|查找|检索|排查|统计|汇总|筛选|调取|获取|拉取|读取|查看|关注|跟踪|追踪|看看|看一下|查一下).{0,16}(?:舆情|舆论动态|网络动态|媒体动态)/iu,
   /(?:今天|昨日|昨天|本周|这周|本月|这个月|最近|近[一二两三四五六七八九十\d]+(?:天|周|月)|过去[一二两三四五六七八九十\d]+(?:天|周|月)).{0,12}(?:负面|正面|中性)(?:舆情|信息|新闻|报道|内容|帖子|文章|动态)?/iu,
@@ -732,17 +733,18 @@ export async function processChatMessage(
         if (resolution.topicId && resolution.topicId > 0) {
           // JSON.stringify keeps the quoting deterministic even when the
           // title itself contains quotes or brackets (prompt-cache friendly).
-          const namePart = resolution.topicName
-            ? ` topicName:${JSON.stringify(resolution.topicName)}`
-            : "";
-          topicContext = ` [topicId:${resolution.topicId}${namePart} useSlaveTopic:${resolution.useSlaveTopic}]`;
-          // A user can own several topics; list them all (sorted by topicId
-          // upstream) so the agent never has to guess beyond the prefix.
-          if (resolution.topics.length > 1) {
-            const all = resolution.topics
-              .map((t) => `${t.topicId}${t.topicName ? `:${JSON.stringify(t.topicName)}` : ""}`)
-              .join(", ");
-            topicContext += ` [allTopics: ${all}]`;
+          // Grants are candidates, not a selected project. Do not expose a
+          // primary topic that the model could mistake for the user's target.
+          // Large catalogs are discovered through feed_query instead.
+          const candidates = resolution.topics.toSorted((a, b) => a.topicId - b.topicId);
+          topicContext =
+            candidates.length <= 50
+              ? ` [authorizedTopics:${JSON.stringify(candidates.map(({ topicId, topicName }) => ({ topicId, topicName })))}]`
+              : " [authorizedTopics: use feed_query mode=topics with topicName to find the requested project]";
+          topicContext +=
+            " [monitoringScope: 授权项目是候选，不是当前查询项目。先区分项目与项目内关键词。选择优先级：用户明确指定的项目、本会话已确认的项目、唯一授权项目。未指定项目且本会话无已确认项目时，自动选用唯一授权项目并传topicId，无需询问用户。明确指定的项目未匹配时禁止回退到唯一项目；多个项目禁止默认取第一个。项目概览不加项目名关键词；追问只沿用本会话已确认的项目和筛选条件。]";
+          if (candidates.length === 1) {
+            topicContext += ` [defaultTopicId:${candidates[0].topicId}]`;
           }
           logger.info(
             `[CHAT_PIPELINE] Injecting topic context for userId=${userId}:${topicContext}`,

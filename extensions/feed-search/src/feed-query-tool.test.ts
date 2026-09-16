@@ -28,6 +28,7 @@ type ToolResult = {
 };
 type Tool = {
   name: string;
+  description: string;
   execute: (toolCallId: string, params: Record<string, unknown>) => Promise<ToolResult>;
 };
 
@@ -60,7 +61,184 @@ describe("createFeedQueryToolFactory", () => {
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+  });
+
+  it.each(["search", "stats"])(
+    "requires an explicit topic for %s instead of searching the first grant",
+    async (mode) => {
+      const tool = factory({ agentId: "rabbitmq-126" })!;
+      mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+      mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0], [120, 0]));
+      mockExecuteQuery.mockResolvedValueOnce(
+        titleRows([89, "华泰联合证券舆情监测"], [120, "莱州一中舆情监测"]),
+      );
+      const result = await tool.execute("missing-topic", { mode, keyword: "莱州一中" });
+      expect(result.details).toMatchObject({ success: false, code: "TOPIC_REQUIRED" });
+      expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("discovers the named project then queries its whole overview without an article keyword", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0], [120, 0]));
+    mockExecuteQuery.mockResolvedValueOnce(
+      titleRows([89, "华泰联合证券舆情监测"], [120, "莱州一中舆情监测"]),
+    );
+    const discovery = await tool.execute("discover", { mode: "topics", topicName: "莱州一中" });
+    expect(discovery.details).toMatchObject({
+      success: true,
+      topics: [{ topicId: 120, topicName: "莱州一中舆情监测" }],
+    });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: 12 }]);
+    const overview = await tool.execute("overview", {
+      mode: "stats",
+      topicId: 120,
+      startDate: "2026-09-16",
+      endDate: "2026-09-16",
+    });
+    expect(overview.details).toMatchObject({ success: true, topic: { topicId: 120 }, total: 12 });
+    expect(mockExecuteQuery.mock.calls[3][2]).toEqual([120, "2026-09-16", "2026-09-16"]);
+    expect(mockExecuteQuery.mock.calls[3][1]).not.toContain("LIKE");
+  });
+
+  it("keeps an explicit project's content search separate from project discovery", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0], [120, 0]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([89, "华泰联合证券"], [120, "莱州一中"]));
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: 0 }]);
+    const result = await tool.execute("content", { topicId: 89, keyword: "莱州一中" });
+    expect(result.details).toMatchObject({ success: true, topic: { topicId: 89 }, total: 0 });
+    expect(mockExecuteQuery.mock.calls[3][2]).toEqual([
+      89,
+      "%莱州一中%",
+      "%莱州一中%",
+      "%莱州一中%",
+    ]);
+  });
+
+  it("does not substitute the primary project when discovery has no match", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([89, "华泰联合证券"]));
+    const result = await tool.execute("discover", { mode: "topics", topicName: "莱州一中" });
+    expect(result.details).toMatchObject({
+      success: true,
+      topics: [],
+      matchedCount: 0,
+      defaultTopic: null,
+    });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it("offers the sole authorized project as an automatic default only for unnamed requests", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([89, "华泰联合证券"]));
+    const result = await tool.execute("discover-default", { mode: "topics" });
+    expect(result.details).toMatchObject({
+      defaultTopic: { topicId: 89, topicName: "华泰联合证券" },
+    });
+    expect(tool.description).toContain(
+      "automatically select the sole authorized project without asking",
+    );
+    expect(tool.description).toContain(
+      "An explicit project reference always overrides this default",
+    );
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: 0 }]);
+    const query = await tool.execute("automatic-query", { topicId: 89, startDate: "2026-09-16" });
+    expect(query.details).toMatchObject({ success: true, topic: { topicId: 89 } });
+    expect(mockExecuteQuery.mock.calls[3][2]).toEqual([89, "2026-09-16"]);
+  });
+
+  it("does not offer a default from an administrator's multi-project catalog or filtered subset", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(1));
+    mockExecuteQuery.mockResolvedValueOnce([{ id: 1 }]);
+    mockExecuteQuery.mockResolvedValueOnce([{ id: 89 }, { id: 120 }]);
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([89, "华泰联合证券"], [120, "莱州一中"]));
+    const all = await tool.execute("all", { mode: "topics" });
+    expect(all.details).toMatchObject({ matchedCount: 2, defaultTopic: null });
+    const filtered = await tool.execute("filtered", { mode: "topics", topicName: "莱州一中" });
+    expect(filtered.details).toMatchObject({ matchedCount: 1, defaultTopic: null });
+  });
+
+  it("returns all ambiguous candidates in stable order and paginates large catalogs", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    const ids = Array.from({ length: 51 }, (_, i) => 151 - i);
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows(...ids.map((id): [number, number] => [id, 0])));
+    mockExecuteQuery.mockResolvedValueOnce(
+      titleRows(...ids.map((id): [number, string] => [id, `莱州一中校区${id}`])),
+    );
+    const first = await tool.execute("discover", { mode: "topics", topicName: "莱州 一中" });
+    expect(first.details).toMatchObject({ matchedCount: 51, returnedCount: 50, nextOffset: 50 });
+    expect(
+      (first.details.topics as Array<{ topicId: number }>).map((topic) => topic.topicId),
+    ).toEqual([...ids].toSorted((a, b) => a - b).slice(0, 50));
+    const repeated = await tool.execute("repeat", { mode: "topics", topicName: "莱州 一中" });
+    expect(repeated.content).toEqual(first.content);
+    const second = await tool.execute("next", { mode: "topics", offset: 50 });
+    expect(second.details).toMatchObject({
+      topics: [{ topicId: 151 }],
+      returnedCount: 1,
+      nextOffset: null,
+    });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    { topicId: 89.8 },
+    { topicId: "89" },
+    { topicId: 0 },
+    { topicId: null },
+    { mode: "topics", keyword: "莱州一中" },
+    { mode: "topics", offset: -1 },
+    { mode: "topics", topicName: 120 },
+    { topicId: 89, topicName: "莱州一中" },
+  ])("rejects invalid or mixed project/content parameters: %j", async (params) => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([89, "华泰联合证券"]));
+    const result = await tool.execute("invalid", params);
+    expect(result.details).toMatchObject({ success: false, code: "INVALID_QUERY" });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it("lists an empty authorized catalog without reading articles", async () => {
+    const tool = factory({ agentId: "rabbitmq-7" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce([]);
+    const result = await tool.execute("discover", { mode: "topics" });
+    expect(result.details).toMatchObject({ success: true, topics: [], matchedCount: 0 });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not infer a project from another call or conversation even with a single grant", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
+    mockExecuteQuery.mockResolvedValueOnce(authRows([89, 0]));
+    mockExecuteQuery.mockResolvedValueOnce(titleRows([89, "华泰联合证券"]));
+    mockExecuteQuery.mockResolvedValueOnce([{ cnt: 0 }]);
+    await tool.execute("confirmed-query", { topicId: 89 });
+    const result = await tool.execute("unresolved-follow-up", { keyword: "莱州一中" });
+    expect(result.details).toMatchObject({ success: false, code: "TOPIC_REQUIRED" });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects an unknown mode before authorization or data queries", async () => {
+    const tool = factory({ agentId: "rabbitmq-126" })!;
+    expect((await tool.execute("invalid", { mode: "list" })).details).toMatchObject({
+      success: false,
+      code: "INVALID_QUERY",
+    });
+    expect(mockExecuteQuery).not.toHaveBeenCalled();
   });
 
   it("uses text budgets aligned with the database schema and sampled lengths", () => {
@@ -96,7 +274,7 @@ describe("createFeedQueryToolFactory", () => {
       { id: 1, title: "标题", level: "Red", emotion: "Negative" },
     ]);
 
-    const result = await tool.execute("call-1", { keyword: "裁员" });
+    const result = await tool.execute("call-1", { topicId: 585, keyword: "裁员" });
 
     expect(result.details).toMatchObject({
       success: true,
@@ -128,7 +306,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
     mockExecuteQuery.mockResolvedValueOnce([{ cnt: 0 }]);
 
-    const result = await tool.execute("call-1", {});
+    const result = await tool.execute("call-1", { topicId: 585 });
 
     expect(result.details).toMatchObject({
       success: true,
@@ -156,7 +334,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce([{ cnt: FULL_READ_THRESHOLD }]);
     mockExecuteQuery.mockResolvedValueOnce(rows);
 
-    const result = await tool.execute("call-1", { limit: 5 });
+    const result = await tool.execute("call-1", { topicId: 585, limit: 5 });
 
     expect(result.details).toMatchObject({
       total: FULL_READ_THRESHOLD,
@@ -183,7 +361,7 @@ describe("createFeedQueryToolFactory", () => {
       mockExecuteQuery.mockResolvedValueOnce([{ cnt: total }]);
       mockExecuteQuery.mockResolvedValueOnce(rows);
 
-      const result = await tool.execute("call-1", {});
+      const result = await tool.execute("call-1", { topicId: 585 });
 
       expect(result.details).toMatchObject({
         total,
@@ -222,7 +400,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce([{ cnt: FULL_READ_THRESHOLD }]);
     mockExecuteQuery.mockResolvedValueOnce(rows);
 
-    const result = await tool.execute("call-1", {});
+    const result = await tool.execute("call-1", { topicId: 585 });
 
     expect(result.content[0].text.length).toBeLessThanOrEqual(SEARCH_RESULT_CHAR_BUDGET);
     expect(result.details).toMatchObject({
@@ -261,7 +439,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce([]);
 
-    const result = await tool.execute("call-1", {});
+    const result = await tool.execute("call-1", { topicId: 585 });
 
     expect(result.details.success).toBe(false);
     expect(String(result.details.error)).toMatch(/no authorized/i);
@@ -273,7 +451,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
 
-    const result = await tool.execute("call-1", { startDate: "06/01/2026" });
+    const result = await tool.execute("call-1", { topicId: 585, startDate: "06/01/2026" });
 
     expect(result.details.success).toBe(false);
     expect(String(result.details.error)).toMatch(/YYYY-MM-DD/);
@@ -291,7 +469,11 @@ describe("createFeedQueryToolFactory", () => {
       { value: "Blue", cnt: 10 },
     ]);
 
-    const result = await tool.execute("call-1", { mode: "stats", groupBy: ["level"] });
+    const result = await tool.execute("call-1", {
+      topicId: 585,
+      mode: "stats",
+      groupBy: ["level"],
+    });
 
     expect(result.details).toMatchObject({
       success: true,
@@ -328,7 +510,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
     mockExecuteQuery.mockResolvedValueOnce([]);
 
-    await tool.execute("call-1", { userId: "1749" });
+    await tool.execute("call-1", { topicId: 585, userId: "1749" });
 
     expect(mockExecuteQuery).toHaveBeenNthCalledWith(
       2,
@@ -342,7 +524,7 @@ describe("createFeedQueryToolFactory", () => {
     const tool = factory({ agentId: "rabbitmq-1'; DROP TABLE entity_auth; --" })!;
     mockExecuteQuery.mockResolvedValueOnce([]);
 
-    await tool.execute("call-1", {});
+    await tool.execute("call-1", { topicId: 585 });
 
     const [, sql, params] = mockExecuteQuery.mock.calls[0];
     expect(sql).not.toContain("DROP TABLE");
@@ -356,7 +538,7 @@ describe("createFeedQueryToolFactory", () => {
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
     mockExecuteQuery.mockRejectedValueOnce(new Error("ER_ACCESS_DENIED for user btclaw_reader"));
 
-    const result = await tool.execute("call-1", {});
+    const result = await tool.execute("call-1", { topicId: 585 });
 
     expect(result.details.success).toBe(false);
     expect(String(result.details.error)).not.toContain("btclaw_reader");
