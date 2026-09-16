@@ -32,6 +32,8 @@ import {
   formatTimestamp,
   hasFfmpeg,
   probeVideo,
+  splitVideoIntoSegments,
+  type VideoSegment,
   type VideoProbe,
   VideoAcquisitionError,
   VIDEO_MAX_DURATION_SECONDS,
@@ -47,9 +49,9 @@ const log = createSubsystemLogger("video-understand-tool");
  * `video_understand` — download the video behind a URL and fold its content into
  * the agent's context.
  *
- * Prefer whole-video multimodal understanding, with up to five retries.
- * If no description is available, ffmpeg supplies an audio track and sampled
- * frames for the fallback route.
+ * Prefer whole-video multimodal understanding. Videos over ten minutes get one
+ * whole-video attempt and then overlapping model-analyzed segments. Audio and
+ * sampled frames are the final fallback.
  *
  * Both routes return the same shape so downstream prompts do not branch.
  */
@@ -59,9 +61,17 @@ const TRANSCRIPT_MAX_CHARS = 20_000;
 const DESCRIPTION_MAX_CHARS = 4_000;
 const FRAME_DESCRIPTION_MAX_CHARS = 600;
 const DEFAULT_MAX_FRAMES = 6;
-const WHOLE_VIDEO_MAX_RETRIES = 5;
 const MAX_FRAMES_CAP = 24;
-const DEFAULT_FRAME_INTERVAL_SECONDS = 15;
+const FALLBACK_FRAMES_PER_MINUTE = 2;
+const SHORT_VIDEO_MAX_SECONDS = 2 * 60;
+const MEDIUM_VIDEO_MAX_SECONDS = 10 * 60;
+const SHORT_VIDEO_TIMEOUT_SECONDS = 180;
+const MEDIUM_VIDEO_TIMEOUT_SECONDS = 480;
+const LONG_VIDEO_TIMEOUT_SECONDS = 600;
+const SEGMENT_SECONDS = 120;
+const SEGMENT_OVERLAP_SECONDS = 5;
+const SEGMENT_CONCURRENCY = 2;
+const TOTAL_FLOW_TIMEOUT_MS = 30 * 60_000;
 const PAGE_FETCH_MAX_BYTES = 2_000_000;
 const PAGE_FETCH_TIMEOUT_SECONDS = 30;
 
@@ -93,14 +103,43 @@ const VideoUnderstandSchema = Type.Object({
   maxFrames: Type.Optional(
     Type.Number({
       description:
-        `Frames to sample on the decomposed route (automatic: about one per ` +
-        `${DEFAULT_FRAME_INTERVAL_SECONDS}s, up to ${DEFAULT_MAX_FRAMES}; max ${MAX_FRAMES_CAP}).`,
+        `Frames to sample on the final fallback route (automatic: two per minute, ` +
+        `minimum ${DEFAULT_MAX_FRAMES}, maximum ${MAX_FRAMES_CAP}).`,
       minimum: 1,
     }),
   ),
 });
 
-export type VideoUnderstandRoute = "whole-video" | "decomposed";
+export type VideoUnderstandRoute = "whole-video" | "segmented-video" | "decomposed";
+
+export type VideoModelAttemptDiagnostic = {
+  stage: "whole" | "segment";
+  attempt: number;
+  segmentIndex?: number;
+  provider?: string;
+  model?: string;
+  timeoutSeconds: number;
+  elapsedMs: number;
+  outcome: "success" | "empty" | "failed";
+  retryable: boolean;
+  reason?: string;
+  decision?: MediaUnderstandingDecision;
+};
+
+export type VideoAnalysisDiagnostics = {
+  strategy: VideoUnderstandRoute;
+  totalLimitSeconds: 1800;
+  elapsedMs: number;
+  attempts: VideoModelAttemptDiagnostic[];
+  fallbackReason?: string;
+  segmentation?: {
+    segmentSeconds: 120;
+    overlapSeconds: 5;
+    concurrency: 2;
+    totalSegments: number;
+    analyzedSegments: number;
+  };
+};
 
 export type VideoAudioStatus = {
   message: string;
@@ -129,18 +168,21 @@ export type VideoUnderstandResult = {
   snapshots: Array<{ at: string; path: string }>;
   markdown: string;
   warnings: string[];
+  diagnostics: VideoAnalysisDiagnostics;
 };
 
 export type VideoUnderstandToolDeps = {
   acquire: typeof acquireVideo;
   probe: typeof probeVideo;
   compress: typeof compressForWholeVideo;
+  splitSegments: typeof splitVideoIntoSegments;
   extractAudio: typeof extractAudioTrack;
   sampleFrames: typeof extractFrames;
   saveFrame: (frame: ExtractedFrame) => Promise<string>;
   ffmpegAvailable: () => boolean;
   fetchPageHtml: (url: string) => Promise<string | null>;
   describeMedia: (params: DescribeMediaParams) => Promise<MediaUnderstandingOutput[]>;
+  now: () => number;
 };
 
 export type DescribeMediaParams = {
@@ -153,6 +195,7 @@ export type DescribeMediaParams = {
   maxChars: number;
   maxAttachments: number;
   localRoot: string;
+  timeoutSeconds?: number;
 };
 
 /**
@@ -179,8 +222,24 @@ async function describeLocalMedia(
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: [params.localRoot],
   });
+  const runtimeCfg: OpenClawConfig = params.timeoutSeconds
+    ? {
+        ...params.cfg,
+        tools: {
+          ...params.cfg.tools,
+          media: {
+            ...params.cfg.tools?.media,
+            models: params.cfg.tools?.media?.models?.map((entry) => ({
+              ...entry,
+              timeoutSeconds: params.timeoutSeconds,
+            })),
+          },
+        },
+      }
+    : params.cfg;
+  const configured = params.cfg.tools?.media?.[params.capability];
   const config: MediaUnderstandingConfig = {
-    ...params.cfg.tools?.media?.[params.capability],
+    ...configured,
     enabled: true,
     prompt: params.prompt,
     maxChars: params.maxChars,
@@ -191,17 +250,22 @@ async function describeLocalMedia(
     // already passed tool-policy gating, so scope must not silently drop it.
     scope: undefined,
     attachments: { mode: "all", maxAttachments: params.maxAttachments },
+    timeoutSeconds: params.timeoutSeconds ?? configured?.timeoutSeconds,
+    models: configured?.models?.map((entry) => ({
+      ...entry,
+      timeoutSeconds: params.timeoutSeconds ?? entry.timeoutSeconds,
+    })),
   };
   const ctx: MsgContext = {};
   try {
     const result = await runCapability({
       capability: params.capability,
-      cfg: params.cfg,
+      cfg: runtimeCfg,
       ctx,
       attachments: cache,
       media: attachments,
       agentDir: params.agentDir,
-      providerRegistry: buildProviderRegistry(undefined, params.cfg),
+      providerRegistry: buildProviderRegistry(undefined, runtimeCfg),
       config,
     });
     params.onDecision?.(result.decision);
@@ -237,6 +301,7 @@ const DEFAULT_DEPS: VideoUnderstandToolDeps = {
   acquire: acquireVideo,
   probe: probeVideo,
   compress: compressForWholeVideo,
+  splitSegments: splitVideoIntoSegments,
   extractAudio: extractAudioTrack,
   sampleFrames: extractFrames,
   saveFrame: async (frame) => {
@@ -255,6 +320,7 @@ const DEFAULT_DEPS: VideoUnderstandToolDeps = {
   ffmpegAvailable: hasFfmpeg,
   fetchPageHtml: fetchPageHtmlDefault,
   describeMedia: describeLocalMedia,
+  now: Date.now,
 };
 
 const DIRECT_MEDIA_RE = /\.(?:mp4|m4v|mov|webm|ogv|avi|flv|mkv|m3u8|mpd)(?:$|[?#])/i;
@@ -310,11 +376,17 @@ function buildMarkdown(result: Omit<VideoUnderstandResult, "markdown">): string 
   if (result.resolution) {
     lines.push(`- 分辨率：${result.resolution}`);
   }
-  lines.push(
-    `- 分析方式：${result.route === "whole-video" ? "整片多模态理解" : result.transcript ? "音轨转写 + 关键帧（抽样）" : "关键帧分析（未获得口播转写）"}`,
-  );
+  const routeLabel =
+    result.route === "whole-video"
+      ? "整片多模态理解"
+      : result.route === "segmented-video"
+        ? "分段多模态理解"
+        : result.transcript
+          ? "音轨转写 + 关键帧（抽样）"
+          : "关键帧分析（未获得口播转写）";
+  lines.push(`- 分析方式：${routeLabel}`);
   lines.push(`- 音频处理：${result.audio.message}`);
-  if (result.route === "decomposed") {
+  if (result.frames.length > 0 || result.snapshots.length > 0) {
     lines.push(`- 画面覆盖：${result.frames.length} 张抽样关键帧完成分析，并非逐帧完整覆盖。`);
   }
 
@@ -345,6 +417,152 @@ function buildMarkdown(result: Omit<VideoUnderstandResult, "markdown">): string 
   return lines.join("\n");
 }
 
+function sanitizeDecision(value: MediaUnderstandingDecision): MediaUnderstandingDecision {
+  const sanitize = (
+    attempt: MediaUnderstandingDecision["attachments"][number]["attempts"][number],
+  ) => ({
+    ...attempt,
+    reason: attempt.reason ? redactSensitiveText(attempt.reason).slice(0, 1000) : undefined,
+  });
+  return {
+    ...value,
+    attachments: value.attachments.map((attachment) => ({
+      ...attachment,
+      attempts: attachment.attempts.map(sanitize),
+      chosen: attachment.chosen ? sanitize(attachment.chosen) : undefined,
+    })),
+  };
+}
+
+function classifyRetryable(reason: string | undefined): boolean {
+  if (!reason) {
+    return true;
+  }
+  if (
+    /(?:401|403|unauthori[sz]ed|forbidden|api.?key|credential|unsupported|not supported|413|too large|max.?bytes|content.?policy|safety|invalid request|bad request)/i.test(
+      reason,
+    )
+  ) {
+    return false;
+  }
+  return /(?:timeout|timed out|abort|temporary|temporarily|429|rate.?limit|5(?:00|02|03|04)|ECONN|ETIMEDOUT|ENET|network|fetch failed|socket)/i.test(
+    reason,
+  );
+}
+
+function pickAttemptIdentity(decision: MediaUnderstandingDecision | undefined): {
+  provider?: string;
+  model?: string;
+  reason?: string;
+} {
+  const attempts = decision?.attachments.flatMap((attachment) => attachment.attempts) ?? [];
+  const selected = attempts.find((attempt) => attempt.outcome === "success") ?? attempts.at(-1);
+  return {
+    provider: selected?.provider,
+    model: selected?.model,
+    reason: selected?.reason,
+  };
+}
+
+function resolveWholeVideoPolicy(durationSeconds: number | undefined): {
+  timeoutSeconds: number;
+  maxAttempts: number;
+} {
+  if (durationSeconds !== undefined && durationSeconds <= SHORT_VIDEO_MAX_SECONDS) {
+    return { timeoutSeconds: SHORT_VIDEO_TIMEOUT_SECONDS, maxAttempts: 3 };
+  }
+  if (durationSeconds !== undefined && durationSeconds <= MEDIUM_VIDEO_MAX_SECONDS) {
+    return { timeoutSeconds: MEDIUM_VIDEO_TIMEOUT_SECONDS, maxAttempts: 2 };
+  }
+  return { timeoutSeconds: LONG_VIDEO_TIMEOUT_SECONDS, maxAttempts: 1 };
+}
+
+async function analyzeVideoModelInput(params: {
+  filePath: string;
+  sourceUrl?: string;
+  workDir: string;
+  prompt: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  deps: VideoUnderstandToolDeps;
+  stage: "whole" | "segment";
+  segmentIndex?: number;
+  timeoutSeconds: number;
+  maxAttempts: number;
+  remainingMs: () => number;
+}): Promise<{ description?: string; attempts: VideoModelAttemptDiagnostic[] }> {
+  const attempts: VideoModelAttemptDiagnostic[] = [];
+  for (let attempt = 1; attempt <= params.maxAttempts; attempt += 1) {
+    const remainingSeconds = Math.floor(params.remainingMs() / 1000);
+    if (remainingSeconds <= 0) {
+      break;
+    }
+    const timeoutSeconds = Math.max(1, Math.min(params.timeoutSeconds, remainingSeconds));
+    const startedAt = params.deps.now();
+    let decision: MediaUnderstandingDecision | undefined;
+    try {
+      const outputs = await params.deps.describeMedia({
+        onDecision: (value) => {
+          decision = sanitizeDecision(value);
+        },
+        capability: "video",
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        files: [{ path: params.filePath, mime: "video/mp4", url: params.sourceUrl }],
+        prompt: params.prompt,
+        maxChars: DESCRIPTION_MAX_CHARS,
+        maxAttachments: 1,
+        localRoot: params.workDir,
+        timeoutSeconds,
+      });
+      const description = normalizeOptionalString(outputs[0]?.text);
+      const output = outputs[0];
+      const identity = pickAttemptIdentity(decision);
+      identity.provider ??= output?.provider;
+      identity.model ??= output?.model;
+      const retryable = !description && classifyRetryable(identity.reason);
+      attempts.push({
+        stage: params.stage,
+        attempt,
+        segmentIndex: params.segmentIndex,
+        timeoutSeconds,
+        elapsedMs: Math.max(0, params.deps.now() - startedAt),
+        outcome: description ? "success" : "empty",
+        retryable,
+        ...identity,
+        decision,
+      });
+      if (description) {
+        return { description, attempts };
+      }
+      if (!retryable) {
+        break;
+      }
+    } catch (error) {
+      const reason = redactSensitiveText(formatErrorMessage(error)).slice(0, 1000);
+      const identity = pickAttemptIdentity(decision);
+      const retryable = classifyRetryable(reason || identity.reason);
+      attempts.push({
+        stage: params.stage,
+        attempt,
+        segmentIndex: params.segmentIndex,
+        timeoutSeconds,
+        elapsedMs: Math.max(0, params.deps.now() - startedAt),
+        outcome: "failed",
+        retryable,
+        provider: identity.provider,
+        model: identity.model,
+        reason,
+        decision,
+      });
+      if (!retryable) {
+        break;
+      }
+    }
+  }
+  return { attempts };
+}
+
 async function analyzeWholeVideo(params: {
   filePath: string;
   sourceUrl?: string;
@@ -355,50 +573,47 @@ async function analyzeWholeVideo(params: {
   agentDir?: string;
   deps: VideoUnderstandToolDeps;
   warnings: string[];
-}): Promise<string | undefined> {
+  remainingMs: () => number;
+}): Promise<{ description?: string; attempts: VideoModelAttemptDiagnostic[] }> {
   let target = params.filePath;
   if (params.probe.sizeBytes > WHOLE_VIDEO_COMPRESSION_THRESHOLD_BYTES) {
     target = await params.deps.compress({
       inputPath: params.filePath,
       workDir: params.workDir,
       durationSeconds: params.probe.durationSeconds,
+      timeoutMs: params.remainingMs(),
     });
     const compressed = await fs.stat(target).catch(() => null);
     if (compressed && compressed.size > WHOLE_VIDEO_TARGET_BYTES) {
       params.warnings.push("压缩后仍超出整片理解的体积上限，已改用音轨+关键帧方式。");
-      return undefined;
+      return { attempts: [] };
     }
   }
-  for (let attempt = 0; attempt <= WHOLE_VIDEO_MAX_RETRIES; attempt += 1) {
-    try {
-      const outputs = await params.deps.describeMedia({
-        capability: "video",
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        files: [
-          {
-            path: target,
-            mime: "video/mp4",
-            url: target === params.filePath ? params.sourceUrl : undefined,
-          },
-        ],
-        prompt: params.prompt,
-        maxChars: DESCRIPTION_MAX_CHARS,
-        maxAttachments: 1,
-        localRoot: params.workDir,
-      });
-      const description = normalizeOptionalString(outputs[0]?.text);
-      if (description) {
-        return description;
-      }
-    } catch (error) {
-      if (attempt === WHOLE_VIDEO_MAX_RETRIES) {
-        params.warnings.push(`整片理解重试耗尽：${redactSensitiveText(formatErrorMessage(error))}`);
-      }
+  const policy = resolveWholeVideoPolicy(params.probe.durationSeconds);
+  const result = await analyzeVideoModelInput({
+    filePath: target,
+    sourceUrl: target === params.filePath ? params.sourceUrl : undefined,
+    workDir: params.workDir,
+    prompt: params.prompt,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    deps: params.deps,
+    stage: "whole",
+    timeoutSeconds: policy.timeoutSeconds,
+    maxAttempts: policy.maxAttempts,
+    remainingMs: params.remainingMs,
+  });
+  if (result.attempts.length > 0) {
+    const last = result.attempts.at(-1);
+    if (!result.description && last?.reason) {
+      params.warnings.push(`整片理解未完成：${last.reason}`);
     }
+  }
+  if (result.description) {
+    return result;
   }
   params.warnings.push(VIDEO_PROVIDER_HINT);
-  return undefined;
+  return result;
 }
 
 function resolveFrameBudget(
@@ -411,10 +626,83 @@ function resolveFrameBudget(
   if (!durationSeconds || !Number.isFinite(durationSeconds)) {
     return DEFAULT_MAX_FRAMES;
   }
-  return Math.max(
-    1,
-    Math.min(DEFAULT_MAX_FRAMES, Math.ceil(durationSeconds / DEFAULT_FRAME_INTERVAL_SECONDS)),
+  return Math.min(
+    MAX_FRAMES_CAP,
+    Math.max(DEFAULT_MAX_FRAMES, Math.ceil(durationSeconds / 60) * FALLBACK_FRAMES_PER_MINUTE),
   );
+}
+
+async function analyzeVideoSegments(params: {
+  filePath: string;
+  workDir: string;
+  durationSeconds: number;
+  prompt: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  deps: VideoUnderstandToolDeps;
+  remainingMs: () => number;
+}): Promise<{
+  description?: string;
+  attempts: VideoModelAttemptDiagnostic[];
+  segments: VideoSegment[];
+  analyzedSegments: number;
+}> {
+  const segments = await params.deps.splitSegments({
+    inputPath: params.filePath,
+    workDir: params.workDir,
+    durationSeconds: params.durationSeconds,
+    segmentSeconds: SEGMENT_SECONDS,
+    overlapSeconds: SEGMENT_OVERLAP_SECONDS,
+    timeoutMs: params.remainingMs(),
+  });
+  const results: Array<
+    { description?: string; attempts: VideoModelAttemptDiagnostic[] } | undefined
+  > = Array.from({ length: segments.length });
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < segments.length) {
+      const index = cursor;
+      cursor += 1;
+      const segment = segments[index];
+      if (!segment || params.remainingMs() <= 0) {
+        continue;
+      }
+      results[index] = await analyzeVideoModelInput({
+        filePath: segment.path,
+        workDir: params.workDir,
+        prompt:
+          `${params.prompt}\n\nThis is segment ${index + 1} of ${segments.length}, ` +
+          `${formatTimestamp(segment.startSeconds)}-${formatTimestamp(segment.endSeconds)}. ` +
+          "Describe only this time range; adjacent segments overlap by five seconds, so avoid treating repeated boundary content as a new event.",
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        deps: params.deps,
+        stage: "segment",
+        segmentIndex: index,
+        timeoutSeconds: SHORT_VIDEO_TIMEOUT_SECONDS,
+        maxAttempts: 2,
+        remainingMs: params.remainingMs,
+      });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SEGMENT_CONCURRENCY, segments.length) }, () => worker()),
+  );
+  const attempts = results.flatMap((result) => result?.attempts ?? []);
+  const descriptions = results.flatMap((result, index) => {
+    const segment = segments[index];
+    return result?.description && segment
+      ? [
+          `**${formatTimestamp(segment.startSeconds)}–${formatTimestamp(segment.endSeconds)}** ${result.description}`,
+        ]
+      : [];
+  });
+  return {
+    description: descriptions.length > 0 ? descriptions.join("\n\n") : undefined,
+    attempts,
+    segments,
+    analyzedSegments: descriptions.length,
+  };
 }
 
 async function analyzeAudioTrack(params: {
@@ -424,6 +712,7 @@ async function analyzeAudioTrack(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   deps: VideoUnderstandToolDeps;
+  remainingMs: () => number;
 }): Promise<{ transcript?: string; audio: VideoAudioStatus; warnings: string[] }> {
   const finish = (audio: VideoAudioStatus, transcript?: string) => ({
     audio,
@@ -442,6 +731,7 @@ async function analyzeAudioTrack(params: {
     audioPath = await params.deps.extractAudio({
       inputPath: params.filePath,
       workDir: params.workDir,
+      timeoutMs: params.remainingMs(),
     });
   } catch (error) {
     return finish({
@@ -454,21 +744,7 @@ async function analyzeAudioTrack(params: {
   try {
     const outputs = await params.deps.describeMedia({
       onDecision: (value) => {
-        // Provider errors may contain credentials; never return raw diagnostics.
-        const sanitize = (
-          attempt: MediaUnderstandingDecision["attachments"][number]["attempts"][number],
-        ) => ({
-          ...attempt,
-          reason: attempt.reason ? redactSensitiveText(attempt.reason).slice(0, 1000) : undefined,
-        });
-        decision = {
-          ...value,
-          attachments: value.attachments.map((attachment) => ({
-            ...attachment,
-            attempts: attachment.attempts.map(sanitize),
-            chosen: attachment.chosen ? sanitize(attachment.chosen) : undefined,
-          })),
-        };
+        decision = sanitizeDecision(value);
       },
       capability: "audio",
       cfg: params.cfg,
@@ -537,6 +813,7 @@ async function analyzeFrameTimeline(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   deps: VideoUnderstandToolDeps;
+  remainingMs: () => number;
 }): Promise<{
   frames: Array<{ at: string; description: string }>;
   snapshots: Array<{ at: string; path: string }>;
@@ -554,6 +831,7 @@ async function analyzeFrameTimeline(params: {
       workDir: params.workDir,
       durationSeconds: params.durationSeconds,
       maxFrames: params.maxFrames,
+      timeoutMs: params.remainingMs(),
     });
   } catch (error) {
     return {
@@ -630,6 +908,7 @@ async function analyzeDecomposed(params: {
   agentDir?: string;
   deps: VideoUnderstandToolDeps;
   warnings: string[];
+  remainingMs: () => number;
 }): Promise<{
   transcript?: string;
   audio: VideoAudioStatus;
@@ -645,6 +924,7 @@ async function analyzeDecomposed(params: {
       cfg: params.cfg,
       agentDir: params.agentDir,
       deps: params.deps,
+      remainingMs: params.remainingMs,
     }),
     analyzeFrameTimeline({
       filePath: params.filePath,
@@ -655,6 +935,7 @@ async function analyzeDecomposed(params: {
       cfg: params.cfg,
       agentDir: params.agentDir,
       deps: params.deps,
+      remainingMs: params.remainingMs,
     }),
   ]);
   // Keep warning order deterministic even though the expensive work runs concurrently.
@@ -676,6 +957,9 @@ export async function runVideoUnderstand(params: {
   deps?: Partial<VideoUnderstandToolDeps>;
 }): Promise<VideoUnderstandResult> {
   const deps: VideoUnderstandToolDeps = { ...DEFAULT_DEPS, ...params.deps };
+  const startedAt = deps.now();
+  const deadlineAt = startedAt + TOTAL_FLOW_TIMEOUT_MS;
+  const remainingMs = () => Math.max(0, deadlineAt - deps.now());
   const warnings: string[] = [];
   const prompt = normalizeOptionalString(params.prompt) ?? DEFAULT_VIDEO_PROMPT;
   const requestedMaxFrames = params.maxFrames;
@@ -684,13 +968,15 @@ export async function runVideoUnderstand(params: {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-"));
 
   try {
-    const acquired = await deps.acquire({ url: target.url, workDir });
+    const acquired = await deps.acquire({ url: target.url, workDir, timeoutMs: remainingMs() });
     // Metadata is optional for direct multimodal input; ffprobe may be absent.
     let probeFailed = false;
-    const probe: VideoProbe = await deps.probe(acquired.path).catch(async () => {
-      probeFailed = true;
-      return { sizeBytes: (await fs.stat(acquired.path)).size, hasAudio: false };
-    });
+    const probe: VideoProbe = await deps
+      .probe(acquired.path, { timeoutMs: remainingMs() })
+      .catch(async () => {
+        probeFailed = true;
+        return { sizeBytes: (await fs.stat(acquired.path)).size, hasAudio: false };
+      });
 
     if (probe.durationSeconds && probe.durationSeconds > VIDEO_MAX_DURATION_SECONDS) {
       throw new ToolInputError(
@@ -701,28 +987,88 @@ export async function runVideoUnderstand(params: {
 
     let route: VideoUnderstandRoute = "whole-video";
     let description: string | undefined;
-    if (route === "whole-video") {
-      try {
-        description = await analyzeWholeVideo({
-          filePath: acquired.path,
-          sourceUrl: acquired.via === "download" ? acquired.sourceUrl : undefined,
-          workDir,
-          probe,
-          prompt,
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-          deps,
-          warnings,
-        });
-      } catch (error) {
-        warnings.push(`整片理解失败，已回退到音轨+关键帧：${formatErrorMessage(error)}`);
-      }
-      if (!description) {
-        route = "decomposed";
-      }
+    const modelAttempts: VideoModelAttemptDiagnostic[] = [];
+    let fallbackReason: string | undefined;
+    let segmentation: VideoAnalysisDiagnostics["segmentation"];
+    let needsFallback = false;
+    try {
+      const whole = await analyzeWholeVideo({
+        filePath: acquired.path,
+        sourceUrl: acquired.via === "download" ? acquired.sourceUrl : undefined,
+        workDir,
+        probe,
+        prompt,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        deps,
+        warnings,
+        remainingMs,
+      });
+      description = whole.description;
+      modelAttempts.push(...whole.attempts);
+    } catch (error) {
+      fallbackReason = redactSensitiveText(formatErrorMessage(error));
+      warnings.push(`整片理解失败：${fallbackReason}`);
     }
 
-    if (route === "decomposed") {
+    if (!description && (probe.durationSeconds ?? 0) > MEDIUM_VIDEO_MAX_SECONDS) {
+      if (!deps.ffmpegAvailable()) {
+        needsFallback = true;
+        fallbackReason = fallbackReason ?? "整片模型分析失败，且缺少 ffmpeg，无法切分长视频。";
+      } else {
+        fallbackReason =
+          fallbackReason ?? "整片多模态模型未返回可用内容，已切换到120秒分段模型分析。";
+        try {
+          const segmented = await analyzeVideoSegments({
+            filePath: acquired.path,
+            workDir,
+            durationSeconds: probe.durationSeconds!,
+            prompt,
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+            deps,
+            remainingMs,
+          });
+          modelAttempts.push(...segmented.attempts);
+          description = segmented.description;
+          route = "segmented-video";
+          segmentation = {
+            segmentSeconds: SEGMENT_SECONDS,
+            overlapSeconds: SEGMENT_OVERLAP_SECONDS,
+            concurrency: SEGMENT_CONCURRENCY,
+            totalSegments: segmented.segments.length,
+            analyzedSegments: segmented.analyzedSegments,
+          };
+          if (segmented.analyzedSegments < segmented.segments.length) {
+            needsFallback = true;
+            fallbackReason = `仅 ${segmented.analyzedSegments}/${segmented.segments.length} 个分段返回模型分析，继续执行音轨和关键帧兜底。`;
+            warnings.push(fallbackReason);
+          }
+          if (segmented.analyzedSegments === 0) {
+            route = "decomposed";
+          }
+        } catch (error) {
+          needsFallback = true;
+          fallbackReason = `视频分段或分段模型分析失败：${redactSensitiveText(formatErrorMessage(error))}`;
+          warnings.push(fallbackReason);
+        }
+      }
+    } else if (!description) {
+      needsFallback = true;
+      fallbackReason = fallbackReason ?? "整片多模态模型未返回可用内容。";
+    }
+
+    if (!description && route === "segmented-video") {
+      needsFallback = true;
+    }
+    if (!description && route === "whole-video") {
+      route = "decomposed";
+    }
+
+    if (needsFallback || route === "decomposed") {
+      if (remainingMs() <= 0) {
+        throw new ToolInputError("视频分析已达到30分钟总时限，请缩短视频后重试。");
+      }
       if (!deps.ffmpegAvailable()) {
         throw new ToolInputError(
           "视频分析需要 ffmpeg（含 ffprobe），但没在可信目录里找到——出于防 PATH 劫持的考虑，OpenClaw 不读取 PATH。" +
@@ -734,12 +1080,12 @@ export async function runVideoUnderstand(params: {
 
     // Decomposition needs reliable duration and audio metadata. Never report
     // silence merely because probing failed during the multimodal attempt.
-    if (route === "decomposed" && probeFailed) {
-      Object.assign(probe, await deps.probe(acquired.path));
+    if ((needsFallback || route === "decomposed") && probeFailed) {
+      Object.assign(probe, await deps.probe(acquired.path, { timeoutMs: remainingMs() }));
     }
 
     const decomposed =
-      route === "decomposed"
+      needsFallback || route === "decomposed"
         ? await analyzeDecomposed({
             filePath: acquired.path,
             workDir,
@@ -750,6 +1096,7 @@ export async function runVideoUnderstand(params: {
             agentDir: params.agentDir,
             deps,
             warnings,
+            remainingMs,
           })
         : {
             transcript: undefined,
@@ -758,8 +1105,7 @@ export async function runVideoUnderstand(params: {
             audio: {
               status: "not-requested",
               extraction: "not-attempted",
-              message:
-                "使用整片多模态理解，未单独执行音轨提取和语音转写；不能据此确认口播转写完整性。",
+              message: `${route === "segmented-video" ? "使用分段多模态理解" : "使用整片多模态理解"}，未单独执行音轨提取和语音转写；不能据此确认口播转写完整性。`,
             } satisfies VideoAudioStatus,
           };
 
@@ -788,6 +1134,14 @@ export async function runVideoUnderstand(params: {
       frames: decomposed.frames,
       snapshots: decomposed.snapshots,
       warnings,
+      diagnostics: {
+        strategy: route,
+        totalLimitSeconds: 1800,
+        elapsedMs: Math.max(0, deps.now() - startedAt),
+        attempts: modelAttempts,
+        fallbackReason,
+        segmentation,
+      },
     };
     return { ...base, markdown: buildMarkdown(base) };
   } finally {
@@ -807,7 +1161,7 @@ export function createVideoUnderstandTool(options?: {
     description:
       "Download the video behind a URL and analyze its content. Accepts a direct video URL, an HLS manifest, " +
       "a platform watch page (抖音/哔哩哔哩/微博/快手/YouTube…), or an article URL whose main video is detected automatically. " +
-      "Videos are analyzed whole by a multimodal model with up to five retries; ffmpeg transcription and sampled frames are the fallback. " +
+      "Videos are analyzed by the multimodal model first. Clips over ten minutes are retried as overlapping two-minute model-analyzed segments; audio transcription and adaptive keyframes are the final fallback. " +
       "Check the returned audio status and warnings before claiming speech was analyzed; missing transcription does not prove silence. Frames are samples, not exhaustive coverage. " +
       "If visual understanding is unavailable, saved keyframes are returned as MEDIA paths that can be shown to the user.",
     parameters: VideoUnderstandSchema,

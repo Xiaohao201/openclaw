@@ -21,6 +21,7 @@ type Recorder = {
   audioExtracted: number;
   framesRequested: number[];
   savedFrames: string[];
+  segmentsRequested: number;
 };
 
 function makeDeps(options?: {
@@ -38,6 +39,7 @@ function makeDeps(options?: {
     audioExtracted: 0,
     framesRequested: [],
     savedFrames: [],
+    segmentsRequested: 0,
   };
   const deps: Partial<VideoUnderstandToolDeps> = {
     ffmpegAvailable: () => options?.ffmpegAvailable !== false,
@@ -61,6 +63,13 @@ function makeDeps(options?: {
     compress: async ({ workDir }) => {
       recorder.compressed += 1;
       return `${workDir}/compressed.mp4`;
+    },
+    splitSegments: async ({ workDir }) => {
+      recorder.segmentsRequested += 1;
+      return [
+        { path: `${workDir}/segment-01.mp4`, index: 0, startSeconds: 0, endSeconds: 120 },
+        { path: `${workDir}/segment-02.mp4`, index: 1, startSeconds: 115, endSeconds: 235 },
+      ];
     },
     extractAudio: async ({ workDir }) => {
       recorder.audioExtracted += 1;
@@ -125,36 +134,123 @@ describe("runVideoUnderstand routing", () => {
     expect(result.description).toBe("整片描述");
     expect(result.transcript).toBeUndefined();
     expect(recorder.describeCalls.map((call) => call.capability)).toEqual(["video"]);
+    expect(recorder.describeCalls[0]?.timeoutSeconds).toBe(180);
     expect(recorder.audioExtracted).toBe(0);
   });
 
-  it("tries long videos without ffmpeg and succeeds on the fifth retry", async () => {
-    let attempts = 0;
+  it.each([
+    { durationSeconds: 60, timeoutSeconds: 180, expectedAttempts: 3 },
+    { durationSeconds: 300, timeoutSeconds: 480, expectedAttempts: 2 },
+  ])(
+    "uses the tier timeout and transient retry budget for $durationSeconds seconds",
+    async ({ durationSeconds, timeoutSeconds, expectedAttempts }) => {
+      let attempts = 0;
+      const { deps, recorder } = makeDeps({
+        probe: { durationSeconds },
+        describe: async (params) => {
+          if (params.capability === "video") {
+            attempts += 1;
+            throw new Error("temporary provider failure");
+          }
+          if (params.capability === "audio") {
+            return [
+              {
+                kind: "audio.transcription",
+                attachmentIndex: 0,
+                text: "fallback transcript",
+                provider: "qwen",
+              },
+            ];
+          }
+          return [];
+        },
+      });
+      const result = await runVideoUnderstand({
+        url: "https://example.com/video.mp4",
+        cfg: CFG,
+        deps,
+      });
+      expect(result.route).toBe("decomposed");
+      expect(attempts).toBe(expectedAttempts);
+      expect(
+        recorder.describeCalls
+          .filter((call) => call.capability === "video")
+          .map((call) => call.timeoutSeconds),
+      ).toEqual(Array(expectedAttempts).fill(timeoutSeconds));
+      expect(result.diagnostics.attempts).toHaveLength(expectedAttempts);
+    },
+  );
+
+  it("tries a video over ten minutes once, then analyzes overlapping segments with concurrency two", async () => {
+    let active = 0;
+    let maxActive = 0;
     const { deps, recorder } = makeDeps({
-      ffmpegAvailable: false,
-      probe: { durationSeconds: 600 },
-      describe: async () => {
-        attempts += 1;
-        if (attempts < 6) {
+      probe: { durationSeconds: 601 },
+      describe: async (params) => {
+        if (params.capability !== "video") {
+          return [];
+        }
+        const file = params.files[0]?.path ?? "";
+        if (!file.includes("segment-")) {
           throw new Error("temporary provider failure");
         }
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
         return [
-          { kind: "video.description", attachmentIndex: 0, text: "success", provider: "qwen" },
+          {
+            kind: "video.description",
+            attachmentIndex: 0,
+            text: file.includes("01") ? "第一段" : "第二段",
+            provider: "qwen",
+            model: "qwen3.8-flash",
+          },
         ];
       },
     });
-    deps.probe = async () => {
-      throw new Error("ffprobe missing");
-    };
     const result = await runVideoUnderstand({
       url: "https://example.com/video.mp4",
       cfg: CFG,
       deps,
     });
-    expect(result.route).toBe("whole-video");
-    expect(attempts).toBe(6);
-    expect(recorder.audioExtracted).toBe(0);
-    expect(recorder.framesRequested).toEqual([]);
+    const calls = recorder.describeCalls.filter((call) => call.capability === "video");
+    expect(calls[0]?.timeoutSeconds).toBe(600);
+    expect(calls.slice(1).map((call) => call.timeoutSeconds)).toEqual([180, 180]);
+    expect(recorder.segmentsRequested).toBe(1);
+    expect(maxActive).toBe(2);
+    expect(result.route).toBe("segmented-video");
+    expect(result.description).toContain("00:00–02:00");
+    expect(result.description).toContain("01:55–03:55");
+    expect(result.diagnostics.segmentation).toMatchObject({
+      segmentSeconds: 120,
+      overlapSeconds: 5,
+      concurrency: 2,
+      totalSegments: 2,
+      analyzedSegments: 2,
+    });
+    expect(result.diagnostics.attempts.at(-1)).toMatchObject({
+      provider: "qwen",
+      model: "qwen3.8-flash",
+      outcome: "success",
+    });
+  });
+
+  it("stops before the final fallback once the thirty-minute total limit is reached", async () => {
+    let now = 0;
+    const { deps } = makeDeps({
+      probe: { durationSeconds: 60 },
+      describe: async (params) => {
+        if (params.capability === "video") {
+          now = 30 * 60_000;
+        }
+        return [];
+      },
+    });
+    deps.now = () => now;
+    await expect(
+      runVideoUnderstand({ url: "https://example.com/video.mp4", cfg: CFG, deps }),
+    ).rejects.toThrow(/30分钟总时限/);
   });
 
   it("decomposes a long clip into transcript plus frame timeline", async () => {
@@ -171,7 +267,7 @@ describe("runVideoUnderstand routing", () => {
       { at: "01:30", description: "第 2 帧画面" },
     ]);
     expect(recorder.describeCalls.map((call) => call.capability)).toEqual([
-      ...Array<string>(6).fill("video"),
+      ...Array<string>(2).fill("video"),
       "audio",
       "image",
     ]);
@@ -534,6 +630,31 @@ describe("runVideoUnderstand output", () => {
       deps,
     });
     expect(recorder.framesRequested).toEqual([24]);
+  });
+
+  it("samples two fallback frames per minute with a minimum of six and maximum of twenty-four", async () => {
+    for (const [durationSeconds, expected] of [
+      [60, 6],
+      [600, 20],
+      [1800, 24],
+    ] as const) {
+      const { deps, recorder } = makeDeps({ probe: { durationSeconds } });
+      deps.describeMedia = async (params) => {
+        recorder.describeCalls.push(params);
+        if (params.capability === "audio") {
+          return [
+            { kind: "audio.transcription", attachmentIndex: 0, text: "ok", provider: "qwen" },
+          ];
+        }
+        return [];
+      };
+      await runVideoUnderstand({
+        url: `https://example.com/${durationSeconds}.mp4`,
+        cfg: CFG,
+        deps,
+      });
+      expect(recorder.framesRequested).toEqual([expected]);
+    }
   });
 
   it("raises the media output limits above the inbound-attachment defaults", async () => {

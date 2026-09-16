@@ -27,7 +27,7 @@ export const WHOLE_VIDEO_MAX_DURATION_SECONDS = 120;
 export const WHOLE_VIDEO_TARGET_BYTES = 45 * 1024 * 1024;
 
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
-const TRANSCODE_TIMEOUT_MS = 10 * 60_000;
+export const TRANSCODE_TIMEOUT_MS = 10 * 60_000;
 const YTDLP_TIMEOUT_MS = 8 * 60_000;
 const FFMPEG_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -47,6 +47,17 @@ export type AcquiredVideo = {
   platform?: string;
   title?: string;
 };
+
+export type VideoSegment = {
+  path: string;
+  index: number;
+  startSeconds: number;
+  endSeconds: number;
+};
+
+function boundedTimeout(requestedMs: number | undefined, maximumMs: number): number {
+  return Math.max(1, Math.min(requestedMs ?? maximumMs, maximumMs));
+}
 
 export class VideoAcquisitionError extends Error {
   constructor(
@@ -71,17 +82,15 @@ export function hasFfmpeg(): boolean {
 }
 
 /** Probe container metadata; a missing duration is tolerated (some HLS remuxes omit it). */
-export async function probeVideo(filePath: string): Promise<VideoProbe> {
+export async function probeVideo(
+  filePath: string,
+  options?: { timeoutMs?: number },
+): Promise<VideoProbe> {
   const stat = await fs.stat(filePath);
-  const stdout = await runFfprobe([
-    "-v",
-    "error",
-    "-print_format",
-    "json",
-    "-show_format",
-    "-show_streams",
-    filePath,
-  ]);
+  const stdout = await runFfprobe(
+    ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath],
+    options?.timeoutMs ? { timeoutMs: options.timeoutMs } : undefined,
+  );
   let parsed: {
     format?: { duration?: string };
     streams?: Array<{ codec_type?: string; width?: number; height?: number; duration?: string }>;
@@ -108,10 +117,11 @@ async function downloadDirect(params: {
   url: string;
   workDir: string;
   maxBytes: number;
+  timeoutMs?: number;
 }): Promise<string> {
   const { response, release } = await fetchWithWebToolsNetworkGuard({
     url: params.url,
-    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    timeoutMs: boundedTimeout(params.timeoutMs, DOWNLOAD_TIMEOUT_MS),
   });
   const extension = path.extname(new URL(params.url).pathname) || ".mp4";
   const target = path.join(params.workDir, `source${extension}`);
@@ -154,7 +164,11 @@ async function downloadDirect(params: {
   }
 }
 
-async function downloadHls(params: { url: string; workDir: string }): Promise<string> {
+async function downloadHls(params: {
+  url: string;
+  workDir: string;
+  timeoutMs?: number;
+}): Promise<string> {
   const target = path.join(params.workDir, "source.mp4");
   await runFfmpeg(
     [
@@ -171,7 +185,7 @@ async function downloadHls(params: { url: string; workDir: string }): Promise<st
       "aac_adtstoasc",
       target,
     ],
-    ffmpegOptions(TRANSCODE_TIMEOUT_MS),
+    ffmpegOptions(boundedTimeout(params.timeoutMs, TRANSCODE_TIMEOUT_MS)),
   );
   return target;
 }
@@ -181,6 +195,7 @@ type YtDlpMetadata = { title?: string };
 async function downloadWithYtDlp(params: {
   url: string;
   workDir: string;
+  timeoutMs?: number;
 }): Promise<{ path: string; title?: string }> {
   const binary = resolveSystemBin("yt-dlp", { trust: "standard" });
   if (!binary) {
@@ -212,7 +227,10 @@ async function downloadWithYtDlp(params: {
         outputTemplate,
         params.url,
       ],
-      { timeout: YTDLP_TIMEOUT_MS, maxBuffer: FFMPEG_STDOUT_MAX_BYTES },
+      {
+        timeout: boundedTimeout(params.timeoutMs, YTDLP_TIMEOUT_MS),
+        maxBuffer: FFMPEG_STDOUT_MAX_BYTES,
+      },
     );
   } catch (error) {
     throw new VideoAcquisitionError(
@@ -251,6 +269,7 @@ export async function acquireVideo(params: {
   url: string;
   workDir: string;
   maxBytes?: number;
+  timeoutMs?: number;
 }): Promise<AcquiredVideo> {
   const platform = resolveVideoPlatform(params.url);
   const maxBytes = params.maxBytes ?? VIDEO_MAX_DOWNLOAD_BYTES;
@@ -259,7 +278,11 @@ export async function acquireVideo(params: {
 
   if (isManifest) {
     return {
-      path: await downloadHls({ url: params.url, workDir: params.workDir }),
+      path: await downloadHls({
+        url: params.url,
+        workDir: params.workDir,
+        timeoutMs: params.timeoutMs,
+      }),
       via: "hls",
       sourceUrl: params.url,
       platform,
@@ -267,13 +290,22 @@ export async function acquireVideo(params: {
   }
   if (isDirectFile) {
     return {
-      path: await downloadDirect({ url: params.url, workDir: params.workDir, maxBytes }),
+      path: await downloadDirect({
+        url: params.url,
+        workDir: params.workDir,
+        maxBytes,
+        timeoutMs: params.timeoutMs,
+      }),
       via: "download",
       sourceUrl: params.url,
       platform,
     };
   }
-  const viaYtDlp = await downloadWithYtDlp({ url: params.url, workDir: params.workDir });
+  const viaYtDlp = await downloadWithYtDlp({
+    url: params.url,
+    workDir: params.workDir,
+    timeoutMs: params.timeoutMs,
+  });
   return {
     path: viaYtDlp.path,
     via: "yt-dlp",
@@ -292,6 +324,7 @@ export async function compressForWholeVideo(params: {
   workDir: string;
   durationSeconds?: number;
   targetBytes?: number;
+  timeoutMs?: number;
 }): Promise<string> {
   const targetBytes = params.targetBytes ?? WHOLE_VIDEO_TARGET_BYTES;
   const duration = params.durationSeconds ?? WHOLE_VIDEO_MAX_DURATION_SECONDS;
@@ -329,7 +362,7 @@ export async function compressForWholeVideo(params: {
       "+faststart",
       output,
     ],
-    ffmpegOptions(TRANSCODE_TIMEOUT_MS),
+    ffmpegOptions(boundedTimeout(params.timeoutMs, TRANSCODE_TIMEOUT_MS)),
   );
   return output;
 }
@@ -338,6 +371,7 @@ export async function compressForWholeVideo(params: {
 export async function extractAudioTrack(params: {
   inputPath: string;
   workDir: string;
+  timeoutMs?: number;
 }): Promise<string> {
   const output = path.join(params.workDir, "audio.mp3");
   await runFfmpeg(
@@ -356,7 +390,7 @@ export async function extractAudioTrack(params: {
       "64k",
       output,
     ],
-    ffmpegOptions(TRANSCODE_TIMEOUT_MS),
+    ffmpegOptions(boundedTimeout(params.timeoutMs, TRANSCODE_TIMEOUT_MS)),
   );
   return output;
 }
@@ -385,11 +419,13 @@ export async function extractFrames(params: {
   workDir: string;
   durationSeconds: number;
   maxFrames: number;
+  timeoutMs?: number;
 }): Promise<ExtractedFrame[]> {
   const frameDir = path.join(params.workDir, "frames");
   await fs.mkdir(frameDir, { recursive: true });
   const timestamps = buildFrameTimestamps(params.durationSeconds, params.maxFrames);
   const frames: ExtractedFrame[] = [];
+  const deadline = params.timeoutMs ? Date.now() + params.timeoutMs : undefined;
   for (const [index, atSeconds] of timestamps.entries()) {
     const output = path.join(frameDir, `frame-${String(index + 1).padStart(2, "0")}.jpg`);
     try {
@@ -410,7 +446,7 @@ export async function extractFrames(params: {
           "3",
           output,
         ],
-        ffmpegOptions(60_000),
+        ffmpegOptions(boundedTimeout(deadline ? deadline - Date.now() : undefined, 60_000)),
       );
       const stat = await fs.stat(output).catch(() => null);
       if (stat?.isFile() && stat.size > 0) {
@@ -421,6 +457,70 @@ export async function extractFrames(params: {
     }
   }
   return frames;
+}
+
+export function buildVideoSegmentRanges(params: {
+  durationSeconds: number;
+  segmentSeconds?: number;
+  overlapSeconds?: number;
+}): Array<{ startSeconds: number; endSeconds: number }> {
+  const segmentSeconds = params.segmentSeconds ?? 120;
+  const overlapSeconds = params.overlapSeconds ?? 5;
+  if (segmentSeconds <= 0 || overlapSeconds < 0 || overlapSeconds >= segmentSeconds) {
+    throw new Error("Invalid video segment duration or overlap.");
+  }
+  const ranges: Array<{ startSeconds: number; endSeconds: number }> = [];
+  const stride = segmentSeconds - overlapSeconds;
+  for (let startSeconds = 0; startSeconds < params.durationSeconds; startSeconds += stride) {
+    const endSeconds = Math.min(params.durationSeconds, startSeconds + segmentSeconds);
+    ranges.push({ startSeconds, endSeconds });
+    if (endSeconds >= params.durationSeconds) {
+      break;
+    }
+  }
+  return ranges;
+}
+
+/** Split only prepares model inputs; each segment is still interpreted by the video model. */
+export async function splitVideoIntoSegments(params: {
+  inputPath: string;
+  workDir: string;
+  durationSeconds: number;
+  segmentSeconds?: number;
+  overlapSeconds?: number;
+  timeoutMs?: number;
+}): Promise<VideoSegment[]> {
+  const ranges = buildVideoSegmentRanges(params);
+  const segmentDir = path.join(params.workDir, "segments");
+  await fs.mkdir(segmentDir, { recursive: true });
+  const deadline = params.timeoutMs ? Date.now() + params.timeoutMs : undefined;
+  const segments: VideoSegment[] = [];
+  for (const [index, range] of ranges.entries()) {
+    const output = path.join(segmentDir, `segment-${String(index + 1).padStart(3, "0")}.mp4`);
+    await runFfmpeg(
+      [
+        "-y",
+        "-loglevel",
+        "error",
+        "-ss",
+        String(range.startSeconds),
+        "-i",
+        params.inputPath,
+        "-t",
+        String(range.endSeconds - range.startSeconds),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        output,
+      ],
+      ffmpegOptions(
+        boundedTimeout(deadline ? deadline - Date.now() : undefined, TRANSCODE_TIMEOUT_MS),
+      ),
+    );
+    segments.push({ path: output, index, ...range });
+  }
+  return segments;
 }
 
 export function formatTimestamp(seconds: number): string {
