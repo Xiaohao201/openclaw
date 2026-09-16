@@ -846,48 +846,58 @@ describe("processChatMessage", () => {
     expect(updateResponse).toHaveBeenCalledWith(1, "块状内容答案");
   });
 
-  it("injects the resolved topic ownership for an explicit monitoring-data request", async () => {
-    // Regression: the chat path used to pass only [userId:...], forcing the
-    // agent to guess project ownership from the DB (it once reused a stale
-    // hardcoded topic-id list). entity_auth is the source of truth.
-    let capturedMessage = "";
-    const runtime = createRuntimeMock({
-      workspaceDir,
-      onRun: () => {},
-      onRunArgs: (args) => {
-        capturedMessage = args.message;
-      },
-      sessionMessages: [{ role: "assistant", content: "ok" }],
-    });
-    const { historyManager } = createHistoryManagerMock();
-    const topicResolver = {
-      getTopicIdsByUser: async (uid: string) => {
-        expect(uid).toBe(USER_ID);
-        return {
-          topicId: 585,
-          useSlaveTopic: true,
-          masterId: 270,
-          topicName: "广本监测专项",
-          topics: [{ topicId: 585, useSlaveTopic: true, masterId: 270, topicName: "广本监测专项" }],
-        };
-      },
-    } as unknown as TopicResolver;
+  it.each(["排查昨天的高风险舆情", "今天莱州一中的舆情情况如何？"])(
+    "injects candidates without a selected project for %s",
+    async (message) => {
+      // Regression: the chat path used to pass only [userId:...], forcing the
+      // agent to guess project ownership from the DB (it once reused a stale
+      // hardcoded topic-id list). entity_auth is the source of truth.
+      let capturedMessage = "";
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onRunArgs: (args) => {
+          capturedMessage = args.message;
+        },
+        sessionMessages: [{ role: "assistant", content: "ok" }],
+      });
+      const { historyManager } = createHistoryManagerMock();
+      const topicResolver = {
+        getTopicIdsByUser: async (uid: string) => {
+          expect(uid).toBe(USER_ID);
+          return {
+            topicId: 585,
+            useSlaveTopic: true,
+            masterId: 270,
+            topicName: "广本监测专项",
+            topics: [
+              { topicId: 585, useSlaveTopic: true, masterId: 270, topicName: "广本监测专项" },
+            ],
+          };
+        },
+      } as unknown as TopicResolver;
 
-    const message = "排查昨天的高风险舆情";
-    await processChatMessage(
-      { ...createChatMessage(), message },
-      historyManager,
-      mercureConfig,
-      runtime,
-      logger,
-      undefined,
-      topicResolver,
-    );
+      await processChatMessage(
+        { ...createChatMessage(), message },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        topicResolver,
+      );
 
-    expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 topicName:"广本监测专项" useSlaveTopic:true] ${message}`,
-    );
-  });
+      expect(capturedMessage).toContain(
+        '[authorizedTopics:[{"topicId":585,"topicName":"广本监测专项"}]]',
+      );
+      expect(capturedMessage).toContain("授权项目是候选，不是当前查询项目");
+      expect(capturedMessage).toContain("[defaultTopicId:585]");
+      expect(capturedMessage).toContain("自动选用唯一授权项目并传topicId，无需询问用户");
+      expect(capturedMessage).toContain("明确指定的项目未匹配时禁止回退到唯一项目");
+      expect(capturedMessage).not.toContain("[topicId:");
+      expect(capturedMessage).toContain(message);
+    },
+  );
 
   it.each([
     "hi there",
@@ -1025,11 +1035,60 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 topicName:"专题E" useSlaveTopic:false]` +
-        ` [allTopics: 116:"专题A", 357, 585:"专题E"] ${message}`,
+    expect(capturedMessage).toContain(
+      '[authorizedTopics:[{"topicId":116,"topicName":"专题A"},{"topicId":357,"topicName":null},{"topicId":585,"topicName":"专题E"}]]',
     );
+    expect(capturedMessage).not.toContain("[topicId:");
+    expect(capturedMessage).not.toContain("[defaultTopicId:");
   });
+
+  it.each([3, 51])(
+    "keeps assembled candidate context stable across turns with %i projects",
+    async (count) => {
+      const prompts: string[] = [];
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onRunArgs: (args) => {
+          prompts.push(args.message);
+        },
+        sessionMessages: [{ role: "assistant", content: "ok" }],
+      });
+      const { historyManager } = createHistoryManagerMock();
+      const topics = Array.from({ length: count }, (_, index) => ({
+        topicId: index + 1,
+        topicName: `项目${index + 1}`,
+        useSlaveTopic: false,
+        masterId: index + 1,
+      }));
+      const topicResolver = {
+        getTopicIdsByUser: async () => ({ ...topics[0], topics }),
+      } as unknown as TopicResolver;
+      const message = "查询舆情数据";
+      for (let turn = 0; turn < 2; turn++) {
+        await processChatMessage(
+          { ...createChatMessage(), message },
+          historyManager,
+          mercureConfig,
+          runtime,
+          logger,
+          undefined,
+          topicResolver,
+        );
+        topics.reverse();
+      }
+      // Test the actual request assembly, not just a local sorting helper.
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toBe(prompts[0]);
+      expect(prompts[0]).not.toContain("[topicId:");
+      if (count > 50) {
+        expect(prompts[0]).toContain("use feed_query mode=topics with topicName");
+        expect(prompts[0]).not.toContain('"项目1"');
+      } else {
+        expect(prompts[0]).toContain('[authorizedTopics:[{"topicId":1,');
+      }
+    },
+  );
 
   it("escapes quotes and brackets in topicName via JSON.stringify", async () => {
     let capturedMessage = "";
@@ -1063,12 +1122,12 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 topicName:"专项[A] \\"测试\\"" useSlaveTopic:true] ${message}`,
+    expect(capturedMessage).toContain(
+      `[authorizedTopics:${JSON.stringify([{ topicId: 585, topicName: '专项[A] "测试"' }])}]`,
     );
   });
 
-  it("omits topicName from the prefix when the title lookup returned null", async () => {
+  it("preserves unknown project titles without inventing a name", async () => {
     let capturedMessage = "";
     const runtime = createRuntimeMock({
       workspaceDir,
@@ -1100,9 +1159,7 @@ describe("processChatMessage", () => {
       topicResolver,
     );
 
-    expect(withoutCitation(capturedMessage)).toBe(
-      `[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] ${message}`,
-    );
+    expect(capturedMessage).toContain('[authorizedTopics:[{"topicId":585,"topicName":null}]]');
   });
 
   it("falls back to the plain userId prefix when topic resolution fails", async () => {

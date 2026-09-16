@@ -39,15 +39,28 @@ const FeedQueryToolSchema = Type.Object(
   {
     mode: Type.Optional(
       stringEnum(
-        ["search", "stats"] as const,
-        '"search" (default) returns matching items; "stats" returns aggregate counts over the full filtered set.',
+        ["topics", "search", "stats"] as const,
+        '"topics" discovers authorized projects without reading articles; "search" (default) searches within an explicit project; "stats" aggregates that project.',
       ),
     ),
     topicId: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 1,
         description:
-          "Monitoring topic (project) id to query. Omit to use your primary topic. " +
-          "Must be one of the topics you are authorized for (see the [topicId:...] message prefix).",
+          "Required for search/stats. Automatically pass the sole authorized project's ID when no project is named and no different project is confirmed in this conversation; no user confirmation is needed. Explicit project references must match before querying.",
+      }),
+    ),
+    topicName: Type.Optional(
+      Type.String({
+        description:
+          "Topics mode only: project-name substring, NOT an article keyword. Omit to list authorized projects. No match does not prove that the project does not exist.",
+      }),
+    ),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description:
+          "Topics mode only: pagination offset (50 projects per page); follow nextOffset when present.",
       }),
     ),
     startDate: Type.Optional(
@@ -70,7 +83,10 @@ const FeedQueryToolSchema = Type.Object(
       Type.String({ description: "Exact platform name filter (e.g. 微博, 微信, 抖音)." }),
     ),
     keyword: Type.Optional(
-      Type.String({ description: "Substring matched against title, summary, and content." }),
+      Type.String({
+        description:
+          "Search/stats only: substring matched against article title, summary, and content WITHIN topicId. Omit for whole-project overviews; do not copy the project name here unless the user explicitly asks for mentions of it.",
+      }),
     ),
     groupBy: Type.Optional(
       Type.Array(
@@ -156,13 +172,30 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
       label: "Feed Query",
       description:
         "Query the sentiment-monitoring (舆情) database for your authorized monitoring topics. " +
+        "First separate the monitoring PROJECT from the CONTENT FILTER. Use mode=topics with topicName to discover projects even when no topic context was injected. " +
+        "Selection priority: explicitly named project, then this conversation's confirmed project, then the sole authorized project. " +
+        "When no project is named and no project is confirmed in this conversation, automatically select the sole authorized project without asking and pass its topicId to search/stats. " +
+        "An explicit project reference always overrides this default: if it does not match, discover/clarify and never substitute the sole project. Multiple authorized projects have no first/primary default; ask only when the intended project remains ambiguous. " +
+        "For '今天莱州一中的舆情如何', discover 莱州一中, then use its topicId for stats and representative search WITHOUT keyword. " +
+        "For '华泰联合证券的监测里有没有提到莱州一中', select 华泰联合证券 and use keyword=莱州一中. " +
+        "For follow-ups like '那昨天呢' or '只看负面的', reuse the last confirmed project and filters from THIS conversation and change only what was requested. " +
+        "A named project switch requires fresh matching and clears old content filters unless explicitly retained. If context is missing, discover authorized projects and apply the selection priority above; never reuse another conversation's project. " +
+        "State the queried project and date/filter scope in the answer. Zero articles means no matches within that scope, not no authorization or no monitoring coverage. " +
+        "Do not substitute public web search for requested internal monitoring data when project selection is unresolved. " +
         'Use mode="search" for matching items plus an exact total count (title, summary, platform, risk level, ' +
         'sentiment, link) and mode="stats" for aggregate counts over the full filtered set. ' +
         `Search reads all results up to ${FULL_READ_THRESHOLD}; larger sets return a stable mixed sample. ` +
         "Access is automatically restricted to topics owned by the current user.",
       parameters: FeedQueryToolSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
-        const mode = rawParams.mode === "stats" ? "stats" : "search";
+        const mode = rawParams.mode ?? "search";
+        if (mode !== "topics" && mode !== "search" && mode !== "stats") {
+          return jsonResult({
+            success: false,
+            code: "INVALID_QUERY",
+            error: "Use mode topics, search, or stats.",
+          });
+        }
         const filters = parseFilters(rawParams);
 
         let topics: AuthorizedTopic[];
@@ -175,10 +208,80 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
             error: "Failed to resolve your authorized topics; try again later.",
           });
         }
+        if (mode === "topics") {
+          if (
+            Object.keys(rawParams).some((key) => !["mode", "topicName", "offset"].includes(key))
+          ) {
+            return jsonResult({
+              success: false,
+              code: "INVALID_QUERY",
+              error:
+                "Project discovery accepts only topicName and offset; keyword filters articles, not projects.",
+            });
+          }
+          const offset = rawParams.offset ?? 0;
+          if (
+            typeof offset !== "number" ||
+            !Number.isSafeInteger(offset) ||
+            offset < 0 ||
+            (rawParams.topicName !== undefined && typeof rawParams.topicName !== "string")
+          ) {
+            return jsonResult({
+              success: false,
+              code: "INVALID_QUERY",
+              error: "Use a string topicName and a non-negative integer offset.",
+            });
+          }
+          const normalize = (name: string) =>
+            name.normalize("NFKC").replace(/\s+/gu, "").toLowerCase();
+          const name = normalize(readOptionalString(rawParams.topicName) ?? "");
+          const matches = topicSummary(topics).filter(
+            (topic) =>
+              !name || (topic.topicName !== null && normalize(topic.topicName).includes(name)),
+          );
+          const page = matches.slice(offset, offset + 50);
+          return jsonResult({
+            success: true,
+            mode: "topics",
+            topics: page,
+            matchedCount: matches.length,
+            returnedCount: page.length,
+            // A unique filtered match is not a single-project account. Only
+            // unfiltered discovery may advertise an implicit default.
+            defaultTopic: !name && offset === 0 && topics.length === 1 ? page[0] : null,
+            nextOffset: offset + page.length < matches.length ? offset + page.length : null,
+            guidance:
+              "These are authorized project candidates, not article results. Use defaultTopic automatically without asking only if the user named no project and this conversation has no confirmed project. Explicit project references must match; never default after a mismatch. Clarify ambiguous candidates. No name match does not establish nonexistence or lack of permission; try a shorter name or list projects.",
+          });
+        }
         if (topics.length === 0) {
           return jsonResult({
             success: false,
+            code: "NO_AUTHORIZED_TOPICS",
             error: "No authorized monitoring topics for this account.",
+          });
+        }
+
+        if (rawParams.topicId === undefined) {
+          return jsonResult({
+            success: false,
+            code: "TOPIC_REQUIRED",
+            error:
+              "Resolve the intended project and pass its topicId. Use mode=topics to discover authorized projects; automatically select its defaultTopic without asking only when the user named no project and no project is confirmed in this conversation. Never default after an explicit project mismatch or treat keyword as a project selector.",
+          });
+        }
+        if (
+          typeof rawParams.topicId !== "number" ||
+          !Number.isSafeInteger(rawParams.topicId) ||
+          rawParams.topicId <= 0 ||
+          rawParams.topicName !== undefined ||
+          rawParams.offset !== undefined
+        ) {
+          return jsonResult({
+            success: false,
+            code: "INVALID_QUERY",
+            error:
+              "Search/stats require a positive integer topicId. topicName and offset are only for project discovery.",
           });
         }
 
@@ -191,6 +294,7 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
           if (error instanceof UnauthorizedTopicError) {
             return jsonResult({
               success: false,
+              code: "TOPIC_NOT_AUTHORIZED",
               error: error.message,
               authorizedTopics: topicSummary(error.authorizedTopics),
             });
