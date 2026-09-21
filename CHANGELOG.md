@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Agents/skills: support incremental attachment saves through `skill_save.resourceUpdates`, preserving omitted files and allowing additions and edits without database DELETE permission.
 
 - Phone Reader: add a `phone_read` plugin tool for reading inaccessible web links through an authorized Android phone, with Xiaohongshu note routing, configurable app routes, device locking, bounded reads, and explicit current-screen limitations.
+- Phone Reader: capture bounded screenshots and numbered image galleries for the image tool, with responsive cropping, page verification, duplicate detection, and explicit partial results.
 
 ### Fixes
 

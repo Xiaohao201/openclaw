@@ -48,6 +48,12 @@ describe("phone-reader registration", () => {
       throw new Error("Expected one tool");
     }
     const result = await tool.execute("test", { url: "https://example.com" });
+    expect(readPhone).toHaveBeenCalledWith(
+      "https://example.com",
+      { captureImages: true, maxImages: 10 },
+      undefined,
+      undefined,
+    );
     expect(result.details).toMatchObject({
       identityVerified: false,
       externalContent: { untrusted: true },

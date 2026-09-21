@@ -8,6 +8,7 @@ try {
   const result = await readPhone(url, {
     adbPath: process.env.OPENCLAW_PHONE_ADB_PATH,
     serial: process.env.OPENCLAW_PHONE_SERIAL,
+    captureImages: process.argv.includes("--images"),
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
