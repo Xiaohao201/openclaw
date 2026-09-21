@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/phone-reader",
+  "version": "2026.4.16",
+  "description": "Read inaccessible web links using a connected Android phone",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "fast-xml-parser": "5.5.7",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

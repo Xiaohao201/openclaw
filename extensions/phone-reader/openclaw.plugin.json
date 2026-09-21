@@ -1,0 +1,25 @@
+{
+  "id": "phone-reader",
+  "name": "Phone Reader",
+  "description": "Read URLs through an authorized Android phone connected to the Gateway host.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "adbPath": { "type": "string", "minLength": 1 },
+      "serial": { "type": "string", "minLength": 1 },
+      "apps": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host", "package"],
+          "properties": {
+            "host": { "type": "string", "minLength": 1 },
+            "package": { "type": "string", "pattern": "^[a-zA-Z][\\w]*(?:\\.[a-zA-Z][\\w]*)+$" }
+          }
+        }
+      }
+    }
+  }
+}
