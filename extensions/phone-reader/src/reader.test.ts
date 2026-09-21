@@ -14,6 +14,37 @@ const xml =
   '<hierarchy><node package="com.xingin.xhs" text="测试笔记 &amp; 内容"/><node package="other.app" text="private"/></hierarchy>';
 
 describe("phone reader", () => {
+  it.each([true, false])("checks window focus before capturing images: %s", async (focused) => {
+    const run = vi.fn(async (args: string[]) => {
+      const command = args.at(-1);
+      if (args[0] === "devices") {
+        return "test device";
+      }
+      if (command?.includes("activities")) {
+        return activity;
+      }
+      if (command?.includes("'cat'")) {
+        return xml;
+      }
+      if (command === "'dumpsys' 'window'") {
+        return `mCurrentFocus=Window{abc u0 ${focused ? "com.xingin.xhs" : "other.app"}/.NoteDetailActivity}`;
+      }
+      return "";
+    });
+    const capture = vi.fn(async () => ({ path: "screen.png", hash: "one" }));
+    const result = await readPhone(
+      url,
+      { captureImages: true },
+      {
+        run,
+        capture,
+        sleep: async () => {},
+        lock: async () => async () => {},
+      },
+    );
+    expect(result.imageCapture?.images).toHaveLength(focused ? 1 : 0);
+    expect(capture).toHaveBeenCalledTimes(focused ? 1 : 0);
+  });
   it("handles missing ADB, command output, and canceled execution", async () => {
     await expect(createAdbRunner("openclaw-nonexistent-adb")([])).rejects.toMatchObject({
       code: "device_unavailable",

@@ -7,7 +7,9 @@ title: "Phone Reader"
 
 The bundled `phone-reader` plugin adds the `phone_read` tool. When `web_fetch`
 fails or returns a login/block page, the agent can open the link in a phone app
-and read the current screen's accessibility text. Tool selection is model-driven;
+and read accessibility text and capture screenshots. The agent uses the `image`
+tool to interpret those screenshots, or `read` with a vision-capable model when
+the image tool is unavailable or fails. Tool selection is model-driven;
 this plugin does not intercept every failed HTTP request. No skill is required.
 
 ## Requirements
@@ -16,6 +18,10 @@ this plugin does not intercept every failed HTTP request. No skill is required.
 - An Android phone connected to that host, with USB debugging enabled and the
   host authorized. Unlock the phone and sign into the target app manually.
 - An agent allowed to use `phone_read`. The tool is unavailable in sandboxed sessions.
+- Image recognition requires either the `image` tool with a working image model,
+  or the `read` tool with a vision-capable conversation model. Capturing screenshots
+  alone does not perform OCR. If both routes fail, the agent must report that
+  image recognition failed.
 
 iOS and phones attached to a different host are not supported by this plugin.
 Run the Gateway on the computer connected to the phone. Check `adb devices -l`
@@ -73,6 +79,9 @@ Replace the example with a real note. The smoke command accepts
 `OPENCLAW_PHONE_ADB_PATH` and `OPENCLAW_PHONE_SERIAL`; the agent tool uses plugin
 configuration instead.
 
+Add `--images` to the smoke command to test screenshots and gallery swipes.
+The direct smoke command returns file paths; it does not invoke an image model.
+
 For the local Suheng Gateway, enable the plugin in the development configuration
 (`~/.openclaw-dev/openclaw.json`) and preserve the production tool allowlist.
 Run `pnpm build` after source changes, then `pnpm suheng:debug`. That command
@@ -82,8 +91,23 @@ the agent to read a real inaccessible note; verify that the trace includes
 
 ## Result and failure semantics
 
-The result is **current-screen text**, not full article text, image OCR, video
-transcription, or all comments. `identityVerified: false` means the app does not
+The text result is **current-screen accessibility text**. By default, the tool also
+captures up to ten screenshots (`maxImages`: 1–10); use `captureImages: false`
+for text only. Recognized image galleries are cropped using their actual UI
+bounds and swiped only after confirming the target app owns the focused window.
+Each next page must expose the expected page number. Unknown layouts produce
+one current-screen screenshot without swiping.
+
+`imageCapture.images` contains local paths for the `image` tool, saved in the
+Gateway media directory under `browser`. Images are untrusted external content.
+`imageCapture.complete` means all numbered gallery pages were captured from page
+one; it does not guarantee that image text is legible or unclipped. The agent must
+analyze the screenshots before describing their contents and disclose missing
+pages. The stop reason distinguishes completion, the image limit, unknown
+layouts, failed page advancement, duplicate pixels, and capture failure.
+
+This does not provide video transcription or all comments.
+`identityVerified: false` means the app does not
 expose a verifiable target URL or note ID. Even a successful navigation can show
 an error/login page; the agent must check relevance and disclose that limitation.
 Page text is wrapped as untrusted external content.

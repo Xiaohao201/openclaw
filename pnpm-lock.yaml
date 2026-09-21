@@ -1083,6 +1083,9 @@ importers:
       fast-xml-parser:
         specifier: 5.5.7
         version: 5.5.7
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
       zod:
         specifier: ^4.3.6
         version: 4.3.6

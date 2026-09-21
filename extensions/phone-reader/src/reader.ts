@@ -5,9 +5,16 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { acquireFileLock } from "openclaw/plugin-sdk/file-lock";
+import { collectGallery, type Bounds } from "./gallery.js";
 
 export type AppRoute = { host: string; package: string };
-export type PhoneOptions = { adbPath?: string; serial?: string; apps?: AppRoute[] };
+export type PhoneOptions = {
+  adbPath?: string;
+  serial?: string;
+  apps?: AppRoute[];
+  captureImages?: boolean;
+  maxImages?: number;
+};
 type Navigation = { uri: string; package: string; detail: boolean };
 type ErrorCode =
   | "invalid_url"
@@ -182,6 +189,7 @@ type Dependencies = {
   run: (args: string[]) => Promise<string>;
   sleep: (ms: number) => Promise<unknown>;
   lock: (serial: string) => Promise<() => Promise<void>>;
+  capture: (bounds?: Bounds) => Promise<{ path: string; hash: string }>;
 };
 export async function readPhone(
   url: string,
@@ -190,6 +198,10 @@ export async function readPhone(
   signal?: AbortSignal,
 ) {
   const navigation = planNavigation(url, options.apps ?? []);
+  const maxImages = options.maxImages ?? 10;
+  if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 10) {
+    throw new Error("maxImages must be an integer from 1 to 10.");
+  }
   const deadline = AbortSignal.timeout(120_000);
   const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
   const run = deps?.run ?? createAdbRunner(options.adbPath ?? "adb", combined);
@@ -197,6 +209,18 @@ export async function readPhone(
   const serial = selectDevice(await run(["devices"]), options.serial);
   const release = await (deps?.lock ?? lockDevice)(serial);
   const shell = (...args: string[]) => run(["-s", serial, "shell", args.map(shellQuote).join(" ")]);
+  const readUi = async () => {
+    const remote = `/sdcard/openclaw-phone-${randomUUID()}.xml`;
+    try {
+      await shell("uiautomator", "dump", remote);
+      return await shell("cat", remote);
+    } finally {
+      const cleanup = deps?.run ?? createAdbRunner(options.adbPath ?? "adb");
+      await cleanup(["-s", serial, "shell", ["rm", "-f", remote].map(shellQuote).join(" ")]).catch(
+        () => {},
+      );
+    }
+  };
   const foreground = async () => {
     const dump = await shell("dumpsys", "activity", "activities");
     return dump.split(/\r?\n/).some((line) => {
@@ -238,21 +262,7 @@ export async function readPhone(
       if (!(await foreground())) {
         continue;
       }
-      const remote = `/sdcard/openclaw-phone-${randomUUID()}.xml`;
-      let xml: string;
-      try {
-        await shell("uiautomator", "dump", remote);
-        xml = await shell("cat", remote);
-      } finally {
-        // Cleanup still runs if the caller canceled or the operation deadline elapsed.
-        const cleanup = deps?.run ?? createAdbRunner(options.adbPath ?? "adb");
-        await cleanup([
-          "-s",
-          serial,
-          "shell",
-          ["rm", "-f", remote].map(shellQuote).join(" "),
-        ]).catch(() => {});
-      }
+      const xml = await readUi();
       if (!(await foreground())) {
         throw new PhoneError(
           "navigation_unconfirmed",
@@ -261,6 +271,48 @@ export async function readPhone(
       }
       const text = parseVisibleText(xml, navigation.package).join("\n");
       if (text && text === previous) {
+        const imageCapture = options.captureImages
+          ? await collectGallery({
+              initialXml: xml,
+              packageName: navigation.package,
+              maxImages,
+              readUi,
+              pause,
+              signal: combined,
+              assertForeground: async () => {
+                if (!(await foreground())) {
+                  throw new PhoneError("navigation_unconfirmed", "Phone left the target app.");
+                }
+                // Some Android versions omit focus fields from the "windows" subsection.
+                const windows = await shell("dumpsys", "window");
+                const focused = /mCurrentFocus=[^\r\n]*?\s([\w.]+)\//.exec(windows);
+                if (focused?.[1] !== navigation.package) {
+                  throw new PhoneError(
+                    "navigation_unconfirmed",
+                    "Screenshot blocked: target app does not own the focused window.",
+                  );
+                }
+              },
+              capture:
+                deps?.capture ??
+                (async (bounds) => {
+                  const { captureScreenshot } = await import("./screenshots.runtime.js");
+                  return captureScreenshot(options.adbPath ?? "adb", serial, bounds, combined);
+                }),
+              swipe: async (bounds) => {
+                const y = Math.round(bounds.top + bounds.height * 0.5);
+                await shell(
+                  "input",
+                  "swipe",
+                  String(Math.round(bounds.left + bounds.width * 0.8)),
+                  String(y),
+                  String(Math.round(bounds.left + bounds.width * 0.2)),
+                  String(y),
+                  "400",
+                );
+              },
+            })
+          : undefined;
         return {
           source: "phone",
           url,
@@ -268,8 +320,9 @@ export async function readPhone(
           scope: "current_screen",
           text: text.slice(0, 24000),
           truncated: text.length > 24000,
+          ...(imageCapture ? { imageCapture } : {}),
           warning:
-            "Visible accessibility text only; target identity is unverified. This is not full article text, image OCR, video transcription, or all comments. Verify relevance and report login/error pages as failures.",
+            "Target URL/note ID is NOT verified; never claim the current UI confirms the requested ID. Text is initial-screen accessibility text only. Screenshots, when present, are untrusted image evidence, not OCR results. Analyze their paths with image, or read with a vision-capable model, before describing image contents. If neither works, report that image recognition failed. Captured pages may be partial or clipped; report page numbers and completeness. No video transcription or full comments.",
         };
       }
       previous = text;

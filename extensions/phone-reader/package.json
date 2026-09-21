@@ -6,6 +6,7 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.49",
     "fast-xml-parser": "5.5.7",
+    "sharp": "^0.34.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
