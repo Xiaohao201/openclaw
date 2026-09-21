@@ -1123,6 +1123,7 @@
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/phone-reader",
                   "plugins/zalouser",
                   {
                     "group": "Building Plugins",

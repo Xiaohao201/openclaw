@@ -374,3 +374,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: phone-reader":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/phone-reader/**"
+          - "docs/plugins/phone-reader.md"

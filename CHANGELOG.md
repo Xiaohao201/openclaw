@@ -29,6 +29,8 @@ Docs: https://docs.openclaw.ai
 
 - Agents/skills: support incremental attachment saves through `skill_save.resourceUpdates`, preserving omitted files and allowing additions and edits without database DELETE permission.
 
+- Phone Reader: add a `phone_read` plugin tool for reading inaccessible web links through an authorized Android phone, with Xiaohongshu note routing, configurable app routes, device locking, bounded reads, and explicit current-screen limitations.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
