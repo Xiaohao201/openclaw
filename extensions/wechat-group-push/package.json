@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/wechat-group-push",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "Push text to a configured WeChat group through a local warning service",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
