@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 - RabbitMQ/consumer: contain `ack` and `nack` failures when a channel closes during message processing so cancellation and reconnect races no longer terminate the OpenClaw process.
 - Feed search/RabbitMQ: discover authorized monitoring projects separately from article keywords, automatically select the sole authorized project for unnamed requests, and require explicit project IDs on data queries without falling back after a named-project mismatch.
 - Agents/video understanding: apply duration-tiered whole-video model timeouts and transient retry limits, analyze videos over ten minutes as overlapping two-minute model segments with concurrency two, enforce a thirty-minute total budget, and reserve audio plus adaptive keyframes for the final fallback.
+- Video understanding: download extensionless video CDN links based on the guarded response content type, preserving signed URLs and reporting download failures instead of incorrectly requiring yt-dlp.
 
 ## 2026.4.15
 
