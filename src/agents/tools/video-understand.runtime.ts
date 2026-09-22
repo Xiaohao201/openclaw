@@ -118,7 +118,8 @@ async function downloadDirect(params: {
   workDir: string;
   maxBytes: number;
   timeoutMs?: number;
-}): Promise<string> {
+  requireMediaContentType: boolean;
+}): Promise<string | undefined> {
   const { response, release } = await fetchWithWebToolsNetworkGuard({
     url: params.url,
     timeoutMs: boundedTimeout(params.timeoutMs, DOWNLOAD_TIMEOUT_MS),
@@ -128,6 +129,16 @@ async function downloadDirect(params: {
   try {
     if (!response.ok || !response.body) {
       throw new VideoAcquisitionError(`Video download failed (HTTP ${response.status}).`);
+    }
+    // Signed CDN URLs often have no file extension. Inspect the guarded GET
+    // response and reuse its stream instead of relying on URL query hints.
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    if (
+      params.requireMediaContentType &&
+      !contentType?.startsWith("video/") &&
+      contentType !== "application/octet-stream"
+    ) {
+      return undefined;
     }
     const declaredSize = Number(response.headers.get("content-length"));
     if (declaredSize > params.maxBytes) {
@@ -288,18 +299,22 @@ export async function acquireVideo(params: {
       platform,
     };
   }
-  if (isDirectFile) {
-    return {
-      path: await downloadDirect({
-        url: params.url,
-        workDir: params.workDir,
-        maxBytes,
-        timeoutMs: params.timeoutMs,
-      }),
-      via: "download",
-      sourceUrl: params.url,
-      platform,
-    };
+  if (isDirectFile || !platform) {
+    const downloaded = await downloadDirect({
+      url: params.url,
+      workDir: params.workDir,
+      maxBytes,
+      timeoutMs: params.timeoutMs,
+      requireMediaContentType: !isDirectFile,
+    });
+    if (downloaded) {
+      return {
+        path: downloaded,
+        via: "download",
+        sourceUrl: params.url,
+        platform,
+      };
+    }
   }
   const viaYtDlp = await downloadWithYtDlp({
     url: params.url,
