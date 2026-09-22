@@ -306,44 +306,6 @@ async function probeGeminiCli(): Promise<boolean> {
   return resolved;
 }
 
-async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper-cli"))) {
-    return null;
-  }
-  const envModel = process.env.WHISPER_CPP_MODEL?.trim();
-  const defaultModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
-  const modelPath = envModel && (await fileExists(envModel)) ? envModel : defaultModel;
-  if (!(await fileExists(modelPath))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "whisper-cli",
-    args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-np", "-nt", "{{MediaPath}}"],
-  };
-}
-
-async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper"))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "whisper",
-    args: [
-      "--model",
-      "turbo",
-      "--output_format",
-      "txt",
-      "--output_dir",
-      "{{OutputDir}}",
-      "--verbose",
-      "False",
-      "{{MediaPath}}",
-    ],
-  };
-}
-
 async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig | null> {
   if (!(await hasBinary("sherpa-onnx-offline"))) {
     return null;
@@ -379,18 +341,6 @@ async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig |
       "{{MediaPath}}",
     ],
   };
-}
-
-async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  const sherpa = await resolveSherpaOnnxEntry();
-  if (sherpa) {
-    return sherpa;
-  }
-  const whisperCpp = await resolveLocalWhisperCppEntry();
-  if (whisperCpp) {
-    return whisperCpp;
-  }
-  return await resolveLocalWhisperEntry();
 }
 
 async function resolveGeminiCliEntry(
@@ -452,7 +402,9 @@ async function resolveKeyEntry(params: {
     const resolvedModel =
       capability === "image"
         ? await resolveAutoImageModelId({ cfg, providerId, explicitModel: model })
-        : model;
+        : capability === "audio"
+          ? (provider.defaultModels?.audio ?? model)
+          : model;
     if (capability === "image" && !resolvedModel) {
       return null;
     }
@@ -525,10 +477,14 @@ async function resolveAutoEntries(params: {
     return [activeEntry];
   }
   if (params.capability === "audio") {
-    const localAudio = await resolveLocalAudioEntry();
-    if (localAudio) {
-      return [localAudio];
+    // Registered ASR providers take priority. Local Whisper is explicit opt-in:
+    // merely installing its binary must not launch CPU transcription jobs.
+    const audioProvider = await resolveKeyEntry(params);
+    if (audioProvider) {
+      return [audioProvider];
     }
+    const sherpa = await resolveSherpaOnnxEntry();
+    return sherpa ? [sherpa] : [];
   }
   if (params.capability === "image") {
     const imageModelEntries = resolveImageModelFromAgentDefaults(params.cfg);
@@ -628,7 +584,9 @@ async function resolveActiveModelEntry(params: {
           providerId,
           explicitModel: params.activeModel?.model,
         })
-      : params.activeModel?.model;
+      : params.capability === "audio"
+        ? (provider.defaultModels?.audio ?? params.activeModel?.model)
+        : params.activeModel?.model;
   if (params.capability === "image" && !model) {
     return null;
   }

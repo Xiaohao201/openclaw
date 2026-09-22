@@ -147,20 +147,23 @@ working option**:
 
 1. **Active reply model** when its provider supports the capability.
 2. **`agents.defaults.imageModel`** primary/fallback refs (image only).
-3. **Local CLIs** (audio only; if installed)
+3. **Audio provider auth** (audio only): configured providers first, then registered
+   provider priority (Qwen → OpenAI → Groq → Deepgram → Google → Mistral). The
+   provider's dedicated audio model takes precedence over a chat model ID.
+4. **Local CLI** (audio only, when no authenticated provider is available)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
-   - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
-   - `whisper` (Python CLI; downloads models automatically)
-4. **Gemini CLI** (`gemini`) using `read_many_files`
-5. **Provider auth**
+5. **Gemini CLI** (`gemini`) using `read_many_files` (image/video only)
+6. **Provider auth** (image/video)
    - Configured `models.providers.*` entries that support the capability are
      tried before the bundled fallback order.
    - Image-only config providers with an image-capable model auto-register for
      media understanding even when they are not a bundled vendor plugin.
    - Bundled fallback order:
-     - Audio: OpenAI → Groq → Deepgram → Google → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
      - Video: Google → Qwen → Moonshot
+
+Local Whisper binaries are not automatically selected. Explicit CLI model entries
+remain supported. See [Audio and Voice Notes](/nodes/audio) for Qwen ASR configuration.
 
 To disable auto-detection, set:
 
