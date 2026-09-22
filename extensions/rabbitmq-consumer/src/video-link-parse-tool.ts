@@ -4,8 +4,10 @@ import {
   jsonResult,
   type AnyAgentTool,
   type OpenClawPluginApi,
+  type OpenClawPluginToolContext,
   wrapExternalContent,
 } from "../api.js";
+import { createVideoLinkHandoff, type ParsedVideoTarget } from "./video-link-handoff.js";
 
 const QY_VIDEO_PARSE_ENDPOINT = "https://qyapi.ipaybuy.cn/api/video";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -228,6 +230,7 @@ export function createVideoLinkParseTool(options: {
   config: VideoParserConfig;
   fetchImpl?: FetchLike;
   logger?: Pick<OpenClawPluginApi["logger"], "warn">;
+  onResolved?: (target: ParsedVideoTarget) => void;
 }): AnyAgentTool {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   return {
@@ -245,6 +248,7 @@ export function createVideoLinkParseTool(options: {
       if (!target) {
         return safeFailure("请提供一个公开的 http(s) 短视频链接；不支持本地或私网地址。");
       }
+      options.onResolved?.(target);
       try {
         const response = await fetchImpl(QY_VIDEO_PARSE_ENDPOINT, {
           method: "POST",
@@ -290,6 +294,7 @@ export function createVideoLinkParseTool(options: {
           return safeFailure("视频链接已解析，但服务没有返回可用的视频或图集地址。");
         }
 
+        options.onResolved?.({ ...target, videoUrl });
         return jsonResult({
           success: true,
           source_url: target.sourceUrl,
@@ -323,10 +328,29 @@ export function createVideoLinkParseTool(options: {
 
 export function createVideoLinkParseToolFactory(api: OpenClawPluginApi) {
   const config = resolveVideoParserConfig();
+  const handoff = createVideoLinkHandoff();
   if (!config) {
     api.logger.info(
       "[VIDEO_LINK_PARSE] QY_VIDEO_APP_ID/QY_VIDEO_APP_KEY not configured; tool disabled",
     );
   }
-  return () => (config ? createVideoLinkParseTool({ config, logger: api.logger }) : null);
+  if (config) {
+    api.on("before_tool_call", (event, context) => {
+      if (event.toolName !== "video_understand") {
+        return;
+      }
+      const videoUrl = handoff.resolve(context, event.params.url);
+      if (videoUrl) {
+        return { params: { ...event.params, url: videoUrl } };
+      }
+    });
+  }
+  return (context: OpenClawPluginToolContext = {}) =>
+    config
+      ? createVideoLinkParseTool({
+          config,
+          logger: api.logger,
+          onResolved: (target) => handoff.record(context, target),
+        })
+      : null;
 }

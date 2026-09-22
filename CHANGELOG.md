@@ -71,6 +71,7 @@ Docs: https://docs.openclaw.ai
 - Feed search/RabbitMQ: discover authorized monitoring projects separately from article keywords, automatically select the sole authorized project for unnamed requests, and require explicit project IDs on data queries without falling back after a named-project mismatch.
 - Agents/video understanding: apply duration-tiered whole-video model timeouts and transient retry limits, analyze videos over ten minutes as overlapping two-minute model segments with concurrency two, enforce a thirty-minute total budget, and reserve audio plus adaptive keyframes for the final fallback.
 - Video understanding: download extensionless video CDN links based on the guarded response content type, preserving signed URLs and reporting download failures instead of incorrectly requiring yt-dlp.
+- RabbitMQ/Suheng video analysis: reuse recently parsed video URLs within the same session when video understanding receives the original share link, with session isolation, expiry, and failed-parse invalidation.
 
 ## 2026.4.15
 
