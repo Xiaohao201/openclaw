@@ -16,7 +16,7 @@ describe("describeQwenVideo", () => {
   it("opts image and video understanding into key-based auto-discovery", () => {
     const provider = buildQwenMediaUnderstandingProvider();
 
-    expect(provider.autoPriority).toEqual({ image: 35, video: 15 });
+    expect(provider.autoPriority).toEqual({ image: 35, video: 15, audio: 5 });
   });
 
   it("builds the expected OpenAI-compatible video payload", async () => {
@@ -81,7 +81,11 @@ describe("describeQwenVideo", () => {
       timeoutMs: 1500,
       fetchFn,
     });
-    const body = JSON.parse(String(getRequest().init?.body));
+    const requestBody = getRequest().init?.body;
+    if (typeof requestBody !== "string") {
+      throw new Error("Expected JSON request body");
+    }
+    const body = JSON.parse(requestBody);
     expect(result.model).toBe("qwen3.8-flash");
     expect(body.model).toBe("qwen3.8-flash");
     expect(body.messages[0].content[1].video_url).toEqual({

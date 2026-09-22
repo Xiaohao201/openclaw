@@ -1,20 +1,23 @@
 /**
- * OpenAI-compatible STT used at the plugin layer.
- *
- * This avoids pushing raw WAV PCM into the framework media-understanding pipeline.
+ * Route framework audio configuration through the host media runtime. Explicit
+ * legacy channel STT configuration keeps its OpenAI-compatible transport.
  */
 
 import * as fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { getQQBotRuntime, type OpenClawConfig } from "../runtime-api.js";
 import { asRecord, readString } from "./config-record-shared.js";
 import { sanitizeFileName } from "./utils/platform.js";
 
-export interface STTConfig {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-}
+export type STTConfig =
+  | { mode: "media" }
+  | {
+      mode: "openai-compatible";
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+    };
 
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
   const channels = asRecord(cfg.channels);
@@ -31,28 +34,15 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
     const apiKey = readString(channelStt, "apiKey") ?? readString(providerCfg, "apiKey");
     const model = readString(channelStt, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
-      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
+      return { mode: "openai-compatible", baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
     }
   }
 
-  // Fall back to framework-level audio model config.
+  // Provider-specific payloads and SecretRefs belong to the host media runtime.
   const tools = asRecord(cfg.tools);
   const media = asRecord(tools?.media);
   const audio = asRecord(media?.audio);
-  const audioModels = audio?.models;
-  const audioModelEntry = Array.isArray(audioModels) ? asRecord(audioModels[0]) : undefined;
-  if (audioModelEntry) {
-    const providerId = readString(audioModelEntry, "provider") ?? "openai";
-    const providerCfg = asRecord(providers?.[providerId]);
-    const baseUrl = readString(audioModelEntry, "baseUrl") ?? readString(providerCfg, "baseUrl");
-    const apiKey = readString(audioModelEntry, "apiKey") ?? readString(providerCfg, "apiKey");
-    const model = readString(audioModelEntry, "model") ?? "whisper-1";
-    if (baseUrl && apiKey) {
-      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
-    }
-  }
-
-  return null;
+  return audio?.enabled === false ? null : { mode: "media" };
 }
 
 export async function transcribeAudio(
@@ -62,6 +52,13 @@ export async function transcribeAudio(
   const sttCfg = resolveSTTConfig(cfg);
   if (!sttCfg) {
     return null;
+  }
+  if (sttCfg.mode === "media") {
+    const result = await getQQBotRuntime().mediaUnderstanding.transcribeAudioFile({
+      filePath: audioPath,
+      cfg: cfg as OpenClawConfig,
+    });
+    return normalizeOptionalString(result.text) ?? null;
   }
 
   const fileBuffer = fs.readFileSync(audioPath);

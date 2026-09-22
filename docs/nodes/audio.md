@@ -23,21 +23,68 @@ title: "Audio and Voice Notes"
 If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
 OpenClaw auto-detects in this order and stops at the first working option:
 
-1. **Active reply model** when its provider supports audio understanding.
-2. **Local CLIs** (if installed)
+1. **Active reply provider** when it supports audio understanding, using its dedicated audio model when declared.
+2. **Provider auth**
+   - Configured `models.providers.*` entries that support audio are tried first.
+   - Registered provider priority: Qwen → OpenAI → Groq → Deepgram → Google → Mistral.
+3. **Local CLI** (if no authenticated provider is available)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
-   - `whisper-cli` (from `whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
-   - `whisper` (Python CLI; downloads models automatically)
-3. **Gemini CLI** (`gemini`) using `read_many_files`
-4. **Provider auth**
-   - Configured `models.providers.*` entries that support audio are tried first
-   - Bundled fallback order: OpenAI → Groq → Deepgram → Google → Mistral
+
+Installed `whisper` and `whisper-cli` binaries are no longer auto-launched. Existing
+explicit CLI entries still work, but are not added as a fallback when a cloud ASR
+request fails. Gemini CLI is not automatically selected for audio.
 
 To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
 Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (we expand `~`), or set an explicit CLI model with a full command path.
 
 ## Config examples
+
+### Qwen ASR for audio attachments and video audio tracks
+
+Set `DASHSCOPE_API_KEY` (or `QWEN_API_KEY`) in the gateway environment or its
+`.env` file. Use a Standard API key for the same region and workspace as the endpoint.
+OpenClaw does not read a standalone test script's `.env` file.
+
+Merge this section into your existing config:
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        timeoutSeconds: 300,
+        models: [
+          {
+            provider: "qwen",
+            model: "qwen-audio-3.0-asr-flash",
+            baseUrl: "https://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com",
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Replace the workspace placeholder with the workspace that owns the API key.
+The provider sends the entire audio as a Base64 data URI to the native DashScope
+ASR endpoint. It also accepts a full native endpoint URL and normalizes existing
+Qwen chat endpoint URLs. Without an endpoint override it uses the China Standard
+endpoint. The configured Qwen chat endpoint, if present, remains an inherited
+default; an audio-specific `baseUrl` avoids changing chat or video routing.
+
+This synchronous model accepts audio up to five minutes. Inline Base64 is limited
+to 10 MB (including encoding overhead); oversized payloads fail before upload.
+Audio is never silently truncated or split. Longer recordings require a suitable
+file-transcription service or separately prepared complete segments. A timeout,
+upstream error, or missing full transcript is a failed transcription, not silence.
+
+`video_understand` still attempts whole-video understanding first. Its audio
+fallback uses this same configuration and does not start a local Whisper process.
+
+See the [Qwen ASR API reference](https://help.aliyun.com/zh/model-studio/fun-asr-flash-recorded-speech-recognition-http-api).
 
 ### Provider + CLI fallback (OpenAI + Whisper CLI)
 

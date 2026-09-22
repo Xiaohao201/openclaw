@@ -651,6 +651,63 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nstdout transcript");
   });
 
+  it("uses a registered ASR default instead of the reply model or installed Whisper", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "whisper");
+    const ctx = await createAudioCtx({ content: createSafeAudioFixtureBuffer(2048) });
+    const transcribeAudio = vi.fn(async () => ({ text: "cloud transcript" }));
+    await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg: { tools: { media: { audio: {} } } },
+        activeModel: { provider: "test-asr", model: "chat-only-model" },
+        providers: {
+          "test-asr": {
+            id: "test-asr",
+            capabilities: ["audio"],
+            defaultModels: { audio: "speech-model" },
+            autoPriority: { audio: 5 },
+            transcribeAudio,
+          },
+        },
+      });
+      expect(result.appliedAudio).toBe(true);
+    });
+    expect(transcribeAudio).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "speech-model" }),
+    );
+    expect(ctx.Transcript).toBe("cloud transcript");
+    expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
+  it("discovers a registered cloud ASR before installed local CLIs without an active model", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "whisper");
+    const ctx = await createAudioCtx({ content: createSafeAudioFixtureBuffer(2048) });
+    const transcribeAudio = vi.fn(async () => ({ text: "auto cloud transcript" }));
+    await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
+      await applyMediaUnderstanding({
+        ctx,
+        cfg: { tools: { media: { audio: {} } } },
+        providers: {
+          "test-asr": {
+            id: "test-asr",
+            capabilities: ["audio"],
+            defaultModels: { audio: "speech-model" },
+            autoPriority: { audio: 5 },
+            transcribeAudio,
+          },
+        },
+      });
+    });
+    expect(transcribeAudio).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "speech-model" }),
+    );
+    expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
   it("auto-detects sherpa for audio when binary and model files are available", async () => {
     clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
@@ -682,15 +739,17 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("auto-detects whisper-cli when sherpa is unavailable", async () => {
+  it("does not auto-launch installed Whisper binaries", async () => {
     clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "whisper-cli");
+    await createMockExecutable(binDir, "whisper");
     const modelPath = path.join(modelDir, "tiny.bin");
     await fs.writeFile(modelPath, "model");
 
     const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+    mockedResolveApiKey.mockResolvedValue({ source: "none", mode: "api-key" });
 
     await withMediaAutoDetectEnv(
       {
@@ -699,19 +758,15 @@ describe("applyMediaUnderstanding", () => {
       },
       async () => {
         const result = await applyMediaUnderstanding({ ctx, cfg });
-        expect(result.appliedAudio).toBe(true);
+        expect(result.appliedAudio).toBe(false);
       },
     );
 
-    expect(ctx.Transcript).toBe("whisper cpp ok");
-    expect(mockedRunExec).toHaveBeenCalledWith(
-      "whisper-cli",
-      expect.any(Array),
-      expect.any(Object),
-    );
+    expect(ctx.Transcript).toBeUndefined();
+    expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
-  it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
+  it("preserves explicitly configured whisper-cli for existing users", async () => {
     clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
@@ -724,7 +779,17 @@ describe("applyMediaUnderstanding", () => {
       mediaType: "audio/ogg",
       content: createSafeAudioFixtureBuffer(2048),
     });
-    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            models: [
+              { type: "cli", command: "whisper-cli", args: ["-m", modelPath, "{{MediaPath}}"] },
+            ],
+          },
+        },
+      },
+    };
 
     mockedRunFfmpeg.mockImplementationOnce(async (args: string[]) => {
       const wavPath = args.at(-1);

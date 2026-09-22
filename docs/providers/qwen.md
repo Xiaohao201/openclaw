@@ -243,7 +243,8 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     - **Tool calling, structured output, thinking:** inherited from the OpenAI-compatible transport
     - **Image generation:** planned at the provider-plugin layer
     - **Image/video understanding:** bundled now on the Standard endpoint
-    - **Speech/audio:** planned at the provider-plugin layer
+    - **Speech/audio:** bundled now with `qwen-audio-3.0-asr-flash`; configure the
+      workspace endpoint under `tools.media.audio` as shown in [Audio and Voice Notes](/nodes/audio).
     - **Memory embeddings/reranking:** planned through the embedding adapter surface
     - **Video generation:** bundled now through the shared video-generation capability
 

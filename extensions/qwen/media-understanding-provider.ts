@@ -19,6 +19,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { QWEN_ASR_MODEL, transcribeQwenAudio } from "./audio-transcription.js";
 import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
 const DEFAULT_QWEN_VIDEO_MODEL = "qwen3.8-flash";
@@ -245,19 +246,22 @@ async function describeQwenVideoInput(
 export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvider {
   return {
     id: "qwen",
-    capabilities: ["image", "video"],
+    capabilities: ["image", "video", "audio"],
     defaultModels: {
       image: "qwen-vl-max-latest",
       video: DEFAULT_QWEN_VIDEO_MODEL,
+      audio: QWEN_ASR_MODEL,
     },
     autoPriority: {
       image: 35,
       video: 15,
+      audio: 5,
     },
     describeImage: describeQwenImage,
     describeImages: describeQwenImages,
     describeVideo: describeQwenVideo,
     describeVideoUrl: describeQwenVideoUrl,
+    transcribeAudio: transcribeQwenAudio,
   };
 }
 

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
 
 describe("SUHENG_RUNTIME_SYSTEM_PROMPT", () => {
+  it("keeps audio transcription in configured media services instead of shell retries", () => {
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("不得在工具失败后通过 exec 自行启动 whisper");
+    expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("口播尚未可靠识别");
+  });
   it("uses current evidence for single-link complaint documents instead of chaining incompatible tasks", () => {
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("单篇链接的侵权研判与投诉文书");
     expect(SUHENG_RUNTIME_SYSTEM_PROMPT).toContain("舆情报告不是内容检测任务");

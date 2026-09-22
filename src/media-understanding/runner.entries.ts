@@ -603,6 +603,7 @@ export async function runProviderEntry(params: {
         cfg,
         providerId,
         capability: "audio",
+        providerRegistry: params.providerRegistry,
       }) ||
       entry.model;
     const result = await executeWithApiKeyRotation({
