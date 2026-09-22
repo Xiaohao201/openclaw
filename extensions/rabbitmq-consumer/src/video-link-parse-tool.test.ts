@@ -335,7 +335,7 @@ describe("video_link_parse tool", () => {
 describe("createVideoLinkParseToolFactory", () => {
   it("only exposes the tool when both environment credentials exist", () => {
     const logger = { info: vi.fn(), warn: vi.fn() };
-    const api = { logger } as unknown as OpenClawPluginApi;
+    const api = { logger, on: vi.fn() } as unknown as OpenClawPluginApi;
     try {
       vi.stubEnv("QY_VIDEO_APP_ID", "");
       vi.stubEnv("QY_VIDEO_APP_KEY", "");
