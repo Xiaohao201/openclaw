@@ -1,3 +1,7 @@
+"extensions: wechat-group-push":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wechat-group-push/**"
 "channel: bluebubbles":
   - changed-files:
       - any-glob-to-any-file:

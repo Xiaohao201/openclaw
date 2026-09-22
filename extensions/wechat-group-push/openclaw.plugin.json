@@ -1,0 +1,17 @@
+{
+  "id": "wechat-group-push",
+  "name": "WeChat Group Push",
+  "description": "Push messages to the configured default WeChat business group.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["endpoint", "chatId", "groupName"],
+    "properties": {
+      "endpoint": { "type": "string", "format": "uri" },
+      "chatId": { "type": "string", "minLength": 1 },
+      "groupName": { "type": "string", "minLength": 1 },
+      "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000, "default": 15000 }
+    }
+  }
+}
