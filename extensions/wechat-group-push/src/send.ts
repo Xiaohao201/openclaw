@@ -1,21 +1,39 @@
 import { z } from "zod";
 
-export const configSchema = z
-  .object({
-    endpoint: z.url().refine((value) => {
-      const url = new URL(value);
-      return (
-        ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.hash
-      );
-    }, "Use an HTTP(S) endpoint without credentials or fragments"),
-    chatId: z.string().trim().min(1),
-    groupName: z.string().trim().min(1),
-    timeoutMs: z.number().int().min(100).max(60_000).default(15_000),
-  })
-  .strict();
+const commonConfig = {
+  endpoint: z.url().refine((value) => {
+    const url = new URL(value);
+    return (
+      ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.hash
+    );
+  }, "Use an HTTP(S) endpoint without credentials or fragments"),
+  timeoutMs: z.number().int().min(100).max(60_000).default(15_000),
+};
+
+export const configSchema = z.union([
+  z
+    .object({
+      ...commonConfig,
+      groups: z
+        .record(z.string().min(1), z.string().trim().min(1))
+        .refine((groups) => Object.keys(groups).length > 0, "Configure at least one group"),
+    })
+    .strict(),
+  // Accept legacy configuration without treating its single group as a default.
+  z
+    .object({
+      ...commonConfig,
+      chatId: z.string().trim().min(1),
+      groupName: z.string().trim().min(1),
+    })
+    .strict()
+    .transform(({ chatId, groupName, ...rest }) => ({ ...rest, groups: { [groupName]: chatId } })),
+]);
 
 const messageSchema = z
   .object({
+    groupName: z.string().min(1),
+    confirmed: z.literal(true),
     content: z
       .string()
       .refine((value) => value.trim().length > 0, "Message must not be blank")
@@ -40,18 +58,24 @@ export async function sendToWechatGroup(
   signal?: AbortSignal,
 ): Promise<SendResult> {
   const config = configSchema.parse(rawConfig);
-  const { content } = messageSchema.parse(args);
+  const { content, groupName } = messageSchema.parse(args);
+  if (!Object.hasOwn(config.groups, groupName)) {
+    throw new Error(
+      "Choose an exact configured group name and confirm it with the user before sending",
+    );
+  }
+  const chatId = config.groups[groupName];
   signal?.throwIfAborted();
   const timeout = AbortSignal.timeout(config.timeoutMs);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const unknown: SendResult = { status: "unknown", groupName: config.groupName };
+  const unknown: SendResult = { status: "unknown", groupName };
   try {
-    // The target is operator-configured, never supplied by model/tool arguments.
+    // Resolve the exact confirmed name only within the operator-configured destinations.
     // Do not follow redirects or retry: either could deliver the message twice or elsewhere.
     const response = await fetcher(config.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatid: config.chatId, content }),
+      body: JSON.stringify({ chatid: chatId, content }),
       redirect: "error",
       signal: requestSignal,
     });
@@ -64,8 +88,8 @@ export async function sendToWechatGroup(
       return unknown;
     }
     return parsed.data.errcode === 0
-      ? { status: "sent", groupName: config.groupName }
-      : { status: "rejected", groupName: config.groupName, providerCode: parsed.data.errcode };
+      ? { status: "sent", groupName }
+      : { status: "rejected", groupName, providerCode: parsed.data.errcode };
   } catch {
     // A lost response does not establish whether the upstream service delivered it.
     return unknown;

@@ -1,17 +1,63 @@
 {
   "id": "wechat-group-push",
   "name": "WeChat Group Push",
-  "description": "Push messages to the configured default WeChat business group.",
+  "description": "Push messages to explicitly selected and confirmed WeChat business groups.",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["endpoint", "chatId", "groupName"],
+    "required": ["endpoint"],
     "properties": {
-      "endpoint": { "type": "string", "format": "uri" },
-      "chatId": { "type": "string", "minLength": 1 },
-      "groupName": { "type": "string", "minLength": 1 },
-      "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000, "default": 15000 }
-    }
+      "endpoint": {
+        "type": "string",
+        "format": "uri"
+      },
+      "chatId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "groupName": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 60000,
+        "default": 15000
+      },
+      "groups": {
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": {
+          "minLength": 1
+        },
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "oneOf": [
+      {
+        "required": ["groups"],
+        "not": {
+          "anyOf": [
+            {
+              "required": ["chatId"]
+            },
+            {
+              "required": ["groupName"]
+            }
+          ]
+        }
+      },
+      {
+        "required": ["chatId", "groupName"],
+        "not": {
+          "required": ["groups"]
+        }
+      }
+    ]
   }
 }
