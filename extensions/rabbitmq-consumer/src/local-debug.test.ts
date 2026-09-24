@@ -34,6 +34,48 @@ afterEach(async () => {
 });
 
 describe("rabbitmq local debug runner", () => {
+  it("applies one business route per synthetic turn without changing the frontend event envelope", async () => {
+    const run = vi.fn().mockResolvedValue({ runId: "route-run" });
+    const decide = vi.fn().mockResolvedValue({ version: 1, route: "read", confidence: 0.95 });
+    const getSessionMessages = vi
+      .fn()
+      .mockResolvedValue({ messages: [{ role: "user", content: "fixture.txt" }] });
+    const fakeRuntime = {
+      subagent: { run, getSessionMessages },
+      events: { onAgentEvent: vi.fn(() => () => {}) },
+    } as unknown as PluginRuntime;
+    const runner = createLocalDebugRunner({
+      runtime: fakeRuntime,
+      config: {},
+      logger,
+      decideTurn: decide,
+      runPipeline: async ({ runtime: observed, chatMsg, eventPusher }) => {
+        const args = {
+          sessionKey: `agent:rabbitmq-${chatMsg.userId}:rabbitmq:${chatMsg.userId}:${chatMsg.sessionId}`,
+          message: chatMsg.message,
+          systemPromptMode: "full" as const,
+        };
+        await observed.subagent.run(args);
+        await observed.subagent.run(args);
+        await eventPusher.pushText("synthetic", "done", chatMsg.historyId);
+        await eventPusher.pushDone("synthetic", chatMsg.historyId);
+        return "done";
+      },
+    });
+    const result = await runner({
+      id: 101,
+      message: "[JEV_SYNTHETIC_BENCH] read that file",
+      session_id: "route-session",
+      user_id: "synthetic",
+      use_memory: false,
+    });
+    expect(decide).toHaveBeenCalledOnce();
+    expect(getSessionMessages).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0][0]).toMatchObject({ toolsAllow: ["read"], systemPromptMode: "full" });
+    expect(result.events.map((event) => event.type)).toEqual(["text", "done"]);
+    expect(Object.keys(result).toSorted()).toEqual(["events", "response", "trace"]);
+  });
   it("builds expandable sanitized details and merges start/end events", () => {
     const trace = buildLocalDebugTrace([
       {

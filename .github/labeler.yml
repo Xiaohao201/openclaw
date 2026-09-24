@@ -383,3 +383,7 @@
       - any-glob-to-any-file:
           - "extensions/phone-reader/**"
           - "docs/plugins/phone-reader.md"
+"extensions: jev-router":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/jev-router/**"

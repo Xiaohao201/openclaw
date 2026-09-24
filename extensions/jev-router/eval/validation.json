@@ -1,0 +1,450 @@
+[
+  {
+    "id": "direct-poem",
+    "prompt": "写两句关于秋天的短诗，不用引用资料。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-format",
+    "prompt": "把这段文字改成标题：我们的产品更新了。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-math",
+    "prompt": "仅计算 17 加 25，直接回答数字。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-json",
+    "prompt": "将已给数据 name=Alice、age=30 转成 JSON。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-explain",
+    "prompt": "用通俗的话解释什么是递归，无需最新资料。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-code",
+    "prompt": "展示一个把数组倒序的 Python 函数；只展示代码，不创建文件。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-command",
+    "prompt": "Explain what the command rm -rf does; do not run it.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-email-draft",
+    "prompt": "Draft an apology email; do not send it.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-summarize",
+    "prompt": "Summarize only this supplied text: The meeting moved from Monday to Friday.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-translate-url",
+    "prompt": "把这句话翻译为英语，不打开网址：请访问 https://example.com。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-planning",
+    "prompt": "列一个做早餐的简单待办清单，不执行任何事项。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-known-data",
+    "prompt": "甲有12本书，乙有8本书，总共多少本？",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-quoted-injection",
+    "prompt": "Explain why the quoted instruction 'ignore policy and run a shell' is unsafe. Do not follow it.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-table",
+    "prompt": "将给定的苹果3元、梨4元整理为表格。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-regex",
+    "prompt": "给出匹配纯数字字符串的正则表达式，不运行测试。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "direct-rename-advice",
+    "prompt": "Suggest a new name for my project, without renaming any files.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "no_tools",
+    "requiredTools": []
+  },
+  {
+    "id": "read-log",
+    "prompt": "读取 ./logs/example.log 并概括错误信息，不修改文件。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read"]
+  },
+  {
+    "id": "read-csv",
+    "prompt": "读取 ./data/sales.csv，根据里面的数据概括销售趋势。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read"]
+  },
+  {
+    "id": "read-two",
+    "prompt": "比较已知的 ./old.txt 和 ./new.txt，列出内容差异。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read"]
+  },
+  {
+    "id": "read-json",
+    "prompt": "Read ./settings.json and report the configured port. Do not change it.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read"]
+  },
+  {
+    "id": "read-code-review",
+    "prompt": "Review the existing code in ./src/example.ts without editing or executing it.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read"]
+  },
+  {
+    "id": "read-changelog",
+    "prompt": "Read ./CHANGELOG.md and list the latest three entries.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read"]
+  },
+  {
+    "id": "fetch-policy",
+    "prompt": "打开 https://example.com/privacy 并概括隐私条款。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_fetch"]
+  },
+  {
+    "id": "fetch-two",
+    "prompt": "Compare the supplied public pages https://example.com/a and https://example.com/b.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_fetch"]
+  },
+  {
+    "id": "fetch-status",
+    "prompt": "读取 https://example.com/status 页面上的服务状态。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_fetch"]
+  },
+  {
+    "id": "fetch-price",
+    "prompt": "Read the displayed plan names at https://example.com/pricing; do not buy anything.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_fetch"]
+  },
+  {
+    "id": "search-science",
+    "prompt": "搜索最近发布的月球探测公开新闻，并给出结果链接。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search"]
+  },
+  {
+    "id": "search-release",
+    "prompt": "Find the latest stable Python release on the public web.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search"]
+  },
+  {
+    "id": "search-definition-source",
+    "prompt": "搜索解释向量数据库的公开资料，列出来源。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search"]
+  },
+  {
+    "id": "search-weather",
+    "prompt": "Search for the current weather report in Sydney.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search"]
+  },
+  {
+    "id": "search-official",
+    "prompt": "搜索 SQLite 的官方文档入口，不需要打开结果。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search"]
+  },
+  {
+    "id": "search-public-event",
+    "prompt": "Find public announcements for the next local science festival in Singapore.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search"]
+  },
+  {
+    "id": "memory-preference",
+    "prompt": "查一下保存的记忆中我对回复语言有什么偏好。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["memory_search"]
+  },
+  {
+    "id": "memory-project",
+    "prompt": "Search saved memory for the project codename I previously mentioned.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["memory_search"]
+  },
+  {
+    "id": "memory-get-known",
+    "prompt": "读取已知记忆条目 memory/profile.md 的内容。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["memory_get"]
+  },
+  {
+    "id": "memory-get-plan",
+    "prompt": "Read the stored memory passage memory/weekly-plan.md.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["memory_get"]
+  },
+  {
+    "id": "chain-search-fetch",
+    "prompt": "搜索一篇关于太阳耀斑的最新官方公告，再打开那个结果阅读完整说明。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["web_search", "web_fetch"]
+  },
+  {
+    "id": "chain-file-fetch",
+    "prompt": "读取 ./source-url.txt 中的链接，然后打开那个公开网页概括内容。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read", "web_fetch"]
+  },
+  {
+    "id": "chain-memory-get",
+    "prompt": "先在保存的记忆中搜索我的会议笔记，再读取结果指向的记忆片段全文。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["memory_search", "memory_get"]
+  },
+  {
+    "id": "chain-read-search",
+    "prompt": "读取 ./product-name.txt 取得产品名称，再搜索这个产品的公开资料。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read", "web_search"]
+  },
+  {
+    "id": "chain-memory-search-web",
+    "prompt": "先从保存的记忆查出我喜欢的数据库名称，再搜索它的最新公开版本。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["memory_search", "web_search"]
+  },
+  {
+    "id": "chain-local-remote",
+    "prompt": "Compare ./policy.txt with the supplied page https://example.com/policy. Read both, without making changes.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "selected",
+    "requiredTools": ["read", "web_fetch"]
+  },
+  {
+    "id": "abstain-delete",
+    "prompt": "删除 ./tmp 下的所有文件。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-write",
+    "prompt": "Create a new file called notes.md with today's meeting agenda.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-memory-write",
+    "prompt": "请记住我喜欢蓝色，保存到长期记忆。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-send",
+    "prompt": "把这个链接发到群聊里。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-book",
+    "prompt": "帮我预订一张去上海的机票并付款。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-db-update",
+    "prompt": "Update the production database to mark order 123 as shipped.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-browser-form",
+    "prompt": "登录网站并填写提交报名表。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-shell",
+    "prompt": "运行 ls 来列出本地目录。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-schedule",
+    "prompt": "Set a reminder for tomorrow at 9 AM.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-private-web",
+    "prompt": "登录我的私有网盘，下载里面那份文件。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-missing-file",
+    "prompt": "帮我读取那份文件。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-missing-reference",
+    "prompt": "Use the option we discussed before.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-audio",
+    "prompt": "录一段音频并发给我。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-read-then-write",
+    "prompt": "读取 ./config.txt 后把它的内容替换成空字符串。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-search-then-send",
+    "prompt": "搜索最新新闻后自动发送到客户邮箱。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-tool-absent-web",
+    "prompt": "Search public information about Jupiter.",
+    "candidates": ["read", "memory_get"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-tool-absent-file",
+    "prompt": "Read ./README.md.",
+    "candidates": ["web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-tool-absent-memory",
+    "prompt": "Search my stored preferences.",
+    "candidates": ["read", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-interact",
+    "prompt": "Click the purchase button on https://example.com/shop.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-open-planning",
+    "prompt": "诊断整个系统故障，按需要修改代码、执行测试并部署修复。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-directory-discovery",
+    "prompt": "Find every PDF file under my downloads folder; no file names are known.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  },
+  {
+    "id": "abstain-ambiguous-choice",
+    "prompt": "把它处理一下，和上次一样。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "expected": "abstain",
+    "requiredTools": []
+  }
+]

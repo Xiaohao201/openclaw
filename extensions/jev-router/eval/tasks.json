@@ -1,0 +1,136 @@
+[
+  {
+    "id": "read-release",
+    "prompt": "读取 ./release.txt，回答其中的发布代号。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "read",
+        "args": {
+          "path": "./release.txt"
+        },
+        "result": "Release code: JADE-4827."
+      }
+    ],
+    "requiredTools": ["read"],
+    "answerContains": ["JADE-4827"]
+  },
+  {
+    "id": "fetch-passcode",
+    "prompt": "Read https://example.test/bulletin and tell me the published verification code.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "web_fetch",
+        "args": {
+          "url": "https://example.test/bulletin"
+        },
+        "result": "The public verification code is ORBIT-6193."
+      }
+    ],
+    "requiredTools": ["web_fetch"],
+    "answerContains": ["ORBIT-6193"]
+  },
+  {
+    "id": "search-bulletin",
+    "prompt": "搜索 Aurora 实验室最近公告里的样本编号，直接根据搜索结果回答。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "web_search",
+        "args": {
+          "query": "Aurora laboratory announcement"
+        },
+        "result": "Aurora laboratory announcement: sample number SILVER-2856."
+      }
+    ],
+    "requiredTools": ["web_search"],
+    "answerContains": ["SILVER-2856"]
+  },
+  {
+    "id": "memory-preference",
+    "prompt": "Search stored memory and report my previously saved favorite project code.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "memory_search",
+        "args": {
+          "query": "favorite project code"
+        },
+        "result": "Saved preference: favorite project code MAPLE-7632."
+      }
+    ],
+    "requiredTools": ["memory_search"],
+    "answerContains": ["MAPLE-7632"]
+  },
+  {
+    "id": "memory-passage",
+    "prompt": "读取已知记忆条目 memory/demo.md，回答记录的测试标记。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "memory_get",
+        "args": {
+          "path": "memory/demo.md"
+        },
+        "result": "Stored test marker: CORAL-9148."
+      }
+    ],
+    "requiredTools": ["memory_get"],
+    "answerContains": ["CORAL-9148"]
+  },
+  {
+    "id": "read-then-fetch",
+    "prompt": "Read ./source.txt, then retrieve the public URL it contains and report the access code stated on that page.",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "read",
+        "args": {
+          "path": "./source.txt"
+        },
+        "result": "Source URL: https://example.test/research"
+      },
+      {
+        "tool": "web_fetch",
+        "args": {
+          "url": "https://example.test/research"
+        },
+        "result": "Research access code: LUNAR-3579."
+      }
+    ],
+    "requiredTools": ["read", "web_fetch"],
+    "answerContains": ["LUNAR-3579"]
+  },
+  {
+    "id": "search-then-fetch",
+    "prompt": "搜索 Nimbus 实验室的公告页，然后打开结果里的页面，报告页面上的确认编号。",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [
+      {
+        "tool": "web_search",
+        "args": {
+          "query": "Nimbus laboratory bulletin"
+        },
+        "result": "Nimbus bulletin page: https://example.test/nimbus . Open the page for its confirmation code."
+      },
+      {
+        "tool": "web_fetch",
+        "args": {
+          "url": "https://example.test/nimbus"
+        },
+        "result": "Confirmation code: CEDAR-8264."
+      }
+    ],
+    "requiredTools": ["web_search", "web_fetch"],
+    "answerContains": ["CEDAR-8264"]
+  },
+  {
+    "id": "direct-answer",
+    "prompt": "Do not use any tools. Reply with exactly: READY FOR REVIEW",
+    "candidates": ["memory_get", "memory_search", "read", "web_fetch", "web_search"],
+    "fixtures": [],
+    "requiredTools": [],
+    "answerContains": ["READY FOR REVIEW"]
+  }
+]

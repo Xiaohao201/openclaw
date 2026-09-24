@@ -1,0 +1,27 @@
+{
+  "id": "jev-router",
+  "name": "JEV Router PoC",
+  "description": "Opt-in shadow evaluation and read-only tool advice. No tool execution or permission changes.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": false },
+      "mode": { "type": "string", "enum": ["shadow", "advisory"], "default": "shadow" },
+      "candidates": {
+        "type": "array",
+        "maxItems": 5,
+        "uniqueItems": true,
+        "default": [],
+        "items": {
+          "type": "string",
+          "enum": ["memory_get", "memory_search", "read", "web_fetch", "web_search"]
+        }
+      },
+      "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 10000, "default": 2000 },
+      "minConfidence": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
+      "retainProbability": { "type": "number", "minimum": 0.01, "maximum": 1, "default": 0.2 },
+      "maxConcurrent": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2 }
+    }
+  }
+}

@@ -9,6 +9,7 @@ import {
   type PluginRuntime,
 } from "../api.js";
 import { processChatMessage } from "./chat-pipeline.js";
+import { createLocalTurnDecider, createTurnRouteTransform } from "./debug-turn-routing.js";
 import type { HistoryManager } from "./history-manager.js";
 import type { MercureEventPusher } from "./mercure-pusher.js";
 import { parseMessage } from "./message-handler.js";
@@ -611,6 +612,9 @@ function createObservedRuntime(params: {
   runtime: PluginRuntime;
   sessionKey: string;
   toolCalls: LocalDebugToolCall[];
+  routeTurn?: (
+    args: Parameters<PluginRuntime["subagent"]["run"]>[0],
+  ) => Promise<Parameters<PluginRuntime["subagent"]["run"]>[0]>;
 }): PluginRuntime {
   let currentRunId: string | undefined;
   return {
@@ -618,7 +622,11 @@ function createObservedRuntime(params: {
     subagent: {
       ...params.runtime.subagent,
       run: async (args) => {
-        const result = await params.runtime.subagent.run(args);
+        const routed =
+          args.sessionKey === params.sessionKey && params.routeTurn
+            ? await params.routeTurn(args)
+            : args;
+        const result = await params.runtime.subagent.run(routed);
         if (args.sessionKey === params.sessionKey) {
           currentRunId = result.runId;
         }
@@ -710,6 +718,7 @@ export function createLocalDebugRunner(params: {
   historyManager?: LocalPersistentHistoryManager;
   prepareHistory?: () => Promise<void>;
   collectUsage?: LocalDebugUsageCollector;
+  decideTurn?: NonNullable<ReturnType<typeof createLocalTurnDecider>>;
 }): (payload: unknown) => Promise<LocalDebugRunResult> {
   const runPipeline = params.runPipeline ?? defaultRunPipeline;
   return async (payload) => {
@@ -738,10 +747,21 @@ export function createLocalDebugRunner(params: {
     const sinceMs = Date.now();
     const toolCalls: LocalDebugToolCall[] = [];
     let resolvedSkills: ResolvedSkill[] = [];
+    const decide =
+      params.decideTurn ?? createLocalTurnDecider(process.env.OPENCLAW_DEBUG_TURN_ROUTER_URL);
     const observedRuntime = createObservedRuntime({
       runtime: params.runtime,
       sessionKey,
       toolCalls,
+      ...(decide
+        ? {
+            routeTurn: createTurnRouteTransform({
+              message: chatMsg,
+              history: (args) => params.runtime.subagent.getSessionMessages(args),
+              decide,
+            }),
+          }
+        : {}),
     });
     const { events, pusher } = createEventRecorder();
     const response = await runPipeline({
