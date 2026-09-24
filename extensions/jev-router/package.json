@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/jev-router",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "Opt-in JEV read-only candidate routing and quality evaluation PoC",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.16"
+    },
+    "build": {
+      "openclawVersion": "2026.4.16"
+    }
+  }
+}

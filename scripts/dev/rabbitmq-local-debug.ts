@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, openSync, writeSync, closeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
+import { z } from "zod";
 import { resolveConfigIncludes } from "../../src/config/includes.js";
 import {
   buildInheritedLocalDebugConfig,
@@ -78,9 +79,56 @@ async function main(): Promise<void> {
     readConfig(developmentConfigPath),
   ]);
   const merged = buildInheritedLocalDebugConfig({ production, development });
+  let experiment: { close: () => Promise<void> } | undefined;
+  let metricsFd: number | undefined;
+  let turnRouterUrl: string | undefined;
+  const experimentMode = process.env.OPENCLAW_JEV_DEBUG_MODE;
+  if (experimentMode) {
+    if (
+      experimentMode !== "baseline" &&
+      experimentMode !== "filter" &&
+      experimentMode !== "route"
+    ) {
+      throw new Error("OPENCLAW_JEV_DEBUG_MODE must be baseline, filter, or route");
+    }
+    const provider = z
+      .object({ api: z.literal("openai-completions"), baseUrl: z.string() })
+      .parse(
+        (merged.models as { providers?: Record<string, unknown> } | undefined)?.providers?.qwen,
+      );
+    const { startDebugProxy } = await import("../../extensions/jev-router/api.js");
+    if (process.env.OPENCLAW_JEV_DEBUG_METRICS) {
+      metricsFd = openSync(process.env.OPENCLAW_JEV_DEBUG_METRICS, "wx", 0o600);
+    }
+    const proxy = await startDebugProxy({
+      upstream: provider.baseUrl,
+      mode: experimentMode,
+      log: (record) => {
+        const line = JSON.stringify(record) + "\n";
+        process.stdout.write(`[JEV_DEBUG] ${line}`);
+        if (metricsFd !== undefined) {
+          writeSync(metricsFd, line);
+        }
+      },
+    });
+    experiment = proxy;
+    turnRouterUrl = proxy.turnRouterUrl;
+    const providers = (merged.models as { providers: Record<string, Record<string, unknown>> })
+      .providers;
+    providers.qwen = { ...providers.qwen, baseUrl: proxy.baseUrl };
+    process.stdout.write(
+      `JEV synthetic debug experiment: ${experimentMode}; maximum 16 model requests; qwen provider only.\n`,
+    );
+  }
   const temporary = await writeTemporaryInheritedConfig({
     config: merged,
     tempRoot: os.tmpdir(),
+  }).catch(async (error: unknown) => {
+    await experiment?.close();
+    if (metricsFd !== undefined) {
+      closeSync(metricsFd);
+    }
+    throw error;
   });
   const launch = buildRabbitMqDebugLaunchSpec({
     entryPath,
@@ -88,6 +136,16 @@ async function main(): Promise<void> {
     stateDir: developmentStateDir,
     env: process.env,
   });
+  if (experimentMode) {
+    // Keep the HTTP debug runner, but do not start queue consumers or scheduled jobs.
+    launch.env.OPENCLAW_SKIP_PLUGIN_SERVICES = "1";
+    delete launch.env.JEV_OPENROUTER_API_KEY;
+  }
+  // Do not inherit an old endpoint into ordinary debug or other experiment modes.
+  delete launch.env.OPENCLAW_DEBUG_TURN_ROUTER_URL;
+  if (turnRouterUrl) {
+    launch.env.OPENCLAW_DEBUG_TURN_ROUTER_URL = turnRouterUrl;
+  }
 
   const cleanupSync = () => {
     rmSync(temporary.directory, { force: true, recursive: true });
@@ -114,6 +172,10 @@ async function main(): Promise<void> {
   } finally {
     process.removeListener("exit", cleanupSync);
     await temporary.cleanup();
+    await experiment?.close();
+    if (metricsFd !== undefined) {
+      closeSync(metricsFd);
+    }
   }
 }
 
