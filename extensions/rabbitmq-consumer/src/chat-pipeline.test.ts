@@ -145,6 +145,71 @@ describe("processChatMessage", () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
 
+  it.each([false, true])(
+    "uses upload evidence for live and persisted links (cancelled=%s)",
+    async (cancelled) => {
+      const controller = new AbortController();
+      const url = "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/10/10/test.html";
+      const wrong = url.replace("2026/10/10", "2026-10-10");
+      const answer = `[下载报告](${wrong})`;
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onWait: (listener) => {
+          listener?.({
+            runId: "r1",
+            stream: "tool",
+            seq: 1,
+            ts: Date.now(),
+            data: {
+              phase: "result",
+              name: "file_share",
+              toolCallId: "upload-1",
+              result: { details: { ok: true, url, filename: "报告.html" } },
+            },
+          });
+          listener?.({
+            runId: "r1",
+            stream: "assistant",
+            seq: 2,
+            ts: Date.now(),
+            data: { delta: answer },
+          });
+          if (cancelled) {
+            controller.abort();
+          }
+        },
+        sessionMessages: [{ role: "assistant", content: answer }],
+      });
+      const { historyManager, updateResponse } = createHistoryManagerMock();
+      const response = await processChatMessage(
+        createChatMessage(),
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { abortSignal: controller.signal, abortRun: () => true },
+      );
+      expect(response).toContain(`[下载报告](${url})`);
+      expect(response).toContain(`[报告.html](${url})`);
+      expect(response).not.toContain(wrong);
+      expect(updateResponse).toHaveBeenCalledWith(1, response);
+      const requests = vi
+        .mocked(fetch)
+        .mock.calls.map(([, init]) => (typeof init?.body === "string" ? init.body : ""));
+      expect(decodeURIComponent(requests.join("\n"))).not.toContain(wrong);
+      expect(decodeURIComponent(requests.join("\n"))).toContain(url);
+    },
+  );
+
   it("keeps runtime-authorized tools available across artifact creation, follow-ups and retries", async () => {
     const calls: SubagentRunParams[] = [];
     const runtime = createRuntimeMock({
