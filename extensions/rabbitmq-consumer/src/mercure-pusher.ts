@@ -1,3 +1,4 @@
+import { artifactStreamPrefixLength, type ArtifactLinks } from "./artifact-links.js";
 import { CITATIONS_MARKER } from "./citations.js";
 import { mediaLinesToMarkdown, pendingMediaLineLen } from "./media-lines.js";
 import { normalizeChineseProseQuotes, stripInternalRefs } from "./sanitize-output.js";
@@ -203,7 +204,13 @@ export class StreamingMercurePusher {
    */
   private pending: Promise<void> = Promise.resolve();
 
-  constructor(pusher: MercureEventPusher, topic: string, historyId?: number, flushIntervalMs = 80) {
+  constructor(
+    pusher: MercureEventPusher,
+    topic: string,
+    historyId?: number,
+    flushIntervalMs = 80,
+    private readonly artifactLinks?: ArtifactLinks,
+  ) {
     this.pusher = pusher;
     this.topic = topic;
     this.historyId = historyId;
@@ -260,6 +267,11 @@ export class StreamingMercurePusher {
     const start = this.pushedLen;
     let rawChunk = this.fullText.slice(start, this.visibleLimit());
     if (!opts?.final) {
+      // URLs and Markdown destinations can straddle arbitrarily many deltas.
+      // Hold potential links until the line ends; ordinary prose still streams.
+      if (this.artifactLinks) {
+        rawChunk = rawChunk.slice(0, artifactStreamPrefixLength(rawChunk));
+      }
       // Hold back a tail that is a partial prefix of the citations marker, so a
       // marker straddling two flush windows (`…\n<<<CIT` then `ATIONS>>>…`) is
       // never streamed as visible text before we can recognize and truncate it.
@@ -304,7 +316,11 @@ export class StreamingMercurePusher {
     this.pushedLen += consumedLength;
     // Duplicate check runs against the whole reply so far, not just this chunk:
     // the tool's `![](url)` and the model's `MEDIA:url` land in different windows.
-    const safe = mediaLinesToMarkdown(stripInternalRefs(chunk), this.fullText);
+    const checked = this.artifactLinks?.sanitize(chunk) ?? chunk;
+    const safe = mediaLinesToMarkdown(
+      stripInternalRefs(checked),
+      this.artifactLinks?.sanitize(this.fullText) ?? this.fullText,
+    );
     this.pending = this.pending.then(async () => {
       if (safe) {
         await this.pusher.pushText(this.topic, safe, this.historyId);
@@ -330,6 +346,10 @@ export class StreamingMercurePusher {
   /** Signal that the stream is done: flush remaining buffer + push done event. */
   async finish(): Promise<void> {
     await this.flush({ final: true });
+    const deliveries = this.artifactLinks?.deliveryLinks();
+    if (deliveries) {
+      await this.pusher.pushText(this.topic, deliveries, this.historyId);
+    }
     await this.pusher.pushDone(this.topic, this.historyId);
   }
 

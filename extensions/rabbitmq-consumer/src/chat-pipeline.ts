@@ -5,6 +5,7 @@ import {
   type PluginLogger,
   type SessionTurnCurrencyPolicy,
 } from "../api.js";
+import { ArtifactLinks } from "./artifact-links.js";
 import { materializeAttachments } from "./attachment-materializer.js";
 import { inferBuiltinSkillName, validateBuiltinSkillSelection } from "./builtin-skill-routing.js";
 import {
@@ -494,6 +495,12 @@ export async function processChatMessage(
 ): Promise<string> {
   const turnTimeoutMs = resolveTurnTimeoutMs(options?.turnTimeoutMs);
   const mercure = options?.eventPusher ?? new MercurePusher(mercureConfig);
+  const pluginConfig = config?.plugins?.entries?.["rabbitmq-consumer"]?.config;
+  const oss = pluginConfig?.oss as { customDomain?: unknown; pathPrefix?: unknown } | undefined;
+  const artifactLinks = new ArtifactLinks(
+    typeof oss?.customDomain === "string" ? oss.customDomain : process.env.ALIYUN_OSS_CUSTOM_DOMAIN,
+    typeof oss?.pathPrefix === "string" ? oss.pathPrefix : process.env.ALIYUN_OSS_PATH_PREFIX,
+  );
 
   // Declare streamPusherCtx early so it's available in catch block
   const streamPusherCtx: { streamPusher: StreamingMercurePusher | null } = { streamPusher: null };
@@ -796,6 +803,8 @@ export async function processChatMessage(
       mercure,
       mercureTopic,
       chatMsg.historyId,
+      80,
+      artifactLinks,
     );
 
     // Sanitized tool-activity narration: while the agent runs tools (DB
@@ -959,13 +968,14 @@ export async function processChatMessage(
     let abortRunPromise: Promise<unknown> | null = null;
     const abortActiveRun = () => {
       if (!currentRunId || abortRunPromise || !options?.abortRun) {
-        return;
+        return abortRunPromise;
       }
       abortRunPromise = Promise.resolve(options.abortRun(sessionKey)).catch((error) => {
         logger.warn(
           `[CHAT_PIPELINE] Failed to abort subagent run ${currentRunId}: ${String(error)}`,
         );
       });
+      return abortRunPromise;
     };
     options?.abortSignal?.addEventListener("abort", abortActiveRun, { once: true });
     const unsubscribe = runtime.events.onAgentEvent((evt) => {
@@ -973,6 +983,7 @@ export async function processChatMessage(
         return;
       }
       if (evt.stream === "tool") {
+        artifactLinks.observeToolEvent(evt.data);
         narrator.handleAgentEvent(evt);
         return;
       }
@@ -1166,6 +1177,16 @@ export async function processChatMessage(
         config: attachmentConfig ?? undefined,
         sessions: runtime.agent.session,
       });
+      try {
+        const previous = await runtime.subagent.getSessionMessages({ sessionKey, limit: 200 });
+        if (Array.isArray(previous.messages)) {
+          artifactLinks.observeMessages(previous.messages);
+        }
+      } catch {
+        logger.warn(
+          "[CHAT_PIPELINE] Could not restore artifact link evidence; unknown download links will be withheld",
+        );
+      }
       // Open accounting after the copy so inherited messages stay in past turns.
       usageContext = { sessionKey, agentId, sinceMs: Date.now() };
 
@@ -1199,7 +1220,7 @@ export async function processChatMessage(
       // assistant events fire during waitForRun below, after this assignment.
       currentRunId = runResult.runId;
       if (options?.abortSignal?.aborted) {
-        abortActiveRun();
+        void abortActiveRun();
       }
 
       // Step 5: Wait until the embedded run actually settles. agent.wait needs a
@@ -1214,13 +1235,13 @@ export async function processChatMessage(
           timeoutMs: turnTimeoutMs,
         });
         if (options?.abortSignal?.aborted) {
-          abortActiveRun();
-          const pendingAbort = abortRunPromise;
+          const pendingAbort = abortActiveRun();
           if (pendingAbort) {
             await pendingAbort;
           }
           const partialText = streamPusherCtx.streamPusher.getFullText().trim();
-          const stopped = partialText || "输出已暂停。";
+          const stopped =
+            artifactLinks.sanitize(partialText || "输出已暂停。") + artifactLinks.deliveryLinks();
           await historyManager.updateResponse(chatMsg.historyId, stopped);
           await persistTimeline("completed");
           await persistUsage();
@@ -1257,6 +1278,7 @@ export async function processChatMessage(
 
       let fullResponse = "";
       if (sessionMessages.messages && Array.isArray(sessionMessages.messages)) {
+        artifactLinks.observeMessages(sessionMessages.messages, true);
         for (const msg of [...sessionMessages.messages].toReversed()) {
           const m = msg as { role?: string; content?: unknown };
           if (m.role === "assistant") {
@@ -1280,7 +1302,13 @@ export async function processChatMessage(
       // Split off the machine citations block (marker + JSON) the model appends,
       // so only the user-visible answer is stored/returned; the structured
       // sources go to the frontend separately.
-      const { text: splitText, citations } = splitCitations(fullResponse);
+      const { text: splitText, citations: rawCitations } = splitCitations(fullResponse);
+      const citations = rawCitations.flatMap((citation) => {
+        const resolved = artifactLinks.resolve(citation.url);
+        return resolved.kind === "unverified"
+          ? []
+          : [{ ...citation, url: resolved.kind === "verified" ? resolved.url : citation.url }];
+      });
       // Drop inline [n] markers that have no matching source (model footnoted
       // but omitted/botched the sources block) so no dead markers are stored.
       const visibleResponse = stripDanglingCitationMarkers(splitText, citations);
@@ -1291,9 +1319,13 @@ export async function processChatMessage(
       // Then turn `MEDIA:<url>` attachment directives into inline markdown: this
       // channel has no attachment surface, so an unconverted directive reaches
       // the customer as literal text and the image is never delivered.
-      const safeResponse = mediaLinesToMarkdown(
-        normalizeChineseProseQuotes(sanitizeInternalRefs(visibleResponse)),
+      const safeText = mediaLinesToMarkdown(
+        normalizeChineseProseQuotes(sanitizeInternalRefs(artifactLinks.sanitize(visibleResponse))),
       );
+      const safeResponse = safeText + artifactLinks.deliveryLinks();
+      if (!streamPusherCtx.streamPusher.getFullText()) {
+        streamPusherCtx.streamPusher.appendDelta(safeText);
+      }
 
       // Step 7: Update history record
       await historyManager.updateResponse(chatMsg.historyId, safeResponse);
@@ -1392,10 +1424,15 @@ export async function processChatMessage(
           const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
           const safePartial = mediaLinesToMarkdown(
             normalizeChineseProseQuotes(
-              sanitizeInternalRefs(stripDanglingCitationMarkers(partialVisible, partialCites)),
+              sanitizeInternalRefs(
+                artifactLinks.sanitize(stripDanglingCitationMarkers(partialVisible, partialCites)),
+              ),
             ),
           );
-          await historyManager.updateResponse(chatMsg.historyId, safePartial);
+          await historyManager.updateResponse(
+            chatMsg.historyId,
+            safePartial + artifactLinks.deliveryLinks(),
+          );
           logger.info(
             `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars) before connection reset`,
           );
