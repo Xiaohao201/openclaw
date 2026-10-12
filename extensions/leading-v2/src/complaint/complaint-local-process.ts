@@ -1,0 +1,96 @@
+import { spawn } from "node:child_process";
+import { access } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  localOutcomeSchema,
+  type LocalConfig,
+  type LocalComplaintItem,
+  type LocalOutcome,
+} from "./complaint-local-contract.js";
+
+export type RunLocalComplaint = (params: {
+  item: LocalComplaintItem;
+  sessionDir: string;
+  config: LocalConfig;
+  signal: AbortSignal;
+}) => Promise<LocalOutcome>;
+
+/** JSON travels over stdin, never through shell interpolation or command-line arguments. */
+export const runLocalComplaint: RunLocalComplaint = async ({
+  item,
+  sessionDir,
+  config,
+  signal,
+}) => {
+  try {
+    await access(join(config.runtimeDir, "runner.py"));
+  } catch {
+    return {
+      state: "failed",
+      message: "缺少 Python 执行器 runner.py，请安装或配置 runtimeDir。",
+      offline: null,
+      errorCode: "RUNTIME_MISSING",
+    };
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(config.python, ["-u", join(config.runtimeDir, "runner.py")], {
+      cwd: config.runtimeDir,
+      windowsHide: true,
+      shell: false,
+      stdio: ["pipe", "pipe", "ignore"],
+      signal,
+      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    });
+    let output = "";
+    let overflow = false;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, config.timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      output += chunk;
+      if (output.length > 65536) {
+        overflow = true;
+        output = "";
+        child.kill();
+      }
+    });
+    child.stdin.on("error", () => {
+      /* Exit/error below determines the outcome. */
+    });
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      if (error.code === "ENOENT") {
+        resolve({
+          state: "failed",
+          message: "找不到 Python 或执行目录，请检查 complaintExecution 配置。",
+          offline: null,
+          errorCode: "RUNTIME_MISSING",
+        });
+      } else {
+        reject(error);
+      }
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0 || overflow || timedOut || signal.aborted) {
+        reject(new Error("Local complaint process interrupted; submission may be unknown."));
+        return;
+      }
+      try {
+        const result = localOutcomeSchema.parse(JSON.parse(output));
+        if (["pending", "running"].includes(result.state)) {
+          throw new Error("Nonterminal result");
+        }
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    child.stdin.end(
+      JSON.stringify({ ...item, sessionDir, headless: config.headless, phone: config.phone }),
+    );
+  });
+};

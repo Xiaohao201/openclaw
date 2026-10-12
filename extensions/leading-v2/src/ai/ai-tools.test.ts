@@ -35,7 +35,10 @@ afterEach(async () => {
 });
 const fakeApi = {
   runtime: { state: { resolveStateDir: () => batchStateDir } },
-  pluginConfig: { backend: { baseUrl: "https://v2.businesstimescn.com", siteId: "legal" } },
+  pluginConfig: {
+    complaintExecution: { mode: "backend" },
+    backend: { baseUrl: "https://v2.businesstimescn.com", siteId: "legal" },
+  },
   logger: { info() {}, warn() {}, error() {}, debug() {} },
 } as unknown as OpenClawPluginApi;
 

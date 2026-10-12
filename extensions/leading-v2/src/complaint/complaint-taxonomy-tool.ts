@@ -5,6 +5,7 @@ import { envelopeError } from "../client/envelope.js";
 import { getJson, resolveConfig } from "../client/http-client.js";
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
+import { localPlatforms, platformForLink, resolveLocalConfig } from "./complaint-local-contract.js";
 
 export function createComplaintTaxonomyToolFactory(
   api: OpenClawPluginApi,
@@ -44,6 +45,17 @@ export function createComplaintTaxonomyToolFactory(
           });
         }
         const links = params.links as string[] | undefined;
+        if (resolveLocalConfig(api.pluginConfig ?? {}).mode === "local") {
+          return jsonResult({
+            success: true,
+            executor: "local",
+            platforms: [...Object.keys(localPlatforms), "report12377"].toSorted(),
+            links: (links ?? []).map((link) => ({ link, platform: platformForLink(link) })),
+            unsupportedLinks: (links ?? []).filter((link) => !platformForLink(link)),
+            instruction:
+              "本地模式从浏览器实际选项匹配单条举报事由，无后端分类版本。可传 categories 平台分类文字，不传 classifications。支持平台不保证当前页面可执行；登录/验证可能需人工处理。12377须明确传 report12377，官网匿名流程由用户完成验证码及最终提交。unsupportedLinks 仅指原平台直接举报路径。",
+          });
+        }
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_taxonomy");
         if ("error" in keyed) {
           return keyed.error;
