@@ -130,6 +130,53 @@ describe("hot_rank", () => {
     ]);
   });
 
+  it("queries the Weibo rising ranking separately from the main Weibo ranking", async () => {
+    const fetcher = vi.fn<HotRankFetcher>().mockResolvedValue({
+      code: 0,
+      data: [{ rank: 1, title: "上升热点", platform_en: "weibo_uplist" }],
+    });
+    const tool = createHotRankToolFactory(fakeApi, fetcher)({ agentId: "rabbitmq-1749" })!;
+
+    expect(tool.parameters.properties.platform.enum).toContain("weibo_uplist");
+    expect(tool.parameters.properties.platform.description).toContain(
+      "weibo_uplist=微博实时上升榜",
+    );
+    const result = parse(
+      await tool.execute("hot-rising", { platform: "weibo_uplist", rankType: 1 }),
+    );
+
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "weibo_uplist", rank_type: 1 }),
+    );
+    expect(result).toMatchObject({
+      success: true,
+      filters: { platform: "weibo_uplist", rankType: 1 },
+      items: [{ title: "上升热点", platform: "weibo_uplist" }],
+    });
+  });
+
+  it.each([1, 2, 3])(
+    "queries all platforms with an empty filter for rank type %s",
+    async (rankType) => {
+      const fetcher = vi.fn<HotRankFetcher>().mockResolvedValue({ code: 0, data: [] });
+      const tool = createHotRankToolFactory(fakeApi, fetcher)({ agentId: "rabbitmq-1749" })!;
+
+      expect(tool.parameters.properties.platform.enum).toContain("");
+      for (const params of [{ rankType }, { platform: "", rankType }]) {
+        expect(parse(await tool.execute("hot-all", params)).success).toBe(true);
+      }
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(fetcher).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ platform: "", rank_type: rankType }),
+      );
+      expect(fetcher).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ platform: "", rank_type: rankType }),
+      );
+    },
+  );
+
   it("rejects an invalid date without calling the API", async () => {
     const fetcher = vi.fn<HotRankFetcher>();
     const tool = createHotRankToolFactory(fakeApi, fetcher)({ agentId: "rabbitmq-1749" })!;
