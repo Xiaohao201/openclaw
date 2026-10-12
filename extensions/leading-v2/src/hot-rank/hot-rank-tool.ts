@@ -40,10 +40,16 @@ const HotRankSchema = Type.Object(
     keyword: Type.Optional(Type.String({ description: "按热榜标题关键词筛选。" })),
     city: Type.Optional(Type.String({ description: "城市筛选，主要用于同城热榜。" })),
     platform: Type.Optional(
-      Type.Unsafe<(typeof PLATFORMS)[number]>({
+      Type.Unsafe<(typeof PLATFORMS)[number] | "">({
         type: "string",
-        enum: [...PLATFORMS],
-        description: "平台英文标识；不传则查询该榜单类型下的所有平台。",
+        enum: ["", ...PLATFORMS],
+        description:
+          "平台英文标识；不传或传空字符串则查询该榜单类型下的所有平台，需与 rankType 配合使用。" +
+          "rankType=1 综合热榜：douyin=抖音、weibo=微博、toutiao=头条、kuaishou=快手、" +
+          "bilibili=B站、baidu=百度、zhihu=知乎、xiaohongshu=小红书、dongchedi=懂车帝、" +
+          "weixin=微信、wangyi=网易新闻、baidutieba=百度贴吧、weibo_uplist=微博实时上升榜。" +
+          "rankType=2 浏览器榜：360=360、uc=UC、qq=QQ、sougou=搜狗、kuake=夸克。" +
+          "rankType=3 同城热榜：douyin=抖音、weibo=微博、toutiao=头条、kuaishou=快手。",
       }),
     ),
     rankType: Type.Optional(
@@ -168,7 +174,8 @@ export function createHotRankToolFactory(
       label: "查询热榜",
       description:
         "查询多平台热榜数据。当用户提到热榜、热搜、榜单、热门话题、实时热点、平台排行、浏览器榜或同城榜时使用本工具。" +
-        "支持按日期、关键词、城市、平台和榜单类型筛选；默认查询北京时间当天的综合热榜。",
+        "支持按日期、关键词、城市、平台和榜单类型筛选；默认查询北京时间当天的综合热榜。" +
+        "查询微博实时上升榜时，使用 platform=weibo_uplist、rankType=1。",
       parameters: HotRankSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         const date = resolveDateRange(rawParams.date, now());
