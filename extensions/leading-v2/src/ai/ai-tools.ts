@@ -8,6 +8,8 @@ import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
 import { ComplaintBatchStore } from "../complaint/complaint-batch-store.js";
 import { submitComplaintBatch } from "../complaint/complaint-batch-submit.js";
+import { resolveLocalConfig } from "../complaint/complaint-local-contract.js";
+import { createLocalComplaintSubmitToolFactory } from "../complaint/complaint-local-tool.js";
 import {
   DEFAULT_WORKSPACE,
   JOB_STATUS_LABELS,
@@ -444,6 +446,9 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
 }
 
 export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
+  if (resolveLocalConfig(api.pluginConfig ?? {}).mode === "local") {
+    return createLocalComplaintSubmitToolFactory(api);
+  }
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
 
   return (ctx: { agentId?: string }) => {

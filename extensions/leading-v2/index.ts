@@ -14,6 +14,7 @@ import { closePool } from "./src/client/db-client.js";
 import { resolveConfig } from "./src/client/http-client.js";
 import { ApiKeyResolver } from "./src/client/key-resolver.js";
 import { RecentTaskStore } from "./src/client/recent-tasks.js";
+import { stopLocalComplaints } from "./src/complaint/complaint-local.js";
 import { createComplaintTaskStatusToolFactory } from "./src/complaint/complaint-status-tool.js";
 import { createComplaintTaxonomyToolFactory } from "./src/complaint/complaint-taxonomy-tool.js";
 import {
@@ -318,6 +319,7 @@ export default definePluginEntry({
         }
       },
       async stop(ctx) {
+        await stopLocalComplaints();
         clearNotifyEnqueue();
         notifier?.stop();
         scheduler?.stop();

@@ -6,6 +6,43 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "complaintExecution": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Direct local Python browser reporting. Historical backend batches remain queryable.",
+        "properties": {
+          "mode": { "type": "string", "enum": ["local", "backend"], "default": "local" },
+          "python": {
+            "type": "string",
+            "minLength": 1,
+            "default": "python",
+            "description": "Python executable (not a shell command)."
+          },
+          "runtimeDir": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional absolute path to the plugin's bundled python directory."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 1800000,
+            "default": 900000
+          },
+          "headless": { "type": "boolean", "default": false },
+          "phone": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["serial", "userId"],
+            "description": "Android XHS app-only fallback. Binds the device's logged-in account to one OpenClaw user.",
+            "properties": {
+              "adbPath": { "type": "string", "minLength": 1, "default": "adb" },
+              "serial": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "userId": { "type": "string", "minLength": 1, "maxLength": 200 }
+            }
+          }
+        }
+      },
       "backend": {
         "type": "object",
         "additionalProperties": false,
