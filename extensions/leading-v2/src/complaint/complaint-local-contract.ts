@@ -19,7 +19,7 @@ export const localPlatforms: Record<string, readonly string[]> = {
   toutiao: ["toutiao.com"],
   wechat: ["mp.weixin.qq.com"],
   weibo: ["weibo.com", "weibo.cn"],
-  xiaohongshu: ["xiaohongshu.com", "xhslink.com"],
+  xiaohongshu: ["xiaohongshu.com", "xhslink.com", "xhslink.cn"],
   xueqiu: ["xueqiu.com"],
   yidianzixun: ["yidianzixun.com"],
   zhihu: ["zhihu.com"],

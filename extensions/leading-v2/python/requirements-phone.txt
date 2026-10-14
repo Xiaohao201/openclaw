@@ -1,0 +1,2 @@
+# Optional Android adapter. The desktop-only executor does not import this package.
+uiautomator2==3.7.0
