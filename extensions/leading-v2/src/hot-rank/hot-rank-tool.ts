@@ -6,7 +6,6 @@ const HOT_RANK_API_URL = "http://123.57.81.67:8004/api/v1/hot_rank";
 const HOT_RANK_TIMEOUT_MS = 30_000;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 
 const PLATFORMS = [
   "douyin",
@@ -34,7 +33,7 @@ const HotRankSchema = Type.Object(
     date: Type.Optional(
       Type.String({
         description:
-          "日期或日期范围。支持 YYYY-MM-DD，或 YYYY-MM-DD HH:mm,YYYY-MM-DD HH:mm；默认查询北京时间当天。",
+          '日期或日期范围。支持 "now"、YYYY-MM-DD，或 YYYY-MM-DD HH:mm,YYYY-MM-DD HH:mm；默认使用 "now"。',
       }),
     ),
     keyword: Type.Optional(Type.String({ description: "按热榜标题关键词筛选。" })),
@@ -72,15 +71,6 @@ export type HotRankRequest = {
 
 export type HotRankFetcher = (request: HotRankRequest) => Promise<unknown>;
 
-function shanghaiDate(now: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: SHANGHAI_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
-}
-
 function validDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
@@ -99,11 +89,10 @@ function validDateTime(value: string): boolean {
   return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
 }
 
-function resolveDateRange(value: unknown, now: Date): string | null {
+function resolveDateRange(value: unknown): string | null {
   const input = typeof value === "string" ? value.trim() : "";
-  if (!input) {
-    const date = shanghaiDate(now);
-    return `${date} 00:00,${date} 23:59`;
+  if (!input || input === "now") {
+    return "now";
   }
   if (validDate(input)) {
     return `${input} 00:00,${input} 23:59`;
@@ -163,7 +152,6 @@ export async function fetchHotRank(request: HotRankRequest): Promise<unknown> {
 export function createHotRankToolFactory(
   api: OpenClawPluginApi,
   fetcher: HotRankFetcher = fetchHotRank,
-  now: () => Date = () => new Date(),
 ) {
   return (ctx: { agentId?: string }) => {
     if (!extractUserId(ctx.agentId)) {
@@ -174,15 +162,15 @@ export function createHotRankToolFactory(
       label: "查询热榜",
       description:
         "查询多平台热榜数据。当用户提到热榜、热搜、榜单、热门话题、实时热点、平台排行、浏览器榜或同城榜时使用本工具。" +
-        "支持按日期、关键词、城市、平台和榜单类型筛选；默认查询北京时间当天的综合热榜。" +
+        '支持按日期、关键词、城市、平台和榜单类型筛选；默认使用 date="now" 查询综合热榜。' +
         "查询微博实时上升榜时，使用 platform=weibo_uplist、rankType=1。",
       parameters: HotRankSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
-        const date = resolveDateRange(rawParams.date, now());
+        const date = resolveDateRange(rawParams.date);
         if (!date) {
           return jsonResult({
             success: false,
-            error: "日期格式无效，请使用 YYYY-MM-DD 或完整的起止时间范围。",
+            error: '日期格式无效，请使用 "now"、YYYY-MM-DD 或完整的起止时间范围。',
           });
         }
         const rankType =

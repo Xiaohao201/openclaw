@@ -75,7 +75,7 @@ describe("hot_rank", () => {
     expect(factory({ agentId: "rabbitmq-1749" })?.name).toBe("hot_rank");
   });
 
-  it("queries today's comprehensive ranking and returns a bounded result", async () => {
+  it("queries the current comprehensive ranking and returns a bounded result", async () => {
     const fetcher = vi.fn<HotRankFetcher>().mockResolvedValue({
       code: 0,
       message: "success",
@@ -96,18 +96,14 @@ describe("hot_rank", () => {
         { rank: 2, title: "热点二", platform_en: "weibo", score: 8000 },
       ],
     });
-    const tool = createHotRankToolFactory(
-      fakeApi,
-      fetcher,
-      () => new Date("2026-08-11T03:00:00Z"),
-    )({
+    const tool = createHotRankToolFactory(fakeApi, fetcher)({
       agentId: "rabbitmq-1749",
     })!;
 
     const result = parse(await tool.execute("hot-1", { platform: "weibo", limit: 1 }));
 
     expect(fetcher).toHaveBeenCalledWith({
-      date: "2026-08-11 00:00,2026-08-11 23:59",
+      date: "now",
       keyword: "",
       city: "",
       platform: "weibo",
@@ -176,6 +172,24 @@ describe("hot_rank", () => {
       );
     },
   );
+
+  it.each([
+    [undefined, "now"],
+    ["", "now"],
+    ["   ", "now"],
+    ["now", "now"],
+    [" now ", "now"],
+    ["2026-08-11", "2026-08-11 00:00,2026-08-11 23:59"],
+    ["2026-08-10 12:00,2026-08-11 18:00", "2026-08-10 12:00,2026-08-11 18:00"],
+  ])("resolves date %s to %s", async (date, expected) => {
+    const fetcher = vi.fn<HotRankFetcher>().mockResolvedValue({ code: 0, data: [] });
+    const tool = createHotRankToolFactory(fakeApi, fetcher)({ agentId: "rabbitmq-1749" })!;
+
+    const result = parse(await tool.execute("hot-date", { date }));
+
+    expect(fetcher).toHaveBeenCalledWith(expect.objectContaining({ date: expected }));
+    expect(result).toMatchObject({ success: true, date: expected });
+  });
 
   it("rejects an invalid date without calling the API", async () => {
     const fetcher = vi.fn<HotRankFetcher>();
