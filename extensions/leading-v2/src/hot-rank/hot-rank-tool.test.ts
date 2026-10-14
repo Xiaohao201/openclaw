@@ -96,7 +96,10 @@ describe("hot_rank", () => {
         { rank: 2, title: "热点二", platform_en: "weibo", score: 8000 },
       ],
     });
-    const tool = createHotRankToolFactory(fakeApi, fetcher)({
+    const tool = createHotRankToolFactory(
+      fakeApi,
+      fetcher,
+    )({
       agentId: "rabbitmq-1749",
     })!;
 
