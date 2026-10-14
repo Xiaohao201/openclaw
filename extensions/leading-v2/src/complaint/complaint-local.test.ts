@@ -30,6 +30,12 @@ const request = (links = ["https://weibo.com/1/2"]) => ({
 });
 
 describe("direct local reporting", () => {
+  it("routes the current XHS app share domain without accepting lookalikes", () => {
+    expect(parseLocalRequest(request(["https://xhslink.cn/o/test-note"]))[0].platform).toBe(
+      "xiaohongshu",
+    );
+    expect(() => parseLocalRequest(request(["https://xhslink.cn.example.test/o/note"]))).toThrow();
+  });
   it("requires an explicit phone owner and serial binding", () => {
     expect(() => resolveLocalConfig({ complaintExecution: { phone: {} } })).toThrow();
     expect(

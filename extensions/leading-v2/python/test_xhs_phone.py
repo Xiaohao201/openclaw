@@ -31,6 +31,12 @@ class FakePhone:
                       '提交': 'done'}.get(label, self.stage)
     def copied_link(self): return 'https://www.xiaohongshu.com/explore/' + self.identity
     def fill_reason(self, reason): self.reason = reason
+    def open_report(self): self.tap('举报')
+    def select_category(self, category, subcategory):
+        self.tap(category)
+        if subcategory: self.tap(subcategory)
+    def check_submit_ready(self): pass
+    def close(self): pass
 
 
 class PhoneTests(unittest.TestCase):
@@ -63,10 +69,10 @@ class PhoneTests(unittest.TestCase):
     def test_ui_guard_and_exact_taps(self):
         phone = AdbPhone(dict(serial='test'))
         phone.foreground = Mock()
-        phone.shell = Mock(return_value='<hierarchy><node package="com.xingin.xhs" text="举报" bounds="[0,0][10,20]"/></hierarchy>')
+        phone.shell = Mock(return_value='<hierarchy><node package="com.xingin.xhs" text="举报" bounds="[0,0][40,60]"/></hierarchy>')
         with patch('xhs_phone.time.sleep'):
             phone.tap('举报')
-        self.assertIn(('input', 'tap', 5, 10), [call.args for call in phone.shell.call_args_list])
+        self.assertIn(('input', 'tap', 20, 30), [call.args for call in phone.shell.call_args_list])
         with self.assertRaises(PhoneFailure): phone.tap('missing')
         phone.shell.return_value = '<hierarchy><node package="com.xingin.xhs" text="安全验证"/></hierarchy>'
         with self.assertRaises(PhoneFailure): phone.nodes()
@@ -86,40 +92,46 @@ class PhoneTests(unittest.TestCase):
 
     def test_clipboard_freshness_and_share_sheet(self):
         phone = AdbPhone(dict(serial='test'))
-        clipboard = ['']
-        def shell(*args):
-            if args[:3] == ('cmd', 'clipboard', 'set'): clipboard[0] = args[3]
-            return clipboard[0]
-        phone.shell = Mock(side_effect=shell)
+        clipboard = ['original clipboard']
+        phone._bridge = Mock()
+        phone._bridge.clipboard.side_effect = lambda: clipboard[0]
+        phone._bridge.set_clipboard.side_effect = lambda text: clipboard.__setitem__(0, text)
         phone.tap = Mock(side_effect=lambda label: clipboard.__setitem__(0, URL))
         phone.texts = Mock(return_value=['更多'])
         self.assertEqual(phone.copied_link(), URL)
         self.assertEqual(phone.tap.call_args.args, ('更多',))
-        phone.shell = Mock(return_value='No shell command implementation.')
+        self.assertIn(unittest.mock.call('original clipboard'), phone._bridge.set_clipboard.call_args_list)
+        phone._bridge.clipboard.side_effect = None
+        phone._bridge.clipboard.return_value = 'stale'
         with self.assertRaises(PhoneFailure): phone.copied_link()
 
     def test_chinese_reason_requires_verified_text(self):
         phone = AdbPhone(dict(serial='test'))
         phone.nodes = Mock(return_value=[dict(**{'class': 'android.widget.EditText'}, text='测试')])
-        phone.click_node = Mock()
-        phone.shell = Mock(return_value='com.android.adbkeyboard/.AdbIME')
+        phone.foreground = Mock()
+        phone.shell = Mock(return_value='mInputShown=false')
+        phone._bridge = Mock()
         phone.fill_reason('测试')
+        phone._bridge.set_text.assert_called_once_with('测试')
         with self.assertRaises(PhoneFailure): phone.fill_reason('different')
-        phone.shell.return_value = 'other.keyboard'
-        with self.assertRaises(PhoneFailure): phone.fill_reason('测试')
+        with self.assertRaises(PhoneFailure): phone.fill_reason('测' * 401)
+        phone.tap = Mock()
         phone.nodes.return_value = []
         with self.assertRaises(PhoneFailure): phone.fill_reason('测试')
 
     def test_short_links_only_expand_to_public_xhs(self):
         self.assertEqual(expand_share_link(URL), URL)
         with self.assertRaises(PhoneFailure): expand_share_link('https://evil.test/short')
-        with patch('network_guard.public_url', return_value=True), patch('xhs_phone.build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.url = URL
+        with patch('xhs_phone_network.share_redirect', return_value=URL) as redirect:
             self.assertEqual(expand_share_link('https://xhslink.com/a/test'), URL)
-            redirect = opener.call_args.args[0]
+            self.assertEqual(expand_share_link('http://xhslink.com/a/test'), URL)
+            redirect.assert_called_with('https://xhslink.com/a/test')
+            self.assertEqual(expand_share_link('https://xhslink.cn/o/test'), URL)
+            redirect.assert_called_with('https://xhslink.cn/o/test')
+            redirect.return_value = 'https://evil.test/'
             with self.assertRaises(PhoneFailure):
-                redirect.redirect_request(None, None, 302, '', {}, 'https://evil.test/')
-            opener.return_value.open.return_value.__enter__.return_value.url = 'https://xiaohongshu.com/'
+                expand_share_link('https://xhslink.com/a/test')
+            redirect.return_value = 'https://xiaohongshu.com/'
             with self.assertRaises(PhoneFailure): expand_share_link('https://xhslink.com/a/test')
 
     def test_strict_identity(self):

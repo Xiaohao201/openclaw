@@ -110,23 +110,55 @@ before interacting with it and shares the `openclaw-phone-<serial sha256>.lock`
 exclusion protocol with `phone_read`. Execution has a 110-second device deadline;
 interrupted locks require inspection, not automatic resubmission.
 
-The initial Android adapter requires accessible controls named `更多`, `复制链接`,
-`举报`, the exact configured category/subcategory, a single description field,
-and `提交`. It verifies the current note using a freshly copied share URL, expands
-public XHS short links, and compares note IDs. It never trusts a launch intent as
-proof of note identity. It requires working `cmd clipboard set/get` commands and
-an already enabled `com.android.adbkeyboard/.AdbIME` input method for Chinese input.
-The executor does not install keyboards, change the default input method, bypass
-verification, or guess screen coordinates. Unsupported phones return
-`manual_required`. In particular, devices reporting `No shell command
-implementation` for the clipboard command need a different Android adapter before
-automatic submission is possible; installing ADBKeyboard alone is insufficient.
+Install the optional Android dependency in the same Python environment as the executor:
+
+```powershell
+extensions/leading-v2/.venv/Scripts/python -m pip install -r extensions/leading-v2/python/requirements-phone.txt
+```
+
+The Android adapter supports the Android 9 / XHS 9.49 layout: the unlabelled
+`moreOperateIV` share button, horizontal scrolling to `举报`, the ordinary-report
+group `对他人造成困扰或危害`, category selection, and expansion of
+`补充更多举报信息`. It merges labels on a button and its descendants while rejecting
+ambiguous sibling controls, disabled buttons, and offscreen bounds. The exact legacy
+category `不实信息` maps to the visible `不实信息、谣言`; other categories remain exact.
+Identity/material-dependent infringement flows still require manual handling.
+
+The pinned `uiautomator2` dependency starts its bundled Android server jar for
+clipboard and Unicode text operations. No keyboard APK is installed and the
+default input method is unchanged. It verifies a fresh clipboard marker before
+copying the share URL, compares note IDs, and restores the previous clipboard.
+It never trusts a launch intent as proof of identity. Chinese descriptions are
+read back exactly and limited to 400 UTF-16 units. UI gestures use observed control
+bounds, not device-specific coordinates. Unsupported states return `manual_required`.
+
+Short-link redirects are restricted to XHS domains and pinned to validated public
+IP addresses with TLS hostname verification. When the host resolver returns only
+the `198.18.0.0/15` Fake-IP range, the adapter queries Cloudflare's fixed HTTPS DNS
+endpoint for the public hostname (never the note URL or its tokens), then validates
+and pins the returned public address. Other private DNS answers are rejected.
+The general browser network guard is unchanged.
 
 Use actual platform category text in `categories`; there is no fuzzy mobile
 category selection. The typed reason is read back before clicking submit. Only a
 new exact `举报成功` or `提交成功` UI indication after that click yields `done`.
 Disconnects/timeouts after the click return `unknown`, never a retry. The current
 adapter's automated tests use fake UI/ADB responses, not a live platform receipt.
+
+For a repeatable **no-submit** test on a connected, unlocked phone, use the dedicated
+preflight command with the bound user ID and a specific note URL:
+
+```powershell
+extensions/leading-v2/.venv/Scripts/python extensions/leading-v2/python/xhs_phone_preflight.py --serial YOUR_ANDROID_SERIAL --user-id YOUR_OPENCLAW_USER_ID --url https://www.xiaohongshu.com/discovery/item/0123456789abcdef01234567 --output-dir C:/openclaw-preflight
+```
+
+This entry point has no submit option. It uses a fixed Chinese test description,
+verifies the enabled submit control, returns `not_submitted` with
+`PHONE_PREFLIGHT_READY`, and saves `before-submit.png` plus `result.json`. It then
+clears its test description and returns to the note while holding the shared phone
+lock. Check the recorded `cleanup` result; interrupted or unverified cleanup requires
+manual inspection. These artifacts are local and may contain account/content details.
+The normal executor's confirmed submission behavior is unchanged.
 
 The initial response returns `accepted=true`, `submitted=false`, and `batchId`.
 This means local acceptance only. Query `complaint_task_status({batchId})` for
