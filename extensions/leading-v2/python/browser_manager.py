@@ -42,6 +42,7 @@ _ACTION_WORDS = {
 
 class BrowserManager:
     def __init__(self):
+        self.shared_browser = None
         self.playwright = None
         self.browser = None
         self.contexts = {}  # 存储每个平台的BrowserContext
@@ -92,8 +93,19 @@ class BrowserManager:
 
     def init_browsers(self, platform=None):
         """为指定平台或所有平台初始化浏览器上下文和页面"""
-        # 确保Playwright已初始化
+        from shared_browser import read_binding, SharedBrowserLease
         self._init_playwright()
+        binding = read_binding(get_base_path())
+        if binding is not None:
+            if platform is None:
+                raise ValueError("共享浏览器每次必须指定一个平台")
+            if self.shared_browser is None:
+                self.shared_browser = SharedBrowserLease(
+                    self.playwright, binding, headless=HEADLESS)
+            self.contexts[platform] = self.shared_browser.context
+            self.pages[platform] = self.shared_browser.new_page()
+            self.drivers.add(platform)
+            return
         platforms_to_init = [platform] if platform else PLATFORMS
         for platform in platforms_to_init:
             try:
@@ -358,7 +370,7 @@ class BrowserManager:
                 flag = yidian.is_logged_in_state(login_state)
             
             
-            if flag:
+            if flag and not self.shared_browser:
                 user_data_dir = browser_session.legacy_storage_state_path(
                     get_base_path(), platform)
                 os.makedirs(os.path.dirname(user_data_dir), exist_ok=True)
@@ -505,6 +517,19 @@ class BrowserManager:
         
     def close_all(self):
         """关闭所有浏览器实例"""
+        if self.shared_browser is not None:
+            try:
+                self.shared_browser.close()
+            finally:
+                self.shared_browser = None
+                self.contexts.clear()
+                self.pages.clear()
+                self.drivers.clear()
+                if self.playwright:
+                    # Disconnect CDP without closing OpenClaw's browser or user tabs.
+                    self.playwright.stop()
+                    self.playwright = None
+            return
         try:
             # 关闭所有上下文和页面
             for platform, context in self.contexts.items():

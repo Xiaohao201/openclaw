@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
+from shared_browser import SharedBrowserUnavailable
 
 
 def outcome(state, message, code="NONE"):
@@ -43,6 +44,8 @@ def create_manager():
 
 
 def save_sessions(manager, directory):
+    if getattr(manager, "shared_browser", None) is not None:
+        return  # The shared profile persists its own state; never export all accounts.
     import browser_session
     for platform, context in manager.contexts.items():
         target = Path(browser_session.legacy_storage_state_path(str(directory), platform))
@@ -114,6 +117,8 @@ def execute(data, manager_factory=create_manager):
                 execution_started = True
                 return execute_phone(data, target)
         if not manager.check_login_status(data["platform"]):
+            if getattr(manager, "shared_browser", None) is not None:
+                return outcome("manual_required", "共享浏览器尚未确认平台登录，请在 OpenClaw 浏览器完成登录或验证后重试。", "LOGIN_REQUIRED")
             return outcome("manual_required", "当前用户尚未登录平台。请使用 runner.py --login 为此用户建立独立登录态。", "LOGIN_REQUIRED")
         execution_started = True
         manager.perform_complaint(data["platform"], dict(data, id=os.getpid()))
@@ -127,6 +132,8 @@ def execute(data, manager_factory=create_manager):
         if code in ("LOGIN_REQUIRED", "CAPTCHA_REQUIRED", "MATERIAL_REQUIRED"):
             return outcome("manual_required", "执行遇到登录、验证或材料要求，需要人工核查后处理。", code)
         return outcome("unknown", "未观察到平台提交成功提示，不能确认结果；请人工核对，勿自动重提。", code)
+    except SharedBrowserUnavailable as exc:
+        return outcome("manual_required", str(exc), "SHARED_BROWSER_UNAVAILABLE")
     except Exception:
         return outcome("unknown" if execution_started else "failed",
                        "执行结果无法确认，禁止自动重提。" if execution_started else "浏览器启动失败，请检查 Python 依赖及 Chromium 安装。",
@@ -171,7 +178,50 @@ def main():
     parser.add_argument("--platform")
     parser.add_argument("--user-id")
     parser.add_argument("--state-dir")
+    parser.add_argument("--bind-browser", action="store_true")
+    parser.add_argument("--existing-chrome", action="store_true",
+                        help="Attach to the operator's running Chrome with remote debugging enabled")
+    parser.add_argument("--check-browser", action="store_true",
+                        help="Check existing Chrome connectivity without opening platform pages")
+    parser.add_argument("--profile-dir")
+    parser.add_argument("--cdp-url", default="http://127.0.0.1:18800")
+    parser.add_argument("--allow-fake-ip", action="store_true",
+                        help="Allow RFC2544 DNS answers only for a trusted local Fake-IP proxy")
     args = parser.parse_args()
+    if args.existing_chrome:
+        from shared_browser import default_chrome_profile_dir
+        args.profile_dir = args.profile_dir or str(default_chrome_profile_dir())
+    if args.check_browser:
+        if not args.existing_chrome:
+            parser.error("--check-browser requires --existing-chrome")
+        from playwright.sync_api import sync_playwright
+        from shared_browser import existing_chrome_binding, SharedBrowserLease
+        try:
+            with sync_playwright() as playwright:
+                lease = SharedBrowserLease(playwright, existing_chrome_binding(
+                    args.profile_dir, allow_benchmark=args.allow_fake_ip), headless=False)
+                try:
+                    print(json.dumps(dict(connected=True, driver="existing-session")))
+                finally:
+                    lease.close()
+        except SharedBrowserUnavailable as exc:
+            print(json.dumps(outcome("manual_required", str(exc),
+                                     "SHARED_BROWSER_UNAVAILABLE"), ensure_ascii=False))
+            raise SystemExit(1)
+        return
+    if args.existing_chrome and not args.bind_browser:
+        parser.error("--existing-chrome requires --bind-browser or --check-browser")
+    if args.bind_browser:
+        if not args.user_id or not args.state_dir or not args.profile_dir:
+            parser.error("--bind-browser requires --user-id, --state-dir and --profile-dir")
+        from shared_browser import bind_profile
+        directory = (Path(args.state_dir).resolve() / "leading-v2-complaint-sessions"
+                     / hashlib.sha256(args.user_id.encode()).hexdigest())
+        bind_profile(directory, args.profile_dir, args.cdp_url,
+                     allow_benchmark=args.allow_fake_ip,
+                     existing_session=args.existing_chrome)
+        print(json.dumps(dict(bound=True, userId=args.user_id), ensure_ascii=False))
+        return
     if args.login:
         login(args)
         return

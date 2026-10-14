@@ -4,13 +4,18 @@ import socket
 from urllib.parse import urlsplit
 
 
-def public_url(url, resolver=socket.getaddrinfo):
+def public_url(url, resolver=socket.getaddrinfo, *, allow_rfc2544_benchmark_range=False):
     try:
         parsed = urlsplit(url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
             return False
         addresses = resolver(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
-        return bool(addresses) and all(ipaddress.ip_address(item[4][0]).is_global for item in addresses)
+        benchmark = ipaddress.ip_network("198.18.0.0/15")
+        return bool(addresses) and all(
+            ipaddress.ip_address(item[4][0]).is_global or (
+                allow_rfc2544_benchmark_range and
+                ipaddress.ip_address(item[4][0]) in benchmark)
+            for item in addresses)
     except (ValueError, OSError):
         return False
 
