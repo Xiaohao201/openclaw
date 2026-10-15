@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from urllib.parse import urlsplit
 from shared_browser import SharedBrowserUnavailable, validate_handoff
+from runtime_diagnostics import check_runtime, runtime_failure
 
 
 def outcome(state, message, code="NONE"):
@@ -113,13 +114,16 @@ def execute(data, manager_factory=create_manager):
     config.HEADLESS = bool(data.get("headless"))
     manager = None
     execution_started = False
+    phase = "manager_initialization"
     try:
         if data["platform"] == "report12377":
             execution_started = True
             return execute_12377(data)
         manager = manager_factory()
         manager.browser_handoff = data.get("browserHandoff")
+        phase = "browser_attach"
         manager.init_browsers(data["platform"])
+        phase = "login_check"
         if data["platform"] == "xiaohongshu":
             from xhs_phone import mobile_only_target, execute_phone
             page = manager.pages["xiaohongshu"]
@@ -162,10 +166,10 @@ def execute(data, manager_factory=create_manager):
         return outcome("unknown", "未观察到平台提交成功提示，不能确认结果；请人工核对，勿自动重提。", code)
     except SharedBrowserUnavailable as exc:
         return outcome("manual_required", str(exc), "SHARED_BROWSER_UNAVAILABLE")
-    except Exception:
-        return outcome("unknown" if execution_started else "failed",
-                       "执行结果无法确认，禁止自动重提。" if execution_started else "浏览器启动失败，请检查 Python 依赖及 Chromium 安装。",
-                       "EXECUTION_INTERRUPTED" if execution_started else "RUNTIME_UNAVAILABLE")
+    except Exception as error:
+        if execution_started:
+            return outcome("unknown", "执行结果无法确认，禁止自动重提。", "EXECUTION_INTERRUPTED")
+        return runtime_failure(error, phase)
     finally:
         if manager is not None:
             if data.get("browserHandoff") is not None:
@@ -213,6 +217,8 @@ def login(args):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--check-runtime", action="store_true",
+                        help="Check Python modules and the Playwright driver without opening a browser")
     parser.add_argument("--login", action="store_true")
     parser.add_argument("--platform")
     parser.add_argument("--user-id")
@@ -227,6 +233,11 @@ def main():
     parser.add_argument("--allow-fake-ip", action="store_true",
                         help="Allow RFC2544 DNS answers only for a trusted local Fake-IP proxy")
     args = parser.parse_args()
+    if args.check_runtime:
+        with contextlib.redirect_stdout(sys.stderr):
+            result = check_runtime()
+        print(json.dumps(result, ensure_ascii=False))
+        raise SystemExit(0 if result["ready"] else 1)
     if args.allow_fake_ip:
         os.environ["OPENCLAW_COMPLAINT_ALLOW_FAKE_IP"] = "1"
     if args.existing_chrome:

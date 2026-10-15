@@ -15,6 +15,7 @@ const resultSchema = z
     state: z.enum(["awaiting_login", "saved", "cancelled", "expired", "busy", "failed"]),
     message: z.string().max(2000),
     screenshot: z.string().max(4_000_000).optional(),
+    errorCode: z.string().max(100).optional(),
   })
   .strict();
 type BrowserResult = z.infer<typeof resultSchema>;
@@ -65,7 +66,11 @@ function waitForResponse(session: Session, send: () => void): Promise<BrowserRes
 
 function deliver(session: Session, result: BrowserResult) {
   // Do not retain screenshots of login pages in process-global status history.
-  session.latest = { state: result.state, message: result.message };
+  session.latest = {
+    state: result.state,
+    message: result.message,
+    ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+  };
   session.received = true;
   // Terminal results are delivered after the worker releases the user's execution lock.
   if (result.state === "awaiting_login") {
