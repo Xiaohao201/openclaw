@@ -1,5 +1,20 @@
 # Shared browser sessions
 
+## OpenClaw conversation workflow
+
+Both `complaint_browser` login setup and direct complaint submission borrow the
+current conversation's OpenClaw browser and exact tab. Start with `browser open`
+or refresh an existing tab with `browser snapshot`. Ordinary browser calls prepare
+the user's managed profile automatically, or use their explicit administrator
+binding. The Python login worker requires the trusted handoff; it cannot select a
+different account or start a replacement browser if the connection is unavailable.
+
+Finishing, cancelling, or timing out login leaves the original browser and tab
+open. Login/logout changes remain in the shared profile, without cookie export.
+Afterwards, refresh the tab with `browser snapshot` using the tool's returned
+`browserTargetId` as `targetId` before another handoff. Login and reporting hold
+the same browser lease, so concurrent OpenClaw operations are blocked until release.
+
 ## Reuse the operator's everyday Chrome
 
 Chrome 144+ can expose its existing session after the operator enables remote
@@ -42,10 +57,11 @@ operator session; no global binding is inferred from whichever Chrome is open.
 
 ## Reuse an OpenClaw-managed Chrome profile
 
-The local complaint runner defaults to isolated sessions. An operator can opt a
-specific user into an existing OpenClaw Chrome profile without exporting cookies.
-The binding is stored in that user's hashed session directory; unbound users keep
-their isolated sessions. This is a local CLI operation, not an agent tool argument.
+OpenClaw conversations automatically prepare a per-user managed profile. To
+override that default, an operator can bind a specific user to an existing
+OpenClaw Chrome profile without exporting cookies. The binding is stored in that
+user's hashed session directory. This is a local CLI operation, not an agent tool
+argument.
 
 ```powershell
 python extensions/leading-v2/python/runner.py --bind-browser --user-id USER_ID --state-dir C:/path/to/state --profile-dir C:/path/to/state/browser/openclaw/user-data --cdp-url http://127.0.0.1:18800
@@ -53,11 +69,13 @@ python extensions/leading-v2/python/runner.py --bind-browser --user-id USER_ID -
 
 Supply the profile and loopback CDP port belonging to that user. Do not bind
 unrelated users to the same profile. When the configured CDP endpoint is running,
-the runner uses its context and creates a new task tab. Closing the task closes
-only its tabs and disconnects; the original browser and tabs remain open. When
-the port is unavailable, the runner opens that same profile with installed Chrome.
-If Chrome already holds the profile without the configured debug endpoint, the
-runner stops with `SHARED_BROWSER_UNAVAILABLE` instead of using another profile.
+the OpenClaw tools borrow the conversation's existing tab. Closing the task leaves
+the original browser and tab open. When the port is unavailable, the handoff stops
+with `SHARED_BROWSER_UNAVAILABLE` without launching another browser.
+
+Legacy standalone `runner.py --login` calls do not carry a conversation handoff:
+they create a task tab and can launch the bound profile when its CDP endpoint is
+offline. Use the OpenClaw conversation workflow above to share its running tab.
 
 Login and logout changes persist in the shared profile in both directions.
 `runner.py --login --platform PLATFORM --user-id USER_ID --state-dir STATE_DIR`

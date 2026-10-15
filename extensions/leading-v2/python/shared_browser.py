@@ -16,6 +16,18 @@ class SharedBrowserUnavailable(RuntimeError):
     pass
 
 
+def validate_handoff(value):
+    if (not isinstance(value, dict) or set(value) != {"version", "targetId", "marker", "binding"}
+            or type(value.get("version")) is not int or value["version"] != 1
+            or not isinstance(value.get("targetId"), str)
+            or not re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", value["targetId"])
+            or not isinstance(value.get("marker"), str)
+            or not re.fullmatch(r"[a-f0-9-]{36}", value["marker"])):
+        raise ValueError("Invalid session browser handoff")
+    validate_binding(value["binding"])
+    return value
+
+
 def validate_binding(value):
     if isinstance(value, dict) and value.get("version") == 2:
         required = {"version", "driver", "profileDir"}
