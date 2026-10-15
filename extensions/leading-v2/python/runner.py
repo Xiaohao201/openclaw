@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
@@ -18,9 +19,25 @@ def validate_input(data):
     from config import ALL_PLATFORMS
     if not isinstance(data, dict) or data.get("platform") not in ALL_PLATFORMS:
         raise ValueError("Unsupported platform")
+    handoff = data.get("browserHandoff")
+    if handoff is not None:
+        from shared_browser import validate_binding
+        if (not isinstance(handoff, dict) or set(handoff) != {"version", "targetId", "marker", "binding"}
+                or handoff.get("version") != 1 or not isinstance(handoff.get("targetId"), str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", handoff["targetId"])
+                or not isinstance(handoff.get("marker"), str)
+                or not re.fullmatch(r"[a-f0-9-]{36}", handoff["marker"])
+                or data["platform"] == "report12377"):
+            raise ValueError("Invalid session browser handoff")
+        validate_binding(handoff["binding"])
     url = urlsplit(data.get("link", ""))
     if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.port not in (None, 80, 443):
         raise ValueError("Invalid URL")
+    if data["platform"] != "report12377" and any(
+        url.hostname == host or url.hostname.endswith("." + host)
+        for host in ("10jqka.com.cn", "xueqiu.com", "weixin.qq.com", "weixin.com")
+    ):
+        raise ValueError("Unsupported direct reporting platform")
     if not isinstance(data.get("sessionDir"), str) or not Path(data["sessionDir"]).is_absolute():
         raise ValueError("Invalid session directory")
     for key in ("reason", "category"):
@@ -72,7 +89,8 @@ def execute_12377(data):
             result["queryCode"] = code
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        import browser_session
+        browser = browser_session.launch_isolated_browser(playwright, headless=False)
         try:
             from network_guard import install_network_guard
             context = browser.new_context(service_workers="block")
@@ -107,6 +125,7 @@ def execute(data, manager_factory=create_manager):
             execution_started = True
             return execute_12377(data)
         manager = manager_factory()
+        manager.browser_handoff = data.get("browserHandoff")
         manager.init_browsers(data["platform"])
         if data["platform"] == "xiaohongshu":
             from xhs_phone import mobile_only_target, execute_phone
@@ -116,10 +135,26 @@ def execute(data, manager_factory=create_manager):
             if target:
                 execution_started = True
                 return execute_phone(data, target)
-        if not manager.check_login_status(data["platform"]):
+        # Login probes often navigate home. Keep the inherited document untouched
+        # until the report flow itself navigates to the authorized target.
+        if manager.browser_handoff is not None:
+            inherited = manager.pages[data["platform"]]
+            probe = manager.shared_browser.new_page()
+            manager.pages[data["platform"]] = probe
+            try:
+                logged_in = manager.check_login_status(data["platform"])
+            finally:
+                manager.pages[data["platform"]] = inherited
+                probe.close()
+        else:
+            logged_in = manager.check_login_status(data["platform"])
+        if not logged_in:
+            diagnostic = getattr(manager, "login_status_message", lambda platform: "")(data["platform"])
+            if diagnostic:
+                return outcome("manual_required", "平台登录状态检查发生异常，不能据此判定未登录。请检查浏览器连接、页面加载及运行权限后再核验。", "LOGIN_CHECK_FAILED")
             if getattr(manager, "shared_browser", None) is not None:
-                return outcome("manual_required", "共享浏览器尚未确认平台登录，请在 OpenClaw 浏览器完成登录或验证后重试。", "LOGIN_REQUIRED")
-            return outcome("manual_required", "当前用户尚未登录平台。请使用 runner.py --login 为此用户建立独立登录态。", "LOGIN_REQUIRED")
+                return outcome("manual_required", "共享浏览器尚未确认平台登录，请用 complaint_browser 的 login 打开当前用户登录窗口，完成验证后 finish 保存。旧批次不会自动重提。", "LOGIN_REQUIRED")
+            return outcome("manual_required", "尚未确认当前用户的平台登录。请调用 complaint_browser(action=login, platform=" + data["platform"] + ", confirmed=true) 打开独立登录窗口，用户登录后调用 finish 保存；现有 Chrome 由管理员按用户绑定。不会自动重提旧批次。", "LOGIN_REQUIRED")
         execution_started = True
         manager.perform_complaint(data["platform"], dict(data, id=os.getpid()))
         # Legacy handlers may return True even when the success marker is absent.
@@ -140,6 +175,15 @@ def execute(data, manager_factory=create_manager):
                        "EXECUTION_INTERRUPTED" if execution_started else "RUNTIME_UNAVAILABLE")
     finally:
         if manager is not None:
+            if data.get("browserHandoff") is not None:
+                try:
+                    # Keep the exact borrowed tab addressable for the next item in
+                    # this already-authorized batch, even after handler navigation.
+                    page = manager.pages[data["platform"]]
+                    page.evaluate("marker => Object.defineProperty(window, '__openclaw_session_handoff_v1', {value: marker, configurable: true})",
+                                  data["browserHandoff"]["marker"])
+                except Exception:
+                    pass  # Next item will fail closed if the inherited page is gone.
             try:
                 save_sessions(manager, directory)
             except Exception:
@@ -165,6 +209,8 @@ def login(args):
         manager.init_browsers(args.platform)
         manager.check_login_status(args.platform)
         input("请在浏览器完成登录，完成后回到终端按 Enter 保存（不会提交举报）：")
+        if not manager.check_login_status(args.platform):
+            raise RuntimeError("尚未确认平台登录成功，请完成登录或验证后重新检查；未执行举报。")
         save_sessions(manager, directory)
     finally:
         if manager is not None:
@@ -188,6 +234,8 @@ def main():
     parser.add_argument("--allow-fake-ip", action="store_true",
                         help="Allow RFC2544 DNS answers only for a trusted local Fake-IP proxy")
     args = parser.parse_args()
+    if args.allow_fake_ip:
+        os.environ["OPENCLAW_COMPLAINT_ALLOW_FAKE_IP"] = "1"
     if args.existing_chrome:
         from shared_browser import default_chrome_profile_dir
         args.profile_dir = args.profile_dir or str(default_chrome_profile_dir())

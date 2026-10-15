@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -76,23 +77,32 @@ export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   );
 }
 
-function createSpawnOptions(cmd, args, envOverride) {
-  const useShell = shouldUseShellForCommand(cmd);
+export function createUiSpawnSpec(cmd, args, params = {}) {
+  const platform = params.platform ?? process.platform;
+  const env = params.env ?? process.env;
+  const useShell = shouldUseShellForCommand(cmd, platform);
   if (useShell) {
-    assertSafeWindowsShellArgs(args);
+    assertSafeWindowsShellArgs(args, platform);
   }
   return {
-    cwd: uiDir,
-    stdio: "inherit",
-    env: envOverride ?? process.env,
-    ...(useShell ? { shell: true } : {}),
+    command: useShell ? (env.ComSpec ?? "cmd.exe") : cmd,
+    // /s strips the enclosing quotes; keep the command's own path quotes inside.
+    args: useShell ? ["/d", "/s", "/c", `"${buildCmdExeCommandLine(cmd, args)}"`] : args,
+    options: {
+      cwd: params.cwd ?? uiDir,
+      stdio: params.stdio ?? "inherit",
+      env,
+      shell: false,
+      ...(useShell ? { windowsVerbatimArguments: true } : {}),
+    },
   };
 }
 
 function run(cmd, args) {
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    const spec = createUiSpawnSpec(cmd, args);
+    child = spawn(spec.command, spec.args, spec.options);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -113,7 +123,8 @@ function run(cmd, args) {
 function runSync(cmd, args, envOverride) {
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    const spec = createUiSpawnSpec(cmd, args, { env: envOverride });
+    result = spawnSync(spec.command, spec.args, spec.options);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);

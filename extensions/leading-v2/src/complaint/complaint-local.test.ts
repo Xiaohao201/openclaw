@@ -30,6 +30,45 @@ const request = (links = ["https://weibo.com/1/2"]) => ({
 });
 
 describe("direct local reporting", () => {
+  it("marks remaining links stopped after a manual intervention, including older pending batches", async () => {
+    const links = ["https://weibo.com/1", "https://weibo.com/2"];
+    const run = vi
+      .fn()
+      .mockResolvedValue({
+        state: "manual_required",
+        message: "Login required",
+        offline: null,
+        errorCode: "LOGIN_REQUIRED",
+      });
+    const result = await submitLocalBatch({
+      store,
+      userId: "1",
+      items: parseLocalRequest({
+        ...request(links),
+        linkJudgments: links.map((link) => ({ link, judgment: reason })),
+      }),
+      config: resolveLocalConfig({}),
+      run,
+    });
+    await waitForLocalBatch(result.batchId);
+    const batch = (await store.get("1", result.batchId))!;
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(queryLocalBatch(batch).links[1]).toMatchObject({
+      state: "not_submitted",
+      failureReason: expect.stringContaining("不会自动继续"),
+    });
+    batch.entries[1].execution = { state: "pending", message: "本地等待执行", offline: null };
+    expect(queryLocalBatch(batch).links[1].failureReason).toContain("不会自动继续");
+  });
+
+  it.each([
+    "https://www.10jqka.com.cn/article/1",
+    "https://xueqiu.com/1/2",
+    "https://mp.weixin.qq.com/s/example",
+  ])("rejects unavailable direct reporting platform: %s", (link) => {
+    expect(() => parseLocalRequest(request([link]))).toThrow();
+  });
+
   it("routes the current XHS app share domain without accepting lookalikes", () => {
     expect(parseLocalRequest(request(["https://xhslink.cn/o/test-note"]))[0].platform).toBe(
       "xiaohongshu",

@@ -25,6 +25,57 @@ class Manager:
 
 
 class RunnerTest(unittest.TestCase):
+    def test_handoff_login_probe_preserves_inherited_page_for_submission(self):
+        manager = Manager()
+        original, probe = Mock(), Mock()
+        manager.pages = {'weibo': original}
+        manager.shared_browser = Mock()
+        manager.shared_browser.new_page.return_value = probe
+        def check(platform):
+            self.assertIs(manager.pages[platform], probe)
+            return True
+        manager.check_login_status = check
+        manager.perform_complaint = lambda platform, data: self.assertIs(manager.pages[platform], original)
+        data = dict(self.payload, browserHandoff=dict(version=1, targetId='7',
+                    marker='12345678-1234-1234-1234-123456789abc',
+                    binding=dict(version=2, driver='existing-session', profileDir=self.temp.name)))
+        self.assertEqual(execute(data, manager_factory=lambda: manager)['state'], 'done')
+        probe.close.assert_called_once()
+        original.close.assert_not_called()
+        self.assertTrue(manager.closed)
+
+    def test_douyin_requires_visible_account_avatar_and_no_login_prompt(self):
+        from browser_manager import BrowserManager, PlaywrightTimeoutError
+        for avatar_visible, login_visible, expected in ((True, False, True),
+                                                        (False, False, False),
+                                                        (True, True, False)):
+            with self.subTest(avatar=avatar_visible, login=login_visible):
+                manager = BrowserManager.__new__(BrowserManager)
+                manager.check_browser_status = Mock()
+                manager.login_status_errors = {}
+                manager.shared_browser = Mock()
+                page = Mock()
+                manager.pages = {'douyin': page}
+                manager.contexts = {'douyin': Mock()}
+                avatar = page.locator.return_value.first
+                avatar.is_visible.return_value = avatar_visible
+                if not avatar_visible:
+                    avatar.wait_for.side_effect = PlaywrightTimeoutError('no avatar')
+                login = Mock()
+                login.is_visible.return_value = login_visible
+                page.get_by_text.return_value.all.return_value = [login]
+                self.assertEqual(manager.check_login_status('douyin'), expected)
+                page.goto.assert_called_once_with('https://www.douyin.com/',
+                                                 wait_until='domcontentloaded', timeout=30000)
+
+    def test_unavailable_direct_platforms_are_rejected(self):
+        for platform, link in (("wechat", "https://mp.weixin.qq.com/s/1"),
+                               ("tonghuashun", "https://www.10jqka.com.cn/1"),
+                               ("xueqiu", "https://xueqiu.com/1"),
+                               ("tencent", "https://mp.weixin.qq.com/s/1")):
+            with self.subTest(platform=platform), self.assertRaises(ValueError):
+                validate_input(dict(self.payload, platform=platform, link=link))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -90,6 +141,22 @@ class RunnerTest(unittest.TestCase):
         manager.perform_complaint = lambda *args: self.fail("must not submit")
         self.assertEqual(execute(self.payload, manager_factory=lambda: manager)["state"], "manual_required")
 
+    def test_login_check_error_is_not_reported_as_logged_out(self):
+        manager = Manager(login=False)
+        manager.login_status_message = lambda platform: "navigation timeout"
+        manager.perform_complaint = lambda *args: self.fail("must not submit")
+        result = execute(self.payload, manager_factory=lambda: manager)
+        self.assertEqual(result["errorCode"], "LOGIN_CHECK_FAILED")
+
+    def test_login_does_not_claim_success_after_enter_without_authentication(self):
+        args = SimpleNamespace(platform="weibo", user_id="123", state_dir=self.temp.name)
+        manager = Manager(login=False)
+        with patch("runner.create_manager", return_value=manager), patch("builtins.input", return_value=""), patch("runner.save_sessions") as save:
+            with self.assertRaises(RuntimeError):
+                login(args)
+            save.assert_not_called()
+        self.assertTrue(manager.closed)
+
     def test_lock_prevents_parallel_and_crash_replay(self):
         (Path(self.temp.name) / "execution.lock").write_text("existing")
         result = execute(self.payload, manager_factory=lambda: self.fail("must not start"))
@@ -139,6 +206,22 @@ class RunnerTest(unittest.TestCase):
         with patch("runner.execute_12377", return_value=dict(state="not_submitted")) as anonymous:
             self.assertEqual(execute(payload)["state"], "not_submitted")
             anonymous.assert_called_once()
+
+    def test_12377_context_uses_host_network_policy(self):
+        import os
+        from network_guard import public_url
+        payload = dict(self.payload, platform="report12377", report12377=dict(category="rumor", websiteName="Example"))
+        with patch.dict(os.environ, {"OPENCLAW_COMPLAINT_ALLOW_FAKE_IP": "1"}), patch("playwright.sync_api.sync_playwright") as sync, patch("report_12377.run_browser_flow"):
+            context = sync.return_value.__enter__.return_value.chromium.launch.return_value.new_context.return_value
+            execute_12377(payload)
+            callback = context.route.call_args.args[1]
+            route = Mock()
+            route.request.url = "https://www.12377.cn/"
+            resolver = lambda *a, **k: [(None, None, None, None, ("198.18.0.35", 443))]
+            with patch("network_guard.public_url", side_effect=lambda url, **kw: public_url(url, resolver, **kw)):
+                callback(route)
+            route.continue_.assert_called_once()
+            route.abort.assert_not_called()
 
     def test_login_saves_account_without_reporting(self):
         args = SimpleNamespace(platform="weibo", user_id="123", state_dir=self.temp.name)

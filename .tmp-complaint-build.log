@@ -1,0 +1,30 @@
+
+> openclaw@2026.4.16 build C:\Users\PC\Desktop\openclaw
+> node scripts/build-all.mjs
+
+[build-all] canvas:a2ui:bundle
+
+> openclaw@2026.4.16 canvas:a2ui:bundle C:\Users\PC\Desktop\openclaw
+> node scripts/bundle-a2ui.mjs
+
+A2UI bundle up to date; skipping.
+[build-all] tsdown
+[build-all] runtime-postbuild
+[build-all] write-npm-update-compat-sidecars
+[build-all] build-stamp
+[build-all] build:plugin-sdk:dts
+
+> openclaw@2026.4.16 build:plugin-sdk:dts C:\Users\PC\Desktop\openclaw
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[build-all] write-plugin-sdk-entry-dts
+[build-all] check-plugin-sdk-exports
+OK: All 4 required plugin-sdk exports verified.
+[build-all] canvas-a2ui-copy
+[build-all] copy-hook-metadata
+[copy-hook-metadata] Copied 4 hook metadata files.
+[build-all] copy-export-html-templates
+[copy-export-html-templates] Copied 5 export-html assets.
+[build-all] write-build-info
+[build-all] write-cli-startup-metadata
+[build-all] write-cli-compat

@@ -1,0 +1,36 @@
+
+> openclaw@2026.4.16 tsgo C:\Users\PC\Desktop\openclaw
+> node scripts/run-tsgo.mjs
+
+
+<--- Last few GCs --->
+
+
+
+#
+# Fatal JavaScript out of memory: MemoryChunk allocation failed during deserialization.
+#
+----- Native stack trace -----
+
+ 1: 00007FF64E1AEF1D node::MultiIsolatePlatform::DisposeIsolate+5341
+ 2: 00007FF64F602536 v8::base::FatalOOM+54
+ 3: 00007FF64EEA3796 v8::Function::NewInstance+390
+ 4: 00007FF64ECA3E77 v8::base::AddressSpaceReservation::AddressSpaceReservation+322071
+ 5: 00007FF64EC560CA v8::base::AddressSpaceReservation::AddressSpaceReservation+3178
+ 6: 00007FF64EC5618C v8::base::AddressSpaceReservation::AddressSpaceReservation+3372
+ 7: 00007FF64EC56A7B v8::base::AddressSpaceReservation::AddressSpaceReservation+5659
+ 8: 00007FF64EC2DCD1 v8::Platform::SystemClockTimeMillis+430689
+ 9: 00007FF64EC93B83 v8::base::AddressSpaceReservation::AddressSpaceReservation+255779
+10: 00007FF64EC938EE v8::base::AddressSpaceReservation::AddressSpaceReservation+255118
+11: 00007FF64EC926D8 v8::base::AddressSpaceReservation::AddressSpaceReservation+250488
+12: 00007FF64EC9265A v8::base::AddressSpaceReservation::AddressSpaceReservation+250362
+13: 00007FF64E859DA3 v8::internal::Version::GetSONAME+242723
+14: 00007FF64E857BEC v8::internal::Version::GetSONAME+234092
+15: 00007FF64E85D896 v8::internal::Version::GetSONAME+257814
+16: 00007FF64E8588D8 v8::internal::Version::GetSONAME+237400
+17: 00007FF64E857DCE v8::internal::Version::GetSONAME+234574
+18: 00007FF64E85D896 v8::internal::Version::GetSONAME+257814
+19: 00007FF64E8588D8 v8::internal::Version::GetSONAME+237400
+20: 00007FF64E857DCE v8::internal::Version::GetSONAME+234574
+21: 00007FF64E85D896 v8::internal::Version::GetSONAME+257814
+22: 00007FF64E8588D8 v8::internal::Version::GetSONAME+237400

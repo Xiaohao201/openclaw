@@ -1,4 +1,5 @@
 import tempfile
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -9,6 +10,47 @@ from shared_browser import (BINDING_FILE, SharedBrowserLease, SharedBrowserUnava
 
 
 class SharedBrowserTest(unittest.TestCase):
+    def test_handoff_borrows_exact_marked_page_and_preserves_it_on_close(self):
+        page, other = Mock(), Mock()
+        page.evaluate.return_value = "marker"
+        other.evaluate.return_value = None
+        self.context.pages = [other, page]
+        with patch("shared_browser.socket.create_connection", return_value=Mock()):
+            lease = SharedBrowserLease(self.playwright, self.binding, headless=True, attach_only=True)
+        self.assertIs(lease.attach_session_page("marker"), page)
+        lease.close()
+        page.close.assert_not_called()
+        other.close.assert_not_called()
+        self.context.close.assert_not_called()
+
+    def test_handoff_rejects_missing_or_ambiguous_page_without_creating_a_tab(self):
+        with patch("shared_browser.socket.create_connection", return_value=Mock()):
+            lease = SharedBrowserLease(self.playwright, self.binding, headless=True, attach_only=True)
+        try:
+            with self.assertRaises(SharedBrowserUnavailable):
+                lease.attach_session_page("marker")
+            first, second = Mock(), Mock()
+            first.evaluate.return_value = second.evaluate.return_value = "marker"
+            self.context.pages = [first, second]
+            with self.assertRaises(SharedBrowserUnavailable):
+                lease.attach_session_page("marker")
+            self.context.new_page.assert_not_called()
+        finally:
+            lease.close()
+
+    def test_handoff_never_launches_replacement_browser(self):
+        with patch("shared_browser.socket.create_connection", side_effect=ConnectionRefusedError):
+            with self.assertRaises(SharedBrowserUnavailable):
+                SharedBrowserLease(self.playwright, self.binding, headless=True, attach_only=True)
+        self.playwright.chromium.launch_persistent_context.assert_not_called()
+
+    def test_shared_browser_inherits_host_fake_ip_without_changing_binding(self):
+        with patch.dict(os.environ, {"OPENCLAW_COMPLAINT_ALLOW_FAKE_IP": "1"}), patch("shared_browser.socket.create_connection", side_effect=ConnectionRefusedError):
+            lease = SharedBrowserLease(self.playwright, self.binding, headless=True)
+            self.assertTrue(lease.allow_benchmark)
+            self.assertNotIn("allowRfc2544BenchmarkRange", self.binding)
+            lease.close()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

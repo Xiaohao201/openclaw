@@ -14,7 +14,8 @@ describe("leading-v2 report skill exposure", () => {
           registeredToolNames.push(options.name);
         }
       },
-      registerService: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
     } as unknown as OpenClawPluginApi;
 
     plugin.register(api);
@@ -37,5 +38,6 @@ describe("leading-v2 report skill exposure", () => {
     expect(registeredToolNames).toContain("topic_list");
     expect(registeredToolNames).toContain("letter_generate");
     expect(registeredToolNames).toContain("complaint_submit");
+    expect(registeredToolNames).toContain("complaint_browser");
   });
 });

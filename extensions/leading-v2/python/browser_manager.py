@@ -1,4 +1,4 @@
-from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
+from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 from config import (
     HEADLESS, PLATFORMS, UC_PLATFORMS, CHROMEDRIVER_PATH, DebugRun,
     get_base_path, MILU_PROVIDER, SELF_HEALING_ENABLED,
@@ -43,6 +43,7 @@ _ACTION_WORDS = {
 class BrowserManager:
     def __init__(self):
         self.shared_browser = None
+        self.browser_handoff = None
         self.playwright = None
         self.browser = None
         self.contexts = {}  # 存储每个平台的BrowserContext
@@ -82,7 +83,7 @@ class BrowserManager:
         if self.browser is not None:
             return
         try:
-            self.browser = self.playwright.chromium.launch(
+            self.browser = browser_session.launch_isolated_browser(self.playwright,
                 headless=HEADLESS,
                 args=list(browser_session.SHARED_BROWSER_LAUNCH_ARGS),
             )
@@ -96,14 +97,19 @@ class BrowserManager:
         from shared_browser import read_binding, SharedBrowserLease
         self._init_playwright()
         binding = read_binding(get_base_path())
+        handoff = getattr(self, "browser_handoff", None)
+        if handoff is not None and (binding is None or binding != handoff["binding"]):
+            from shared_browser import SharedBrowserUnavailable
+            raise SharedBrowserUnavailable("用户浏览器绑定已变化，不能交接到其他账号。")
         if binding is not None:
             if platform is None:
                 raise ValueError("共享浏览器每次必须指定一个平台")
             if self.shared_browser is None:
                 self.shared_browser = SharedBrowserLease(
-                    self.playwright, binding, headless=HEADLESS)
+                    self.playwright, binding, headless=HEADLESS, attach_only=handoff is not None)
             self.contexts[platform] = self.shared_browser.context
-            self.pages[platform] = self.shared_browser.new_page()
+            self.pages[platform] = (self.shared_browser.attach_session_page(handoff["marker"])
+                                    if handoff is not None else self.shared_browser.new_page())
             self.drivers.add(platform)
             return
         platforms_to_init = [platform] if platform else PLATFORMS
@@ -204,10 +210,17 @@ class BrowserManager:
                 if(page.get_by_role("button", name="登录").count() == 0):
                     flag = True
             elif platform == 'douyin':
-                # 抖音登录检查示例：查找个人中心元素
-                # page.goto("https://www.douyin.com")
-                # if(page.get_by_role("button", name="登录").count() == 0):
-                flag = True
+                page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
+                # Anonymous pages also expose the "我的" link. Require the visible
+                # account avatar within that link, not merely a missing login button.
+                avatar = page.locator('a[href*="/user/self"] img').first
+                try:
+                    avatar.wait_for(state="visible", timeout=10000)
+                except PlaywrightTimeoutError:
+                    flag = False
+                else:
+                    flag = avatar.is_visible() and not any(
+                        item.is_visible() for item in page.get_by_text("登录", exact=True).all())
             elif platform == 'baidu':
                 # 百度登录检查示例：查找个人中心元素
                 page.goto("https://www.baidu.com")

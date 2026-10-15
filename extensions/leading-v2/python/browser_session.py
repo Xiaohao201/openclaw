@@ -5,6 +5,21 @@ import json
 import os
 
 
+def launch_isolated_browser(playwright, *, headless, args=None):
+    """Use bundled Chromium when present, otherwise installed Chrome with a new profile."""
+    executable = playwright.chromium.executable_path
+    options = dict(headless=headless, args=list(args or ()))
+    if isinstance(executable, str) and os.path.isfile(executable):
+        # Explicitly use the full binary; a separate headless-shell download is optional.
+        try:
+            return playwright.chromium.launch(**options, executable_path=executable)
+        except Exception:
+            # A partial browser installation must not prevent use of installed Chrome.
+            pass
+    options["channel"] = "chrome"
+    return playwright.chromium.launch(**options)
+
+
 PERSISTENT_CONTEXT_PLATFORMS = frozenset({"tonghuashun", "xueqiu"})
 PERSISTENT_BROWSER_LAUNCH_ARGS = (
     "--log-level=3",

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { copyPluginRuntimeAssets } from "./copy-plugin-runtime-assets.mjs";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "./lib/bundled-plugin-build-entries.mjs";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import {
@@ -302,6 +303,7 @@ export function copyBundledPluginMetadata(params = {}) {
       };
     }
 
+    copyPluginRuntimeAssets({ pluginDir, distPluginDir, packageJson });
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
   }
 

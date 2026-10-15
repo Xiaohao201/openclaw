@@ -4,6 +4,7 @@ import type { BackendConfig } from "../client/types.js";
 import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
 import type { LocalComplaintItem, LocalConfig } from "./complaint-local-contract.js";
 import { submitLocalBatch } from "./complaint-local.js";
+import type { BrowserHandoff } from "./complaint-session-handoff.js";
 
 export function batchReferences(batch: ComplaintBatch) {
   return {
@@ -26,7 +27,7 @@ export async function submitComplaintBatch(
     | {
         store: ComplaintBatchStore;
         userId: string;
-        local: { items: LocalComplaintItem[]; config: LocalConfig };
+        local: { items: LocalComplaintItem[]; config: LocalConfig; browserLease?: { handoff: BrowserHandoff; release: () => void } };
       },
 ) {
   if ("local" in params) {
