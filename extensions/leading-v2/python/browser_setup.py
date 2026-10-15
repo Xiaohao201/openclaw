@@ -11,6 +11,7 @@ import time
 
 from config import ALL_PLATFORMS
 from shared_browser import validate_handoff
+from runtime_diagnostics import runtime_failure
 
 LOGIN_URLS = {
     "baidu": "https://www.baidu.com", "bilibili": "https://www.bilibili.com",
@@ -32,9 +33,6 @@ def setup(data, commands, emit, manager_factory=None):
     # Login must borrow the same OpenClaw page as reporting. Missing or stale
     # handoffs must never trigger BrowserManager's legacy standalone fallback.
     handoff = validate_handoff(data.get("browserHandoff"))
-    if manager_factory is None:
-        from browser_manager import BrowserManager
-        manager_factory = BrowserManager
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = directory / "execution.lock"
     try:
@@ -52,6 +50,8 @@ def setup(data, commands, emit, manager_factory=None):
         # browser_manager copies HEADLESS on import; this process only serves login.
         import browser_manager
         browser_manager.HEADLESS = False
+        if manager_factory is None:
+            manager_factory = browser_manager.BrowserManager
         manager = manager_factory()
         manager.browser_handoff = handoff
         manager.init_browsers(platform)
@@ -115,8 +115,9 @@ def main():
         threading.Thread(target=read_commands, daemon=True).start()
         with contextlib.redirect_stdout(sys.stderr):
             setup(data, commands, emit)
-    except Exception:
-        emit(dict(state="failed", message="无法打开或保存登录会话，请检查浏览器绑定、连接授权和执行机网络；未提交举报。"))
+    except Exception as error:
+        failure = runtime_failure(error, "login_setup")
+        emit(dict(state="failed", message=failure["message"], errorCode=failure["errorCode"]))
 
 
 if __name__ == "__main__":

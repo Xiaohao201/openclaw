@@ -215,4 +215,23 @@ describe("user-scoped complaint browser", () => {
       target: "host",
     });
   });
+
+  it("preserves the worker's specific dependency error in results and status", async () => {
+    await observePage();
+    await writeFile(
+      join(root, "browser_setup.py"),
+      [
+        "import json,sys",
+        "json.loads(sys.stdin.readline())",
+        "print(json.dumps(dict(state='failed',message='Missing playwright in fixture Python',errorCode='RUNTIME_DEPENDENCY_MISSING')),flush=True)",
+      ].join("\n"),
+    );
+    const tool = createComplaintBrowserToolFactory(api)(firstContext)!;
+    expect(
+      details(await tool.execute("login", { action: "login", platform: "weibo", confirmed: true })),
+    ).toMatchObject({ state: "failed", errorCode: "RUNTIME_DEPENDENCY_MISSING" });
+    expect(details(await tool.execute("status", { action: "status" })).session).toMatchObject({
+      errorCode: "RUNTIME_DEPENDENCY_MISSING",
+    });
+  });
 });

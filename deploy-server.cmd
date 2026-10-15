@@ -6,7 +6,7 @@ set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
 
 echo [openclaw-deploy] Pulling origin/v1.
-git pull origin v1
+call git pull origin v1
 if errorlevel 1 goto :failed
 
 echo [openclaw-deploy] Installing dependencies.
@@ -20,6 +20,24 @@ if errorlevel 1 goto :failed
 echo [openclaw-deploy] Building the Control UI.
 call pnpm ui:build
 if errorlevel 1 goto :failed
+
+echo [openclaw-deploy] Preparing the complaint Python runtime.
+call python extensions\leading-v2\python\setup_runtime.py
+if errorlevel 1 goto :failed
+
+if exist "dist\extensions\leading-v2\openclaw.plugin.json" (
+  call node extensions\leading-v2\stage-python.mjs dist\extensions\leading-v2
+  if errorlevel 1 goto :failed
+  call python extensions\leading-v2\python\setup_runtime.py --runtime-dir dist\extensions\leading-v2\python
+  if errorlevel 1 goto :failed
+)
+
+if exist "dist-runtime\extensions\leading-v2\openclaw.plugin.json" (
+  call node extensions\leading-v2\stage-python.mjs dist-runtime\extensions\leading-v2
+  if errorlevel 1 goto :failed
+  call python extensions\leading-v2\python\setup_runtime.py --runtime-dir dist-runtime\extensions\leading-v2\python
+  if errorlevel 1 goto :failed
+)
 
 echo [openclaw-deploy] Restarting the Gateway.
 call pnpm openclaw gateway restart

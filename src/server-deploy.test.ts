@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -12,6 +12,7 @@ type Sandbox = {
   binDir: string;
   logPath: string;
   runDir: string;
+  launcher: string;
 };
 
 async function createSandbox(): Promise<Sandbox> {
@@ -22,6 +23,13 @@ async function createSandbox(): Promise<Sandbox> {
   await mkdir(binDir, { recursive: true });
   await mkdir(runDir, { recursive: true });
   await writeFile(logPath, "");
+  const launcher = join(root, "deploy-server.cmd");
+  await writeFile(launcher, await readFile(join(repoRoot, "deploy-server.cmd")));
+  for (const tree of ["dist", "dist-runtime"]) {
+    const plugin = join(root, tree, "extensions", "leading-v2");
+    await mkdir(plugin, { recursive: true });
+    await writeFile(join(plugin, "openclaw.plugin.json"), "{}");
+  }
   await writeFile(
     join(binDir, "git.cmd"),
     [
@@ -39,16 +47,31 @@ async function createSandbox(): Promise<Sandbox> {
       'echo %CD%^|%*>>"%DEPLOY_TEST_LOG%"',
       'if "%DEPLOY_TEST_FAIL_COMMAND%"=="install" if "%~1"=="install" exit /b 22',
       'if "%DEPLOY_TEST_FAIL_COMMAND%"=="build" if "%~1"=="build" exit /b 23',
-      'if "%DEPLOY_TEST_FAIL_COMMAND%"=="stop" if "%~1"=="openclaw" if "%~2"=="gateway" if "%~3"=="stop" exit /b 24',
+      'if "%DEPLOY_TEST_FAIL_COMMAND%"=="ui" if "%~1"=="ui:build" exit /b 24',
       "exit /b 0",
       "",
     ].join("\r\n"),
   );
-  return { binDir, logPath, runDir };
+  for (const command of ["node", "python"]) {
+    await writeFile(
+      join(binDir, `${command}.cmd`),
+      [
+        "@echo off",
+        `echo %CD%^|${command} %*>>"%DEPLOY_TEST_LOG%"`,
+        `if "%DEPLOY_TEST_FAIL_COMMAND%"=="${command}" exit /b 25`,
+        "exit /b 0",
+        "",
+      ].join("\r\n"),
+    );
+  }
+  return { binDir, logPath, runDir, launcher };
 }
 
-function runDeploy(sandbox: Sandbox, failCommand?: "pull" | "install" | "build" | "stop") {
-  return spawnSync("cmd.exe", ["/d", "/c", join(repoRoot, "deploy-server.cmd")], {
+function runDeploy(
+  sandbox: Sandbox,
+  failCommand?: "pull" | "install" | "build" | "ui" | "node" | "python",
+) {
+  return spawnSync("cmd.exe", ["/d", "/c", sandbox.launcher], {
     cwd: sandbox.runDir,
     env: {
       ...process.env,
@@ -78,44 +101,51 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
   afterAll(async () => {
     await sandboxTracker.cleanup();
   });
+  beforeEach(async () => {
+    await writeFile(sandbox.logPath, "");
+  });
 
-  it("pulls, installs, builds, stops the old gateway, and runs the new gateway in the foreground", async () => {
+  it("prepares Python for source and built plugins before restarting the gateway", async () => {
     const result = runDeploy(sandbox);
     expect(result.status, result.stderr).toBe(0);
     expect(await readCommands(sandbox)).toEqual([
       "pull origin v1",
       "install",
       "build",
-      "openclaw gateway stop",
-      "openclaw gateway",
+      "ui:build",
+      "python extensions\\leading-v2\\python\\setup_runtime.py",
+      "node extensions\\leading-v2\\stage-python.mjs dist\\extensions\\leading-v2",
+      "python extensions\\leading-v2\\python\\setup_runtime.py --runtime-dir dist\\extensions\\leading-v2\\python",
+      "node extensions\\leading-v2\\stage-python.mjs dist-runtime\\extensions\\leading-v2",
+      "python extensions\\leading-v2\\python\\setup_runtime.py --runtime-dir dist-runtime\\extensions\\leading-v2\\python",
+      "openclaw gateway restart",
     ]);
   });
 
   it("does not stop or start the gateway when the build fails", async () => {
     await writeFile(sandbox.logPath, "");
     const result = runDeploy(sandbox, "build");
-    expect(result.status).toBe(23);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(23);
     expect(await readCommands(sandbox)).toEqual(["pull origin v1", "install", "build"]);
   });
 
-  it("does not start a new gateway when stopping the old one fails", async () => {
-    await writeFile(sandbox.logPath, "");
-    const result = runDeploy(sandbox, "stop");
-    expect(result.status).toBe(24);
-    expect(await readCommands(sandbox)).toEqual([
-      "pull origin v1",
-      "install",
-      "build",
-      "openclaw gateway stop",
-    ]);
-  });
+  it.each(["node", "python"] as const)(
+    "does not restart the gateway after %s runtime preparation fails",
+    async (command) => {
+      const result = runDeploy(sandbox, command);
+      expect(result.status).toBe(25);
+      const commands = await readCommands(sandbox);
+      expect(commands.at(-1)).toMatch(new RegExp(`^${command} `));
+      expect(commands).not.toContain("openclaw gateway restart");
+    },
+  );
 
   it("uses UTF-8 and invokes pnpm directly instead of a managed-service script", async () => {
     const launcher = await readFile(join(repoRoot, "deploy-server.cmd"), "utf8");
     expect(launcher).toMatch(/chcp\s+65001\s*>nul/iu);
     expect(launcher).toContain('set "PYTHONUTF8=1"');
     expect(launcher).not.toContain("server-deploy.ps1");
-    expect(launcher).toContain("call pnpm openclaw gateway stop");
-    expect(launcher).toContain("call pnpm openclaw gateway");
+    expect(launcher).toContain("call pnpm openclaw gateway restart");
+    expect(launcher).not.toContain("playwright install chromium");
   });
 });

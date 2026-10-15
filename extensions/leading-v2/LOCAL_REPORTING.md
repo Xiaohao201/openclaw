@@ -25,9 +25,7 @@ check the batch before recovery, and do not resubmit an uncertain report.
 Use Python 3.10 or newer on the OpenClaw host. From the repository root:
 
 ```powershell
-python -m venv extensions/leading-v2/.venv
-extensions/leading-v2/.venv/Scripts/python -m pip install -r extensions/leading-v2/python/requirements.txt
-extensions/leading-v2/.venv/Scripts/python -m playwright install chromium
+python extensions/leading-v2/python/setup_runtime.py
 ```
 
 Set `plugins.entries.leading-v2.config.complaintExecution`:
@@ -35,13 +33,20 @@ Set `plugins.entries.leading-v2.config.complaintExecution`:
 ```json
 {
   "mode": "local",
-  "python": "C:/deployment/openclaw/extensions/leading-v2/.venv/Scripts/python.exe",
   "headless": false,
   "timeoutMs": 900000
 }
 ```
 
-Use your actual interpreter path. `python` is an executable, not a shell command.
+The setup command creates the plugin's `.venv`, installs the pinned requirements,
+and checks all executor imports plus the Playwright driver. It does not install or
+launch a second browser: conversation handoffs use OpenClaw's running Chrome.
+When `python` is omitted, login and reporting both select `.venv` beside the actual
+runtime directory; without that environment they retain the legacy PATH default.
+An explicit `python` executable always takes precedence. Install requirements in
+that interpreter separately and run the check below if you manage it yourself.
+
+`python` is an executable, not a shell command.
 `runtimeDir` optionally points to an absolute directory containing the bundled
 `runner.py` and sibling modules. By default it is the registered plugin's `python`
 directory. No sibling checkout or original deployment configuration is required.
@@ -51,11 +56,28 @@ each repository build (the generic TypeScript bundler does not copy Python):
 
 ```powershell
 node extensions/leading-v2/stage-python.mjs dist/extensions/leading-v2
+python extensions/leading-v2/python/setup_runtime.py --runtime-dir dist/extensions/leading-v2/python
 ```
 
 Alternatively deploy the source plugin directory, or set `runtimeDir` to its
 installed Python directory. The staging command copies only Python/text assets;
 it does not copy virtual environments, browser profiles, or credentials.
+For `dist-runtime` deployments, use the same two commands with `dist-runtime`
+instead of `dist`. The Windows `deploy-server.cmd` prepares all available source,
+`dist`, and `dist-runtime` plugin trees and stops before restarting the Gateway if
+installation or verification fails.
+
+Diagnose the exact interpreter used by the deployed plugin, without opening a
+platform page or submitting a report:
+
+```powershell
+extensions/leading-v2/.venv/Scripts/python extensions/leading-v2/python/runner.py --check-runtime
+```
+
+Substitute the deployed runtime and interpreter paths. Missing modules now return
+`RUNTIME_DEPENDENCY_MISSING` with the module name and interpreter. Other startup
+errors identify their phase and exception type without exposing exception payloads.
+A generic runtime failure does not establish that Chrome needs installation.
 
 ## Accounts and execution
 

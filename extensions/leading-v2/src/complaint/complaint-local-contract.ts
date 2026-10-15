@@ -1,4 +1,5 @@
-import { isAbsolute, join } from "node:path";
+import { statSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { OpenClawConfig } from "../../api.js";
@@ -197,6 +198,21 @@ export function resolveLocalConfig(
   const block = config.complaintExecution as Record<string, unknown> | undefined;
   if (rootDir && block?.runtimeDir === undefined) {
     parsed.runtimeDir = join(rootDir, "python");
+  }
+  if (block?.python === undefined) {
+    // Deployment installs this environment next to the actual runtime assets.
+    const managedPython = join(
+      dirname(parsed.runtimeDir),
+      ".venv",
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+    );
+    try {
+      if (statSync(managedPython).isFile()) {
+        parsed.python = managedPython;
+      }
+    } catch {
+      // Preserve the legacy PATH default for explicitly managed environments.
+    }
   }
   return {
     ...parsed,
