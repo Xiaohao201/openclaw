@@ -20,15 +20,11 @@ export async function stopLocalComplaints() {
   await Promise.allSettled(jobs.map((job) => job.done));
 }
 
-export async function submitLocalBatch(params: {
-  store: ComplaintBatchStore;
-  userId: string;
-  items: LocalComplaintItem[];
-  config: LocalConfig;
-  run?: RunLocalComplaint;
-  browserLease?: { handoff: BrowserHandoff; release: () => void };
-}) {
-  const { store, userId, items, config } = params;
+export async function createLocalBatch(
+  store: ComplaintBatchStore,
+  userId: string,
+  items: LocalComplaintItem[],
+) {
   const batch = await store.create(
     userId,
     items.map((item) => item.link),
@@ -38,6 +34,31 @@ export async function submitLocalBatch(params: {
     entry.execution = { state: "pending", message: "本地等待执行", offline: null };
   }
   await store.save(batch);
+  return batch;
+}
+
+export async function submitLocalBatch(params: {
+  store: ComplaintBatchStore;
+  userId: string;
+  items: LocalComplaintItem[];
+  config: LocalConfig;
+  run?: RunLocalComplaint;
+  browserLease?: { handoff: BrowserHandoff; release: () => void };
+  batch?: ComplaintBatch;
+  persistTask?: (batch: ComplaintBatch) => Promise<void>;
+}) {
+  const { store, userId, items, config } = params;
+  const batch = params.batch ?? (await createLocalBatch(store, userId, items));
+  const checkpoint = async () => {
+    await store.save(batch);
+    try {
+      await params.persistTask?.(batch);
+    } catch (error) {
+      batch.persistenceError = "TASK_RECORD_SYNC_FAILED";
+      await store.save(batch);
+      throw error;
+    }
+  };
   const controller = new AbortController();
   const run = params.run ?? runLocalComplaint;
   const execute = async () => {
@@ -54,7 +75,7 @@ export async function submitLocalBatch(params: {
         offline: null,
       };
       // No execution until the inflight checkpoint is durable.
-      await store.save(batch);
+      await checkpoint();
       let outcome: LocalOutcome;
       try {
         outcome = await run({
@@ -79,7 +100,7 @@ export async function submitLocalBatch(params: {
           : outcome.state === "unknown"
             ? "unknown"
             : "rejected";
-      await store.save(batch);
+      await checkpoint();
       if (outcome.state === "unknown" || outcome.state === "manual_required") {
         for (const remaining of batch.entries.slice(index + 1)) {
           remaining.execution = {
@@ -88,7 +109,7 @@ export async function submitLocalBatch(params: {
             offline: null,
           };
         }
-        await store.save(batch);
+        await checkpoint();
         break;
       }
     }
@@ -108,6 +129,7 @@ export async function submitLocalBatch(params: {
     submitted: false,
     executor: "local",
     batchId: batch.batchId,
+    taskRefs: batch.entries.map(({ link, taskId }) => ({ link, taskId })),
     queuedLinks: items.map((item) => item.link),
     manualBrowserActionRequired: items.some((item) => Boolean(item.report12377)),
     message: "举报批次已保存，将由本地 Python 执行；尚未确认提交到平台。",
@@ -129,7 +151,7 @@ export function queryLocalBatch(batch: ComplaintBatch) {
           : execution.state;
     return {
       link: entry.link,
-      taskId: null,
+      taskId: entry.taskId,
       acceptance: entry.acceptance,
       state,
       submissionStatus: state === "done" ? "Done" : null,
@@ -150,6 +172,7 @@ export function queryLocalBatch(batch: ComplaintBatch) {
     executor: "local",
     batchId: batch.batchId,
     createdAt: batch.createdAt,
+    ...(batch.persistenceError ? { persistenceError: batch.persistenceError } : {}),
     summary: {
       total: links.length,
       submitted: links.filter((e) => e.state === "done").length,

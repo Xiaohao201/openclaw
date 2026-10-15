@@ -53,11 +53,11 @@ export function createComplaintTaxonomyToolFactory(
           return jsonResult({
             success: true,
             executor: "local",
-            platforms: [...Object.keys(localPlatforms), "report12377"].toSorted(),
+            platforms: Object.keys(localPlatforms).toSorted(),
             links: (links ?? []).map((link) => ({ link, platform: platformForLink(link) })),
             unsupportedLinks: (links ?? []).filter((link) => !platformForLink(link)),
             instruction:
-              "本地模式从浏览器实际选项匹配单条举报事由，无后端分类版本。可传 categories 平台分类文字，不传 classifications。支持平台不保证当前页面可执行；登录/验证可能需人工处理。12377须明确传 report12377，官网匿名流程由用户完成验证码及最终提交。unsupportedLinks 仅指原平台直接举报路径。",
+              "本地模式从浏览器实际选项匹配单条举报事由，无后端分类版本。可传 categories 平台分类文字，不传 classifications。支持平台不保证当前页面可执行；登录/验证可能需人工处理。原平台登录、浏览器或取证失败时不得推荐或切换举报渠道。12377不属于原平台目录，仅在用户明确指定时使用独立人工流程。unsupportedLinks 仅指原平台直接举报路径。",
           });
         }
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_taxonomy");

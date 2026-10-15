@@ -367,6 +367,33 @@ export function createComplaintTaskStatusToolFactory(
           }
         }
 
+        // Local audit tasks have no legacy queue/detail rows. Resolve their numeric IDs
+        // through the owning user's batch before falling back to historical backend tasks.
+        if (
+          rawParams.taskId !== undefined &&
+          resolveLocalConfig(api.pluginConfig ?? {}).mode === "local"
+        ) {
+          const taskId = Number(rawParams.taskId);
+          if (!Number.isSafeInteger(taskId) || taskId <= 0) {
+            return jsonResult({ success: false, error: "taskId 必须是大于 0 的整数。" });
+          }
+          try {
+            const store = new ComplaintBatchStore(() => api.runtime.state.resolveStateDir());
+            const batch = (await store.list(userId)).find(
+              (candidate) =>
+                candidate.executor === "local" &&
+                candidate.entries.some((entry) => entry.taskId === taskId),
+            );
+            if (batch) {
+              return jsonResult(queryLocalBatch(batch));
+            }
+          } catch {
+            return jsonResult({
+              success: false,
+              error: "无法读取本地任务记录，不得推断提交结果或重新提交。",
+            });
+          }
+        }
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_task_status");
         if ("error" in keyed) {
           return keyed.error;

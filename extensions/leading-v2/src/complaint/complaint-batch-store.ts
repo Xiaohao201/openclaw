@@ -17,6 +17,7 @@ const batchSchema = z.object({
   userId: z.string().min(1),
   createdAt: z.string(),
   executor: z.literal("local").optional(),
+  persistenceError: z.literal("TASK_RECORD_SYNC_FAILED").optional(),
   entries: z.array(entrySchema).min(1).max(1000),
 });
 export type ComplaintBatch = z.infer<typeof batchSchema>;
