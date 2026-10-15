@@ -51,19 +51,25 @@ that interpreter separately and run the check below if you manage it yourself.
 `runner.py` and sibling modules. By default it is the registered plugin's `python`
 directory. No sibling checkout or original deployment configuration is required.
 
-For a **dist-only repository deployment**, stage the plugin's Python assets after
-each repository build (the generic TypeScript bundler does not copy Python):
+The standard `pnpm build` copies Python assets declared in this plugin's
+`package.json` (`openclaw.build.runtimeAssets`) into `dist` and `dist-runtime`.
+Every new production Python module must be added there, including modules imported
+before the executor's main function. `test_packaged_runtime.py` verifies both
+entrypoints from only those declared files, with no access to source modules.
+
+For a **dist-only repository deployment**, install dependencies beside the built
+runtime after building:
 
 ```powershell
-node extensions/leading-v2/stage-python.mjs dist/extensions/leading-v2
 python extensions/leading-v2/python/setup_runtime.py --runtime-dir dist/extensions/leading-v2/python
 ```
 
 Alternatively deploy the source plugin directory, or set `runtimeDir` to its
-installed Python directory. The staging command copies only Python/text assets;
-it does not copy virtual environments, browser profiles, or credentials.
-For `dist-runtime` deployments, use the same two commands with `dist-runtime`
-instead of `dist`. The Windows `deploy-server.cmd` prepares all available source,
+installed Python directory. For a custom build that skips the standard postbuild,
+`node extensions/leading-v2/stage-python.mjs dist/extensions/leading-v2` manually
+copies Python/text assets without virtual environments, browser profiles, or
+credentials. For `dist-runtime` deployments, use the same setup command with
+`dist-runtime` instead of `dist`. The Windows `deploy-server.cmd` prepares all available source,
 `dist`, and `dist-runtime` plugin trees and stops before restarting the Gateway if
 installation or verification fails.
 
