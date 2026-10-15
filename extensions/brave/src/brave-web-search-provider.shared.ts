@@ -5,14 +5,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 
 export type BraveConfig = {
-  mode?: string;
   cacheDb?: unknown;
-};
-
-export type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
-export type BraveLlmContextResponse = {
-  grounding: { generic?: BraveLlmContextResult[] };
-  sources?: { url?: string; hostname?: string; date?: string }[];
 };
 
 const BRAVE_COUNTRY_CODES = new Set([
@@ -171,10 +164,6 @@ export function resolveBraveConfig(searchConfig?: Record<string, unknown>): Brav
   return brave && typeof brave === "object" && !Array.isArray(brave) ? (brave as BraveConfig) : {};
 }
 
-export function resolveBraveMode(brave?: BraveConfig): "web" | "llm-context" {
-  return brave?.mode === "llm-context" ? "llm-context" : "web";
-}
-
 export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: string }): {
   search_lang?: string;
   ui_lang?: string;
@@ -201,31 +190,6 @@ export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_
   }
 
   return { search_lang, ui_lang };
-}
-
-function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
-export function mapBraveLlmContextResults(
-  data: BraveLlmContextResponse,
-): { url: string; title: string; snippets: string[]; siteName?: string }[] {
-  const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
-  return genericResults.map((entry) => ({
-    url: entry.url ?? "",
-    title: entry.title ?? "",
-    snippets: (entry.snippets ?? []).filter(
-      (snippet) => typeof snippet === "string" && snippet.length > 0,
-    ),
-    siteName: resolveSiteName(entry.url) || undefined,
-  }));
 }
 
 export function createBraveSchema() {

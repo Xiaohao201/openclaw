@@ -12,7 +12,7 @@
     },
     "webSearch.mode": {
       "label": "Brave Search Mode",
-      "help": "Brave Search mode: web or llm-context."
+      "help": "Brave Search mode: web."
     },
     "webSearch.cacheDb.password": {
       "label": "Web-search cache DB password",
@@ -39,7 +39,7 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["web", "llm-context"]
+            "enum": ["web"]
           },
           "cacheDb": {
             "type": "object",

@@ -26,7 +26,7 @@ OpenClaw supports Brave Search API as a `web_search` provider.
         config: {
           webSearch: {
             apiKey: "BRAVE_API_KEY_HERE",
-            mode: "web", // or "llm-context"
+            mode: "web",
           },
         },
       },
@@ -47,10 +47,7 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 Provider-specific Brave search settings now live under `plugins.entries.brave.config.webSearch.*`.
 Legacy `tools.web.search.apiKey` still loads through the compatibility shim, but it is no longer the canonical config path.
 
-`webSearch.mode` controls the Brave transport:
-
-- `web` (default): normal Brave web search with titles, URLs, and snippets
-- `llm-context`: Brave LLM Context API with pre-extracted text chunks and sources for grounding
+Brave uses web search with titles, URLs, and snippets. The only supported `webSearch.mode` is `web`.
 
 ## Tool parameters
 
@@ -95,8 +92,6 @@ await web_search({
 - OpenClaw uses the Brave **Search** plan. If you have a legacy subscription (e.g. the original Free plan with 2,000 queries/month), it remains valid but does not include newer features like LLM Context or higher rate limits.
 - Each Brave plan includes **\$5/month in free credit** (renewing). The Search plan costs \$5 per 1,000 requests, so the credit covers 1,000 queries/month. Set your usage limit in the Brave dashboard to avoid unexpected charges. See the [Brave API portal](https://brave.com/search/api/) for current plans.
 - The Search plan includes the LLM Context endpoint and AI inference rights. Storing results to train or tune models requires a plan with explicit storage rights. See the Brave [Terms of Service](https://api-dashboard.search.brave.com/terms-of-service).
-- `llm-context` mode returns grounded source entries instead of the normal web-search snippet shape.
-- `llm-context` mode does not support `ui_lang`, `freshness`, `date_after`, or `date_before`.
 - `ui_lang` must include a region subtag like `en-US`.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
