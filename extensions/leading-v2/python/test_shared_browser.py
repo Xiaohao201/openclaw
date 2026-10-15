@@ -12,6 +12,8 @@ from shared_browser import (BINDING_FILE, SharedBrowserLease, SharedBrowserUnava
 class SharedBrowserTest(unittest.TestCase):
     def test_handoff_borrows_exact_marked_page_and_preserves_it_on_close(self):
         page, other = Mock(), Mock()
+        # Root tabs have no opener; a bare Mock creates an endless parent chain.
+        page.opener.return_value = other.opener.return_value = None
         page.evaluate.return_value = "marker"
         other.evaluate.return_value = None
         self.context.pages = [other, page]
@@ -30,6 +32,7 @@ class SharedBrowserTest(unittest.TestCase):
             with self.assertRaises(SharedBrowserUnavailable):
                 lease.attach_session_page("marker")
             first, second = Mock(), Mock()
+            first.opener.return_value = second.opener.return_value = None
             first.evaluate.return_value = second.evaluate.return_value = "marker"
             self.context.pages = [first, second]
             with self.assertRaises(SharedBrowserUnavailable):

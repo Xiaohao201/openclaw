@@ -30,16 +30,55 @@ const request = (links = ["https://weibo.com/1/2"]) => ({
 });
 
 describe("direct local reporting", () => {
+  it.each([
+    ["baidu", "https://baijiahao.baidu.com/s?id=123456"],
+    ["bilibili", "https://www.bilibili.com/video/BV1testfixture"],
+    ["douyin", "https://www.douyin.com/video/1234567890123456789"],
+    ["eastmoney", "https://finance.eastmoney.com/a/123456.html"],
+    ["futu", "https://q.futunn.com/feed/123456789012345"],
+    ["kuaishou", "https://www.kuaishou.com/short-video/test-fixture"],
+    ["netease", "https://www.163.com/dy/article/TESTFIXTURE.html"],
+    ["sina", "https://news.sina.com.cn/c/2026-01-01/doc-imtest123456.shtml"],
+    ["sohu", "https://www.sohu.com/a/123456_654321"],
+    ["tencent", "https://news.qq.com/rain/a/TESTFIXTURE"],
+    ["tiantianfund", "https://fund.eastmoney.com/ba/news,of000001,123456.html"],
+    ["toutiao", "https://www.toutiao.com/article/123456/"],
+    ["weibo", "https://weibo.com/123456/testfixture"],
+    ["yidianzixun", "https://www.yidianzixun.com/article/TESTFIXTURE"],
+    ["zhihu", "https://www.zhihu.com/question/123/answer/456"],
+  ])("routes and persists a simulated %s report", async (platform, link) => {
+    const run = vi.fn().mockResolvedValue({
+      state: "done",
+      message: "Offline fixture receipt",
+      offline: null,
+    });
+    const result = await submitLocalBatch({
+      store,
+      userId: "offline-platform-test",
+      items: parseLocalRequest(request([link])),
+      config: resolveLocalConfig({}),
+      run,
+    });
+    expect(result.submitted).toBe(false);
+    await waitForLocalBatch(result.batchId);
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ item: expect.objectContaining({ platform, link, reason }) }),
+    );
+    const batch = await store.get("offline-platform-test", result.batchId);
+    expect(queryLocalBatch(batch!).links).toEqual([
+      expect.objectContaining({ link, state: "done", submissionStatus: "Done" }),
+    ]);
+    expect(await store.get("other-user", result.batchId)).toBeNull();
+  });
+
   it("marks remaining links stopped after a manual intervention, including older pending batches", async () => {
     const links = ["https://weibo.com/1", "https://weibo.com/2"];
-    const run = vi
-      .fn()
-      .mockResolvedValue({
-        state: "manual_required",
-        message: "Login required",
-        offline: null,
-        errorCode: "LOGIN_REQUIRED",
-      });
+    const run = vi.fn().mockResolvedValue({
+      state: "manual_required",
+      message: "Login required",
+      offline: null,
+      errorCode: "LOGIN_REQUIRED",
+    });
     const result = await submitLocalBatch({
       store,
       userId: "1",

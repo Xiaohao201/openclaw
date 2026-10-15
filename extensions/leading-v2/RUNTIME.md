@@ -1,5 +1,20 @@
 # Local complaint runtime
 
+## Local debug polling
+
+`pnpm suheng:debug` defaults `OPENCLAW_LEADING_V2_BACKGROUND_POLLING` to `0` for
+the child Gateway process. Leading V2 then starts neither the scheduled-task loop
+nor the completion-notification polling loop, even if inherited configuration
+enables notifications. Interactive tools, including manual status queries and
+schedule management, remain available. Production configuration files are unchanged.
+
+Set `OPENCLAW_LEADING_V2_BACKGROUND_POLLING=1` before starting the debug command
+to explicitly enable background polling; `notify.enabled=false` still disables
+completion notifications. Normal launches without this environment variable retain
+their existing behavior. Rebuild with `pnpm build` after changing plugin code:
+the debug command runs built artifacts and only builds automatically when they
+are missing.
+
 ## Network policy
 
 The host's explicit `browser.ssrfPolicy.allowRfc2544BenchmarkRange` setting is
@@ -12,6 +27,24 @@ arguments cannot enable this exception. An existing operator-approved binding's
 narrow exception remains supported.
 
 ## Login from OpenClaw
+
+In a `rabbitmq-<userId>` chat, ordinary `browser` calls automatically prepare an
+OpenClaw-managed profile for that user. Start with `status`, `start`, or `open`;
+no manual binding or complaint confirmation is required just to open a URL. Omit
+`profile` (or use the default `openclaw` alias) to select the user's own profile.
+Existing administrator bindings continue to select their approved account.
+
+The per-user profile and CDP port reservations are persisted in
+`STATE_DIR/leading-v2-browser-profiles.json`. They are restored into the active
+browser configuration after a debug restart, preserving profile directories and
+login state. Corrupt bindings or conflicting profile/port assignments fail closed.
+
+After `browser open`, subsequent page operations without a `targetId` use the
+page observed in that conversation. They do not fall back to another conversation's
+last active tab. Only a confirmed complaint acquires the recorded target and its
+fresh page marker for the report executor; merely opening a page does not submit
+a complaint. Account changes, expired selections, and a busy report browser
+require the user to revisit the page before a new handoff.
 
 Use `complaint_browser` in a `rabbitmq-<userId>` chat:
 

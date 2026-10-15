@@ -113,7 +113,8 @@ export async function browserStart(baseUrl?: string, opts?: { profile?: string }
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    // A fresh Chrome user-data directory can take longer than 15 seconds to initialize.
+    timeoutMs: 60_000,
   });
 }
 

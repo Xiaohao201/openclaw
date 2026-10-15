@@ -6,9 +6,38 @@ const b = { agentId: "rabbitmq-2005", sessionKey: "agent:rabbitmq-2005:chat:b", 
 const marker = "12345678-1234-1234-1234-123456789abc";
 const result = { details: { targetId: "7", sessionHandoff: { version: 1, marker } } };
 const params = { action: "snapshot", target: "host", targetId: "7" };
-const make = () => new SessionBrowserHandoffs(async () => ({ profile: "user", binding: { version: 2, profileDir: "fixture" } }));
+const make = () =>
+  new SessionBrowserHandoffs(async () => ({
+    profile: "user",
+    binding: { version: 2, profileDir: "fixture" },
+  }));
 
 describe("conversation browser handoff", () => {
+  it("prepares the user's browser before open and pins later calls to this session's page", async () => {
+    const registry = make();
+    await expect(registry.before(a, { action: "status" })).resolves.toEqual({
+      action: "status",
+      target: "host",
+      profile: "user",
+    });
+    await expect(
+      registry.before(a, { action: "open", targetUrl: "https://example.com" }),
+    ).resolves.toMatchObject({ profile: "user" });
+    await expect(registry.acquire(a)).rejects.toThrow("请先用 browser");
+    await expect(registry.before(a, { action: "snapshot" })).rejects.toThrow("先用 browser open");
+    await registry.observe(a, { action: "open" }, result);
+    await expect(registry.before(a, { action: "snapshot" })).resolves.toMatchObject({
+      targetId: "7",
+      profile: "user",
+    });
+    await expect(
+      registry.before(a, { action: "act", request: { kind: "click", ref: "e1" } }),
+    ).resolves.toMatchObject({
+      targetId: "7",
+      request: { targetId: "7", kind: "click", ref: "e1" },
+    });
+    await expect(registry.before(b, { action: "snapshot" })).rejects.toThrow("先用 browser open");
+  });
   it("hands off the observed page only to its original user and session incarnation", async () => {
     const registry = make();
     await registry.observe(a, params, result);
@@ -18,7 +47,8 @@ describe("conversation browser handoff", () => {
     const lease = await registry.acquire(a);
     expect(lease.handoff).toMatchObject({ version: 1, targetId: "7", marker });
     await expect(registry.before(a, params)).rejects.toThrow("完成前");
-    lease.release(); lease.release();
+    lease.release();
+    lease.release();
     await expect(registry.acquire(a)).rejects.toThrow();
     await expect(registry.before(a, params)).resolves.toMatchObject({ target: "host" });
   });
@@ -43,6 +73,10 @@ describe("conversation browser handoff", () => {
     await expect(registry.acquire(a)).rejects.toThrow();
     await registry.observe(a, params, result);
     const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 600_001);
-    try { await expect(registry.acquire(a)).rejects.toThrow(); } finally { now.mockRestore(); }
+    try {
+      await expect(registry.acquire(a)).rejects.toThrow();
+    } finally {
+      now.mockRestore();
+    }
   });
 });

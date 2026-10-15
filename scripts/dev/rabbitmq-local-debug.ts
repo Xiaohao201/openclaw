@@ -157,6 +157,7 @@ async function main(): Promise<void> {
       "Starting loopback RabbitMQ debug Gateway with inherited real configuration " +
         "and isolated dev state. Existing MySQL and Milvus connections are reused; " +
         "chat history is isolated to history_test and RabbitMQ is set to MessageTest. " +
+        `Leading-v2 background polling is ${launch.env.OPENCLAW_LEADING_V2_BACKGROUND_POLLING === "0" ? "disabled" : "enabled"}. ` +
         "Secrets are not logged.\n",
     );
     const child = spawn(launch.command, launch.args, {
