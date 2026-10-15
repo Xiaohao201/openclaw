@@ -65,7 +65,7 @@ returned URL when you need to verify the current live page.
 
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
-    Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
+    Structured results with snippets. Supports country/language filters. Free tier available.
   </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free fallback. No API key needed. Unofficial HTML-based integration.
@@ -106,7 +106,7 @@ returned URL when you need to verify the current live page.
 
 | Provider                                  | Result style               | Filters                                          | API key                                                                          |
 | ----------------------------------------- | -------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                  |
+| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time filters                  | `BRAVE_API_KEY`                                                                  |
 | [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                                                                  |
 | [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                    |
 | [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                              |
@@ -290,8 +290,7 @@ show the `x_search` prompt.
 | `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
 
 <Warning>
-  Not all parameters work with all providers. Brave `llm-context` mode
-  rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  Not all parameters work with all providers.
   Gemini, Grok, and Kimi return one synthesized answer with citations. They
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape.

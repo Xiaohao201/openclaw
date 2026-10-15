@@ -78,11 +78,6 @@ describe("brave web search provider", () => {
     expect(__testing.normalizeBraveCountry("")).toBeUndefined();
   });
 
-  it("defaults brave mode to web unless llm-context is explicitly selected", () => {
-    expect(__testing.resolveBraveMode()).toBe("web");
-    expect(__testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
-  });
-
   it("only supplies query-broadening guidance for an empty result set", () => {
     expect(resolveBraveSearchGuidance(0)).toContain("search-index delay");
     expect(resolveBraveSearchGuidance(1)).toBeUndefined();
@@ -139,7 +134,7 @@ describe("brave web search provider", () => {
     );
   });
 
-  it("accepts llm-context in the Brave plugin config schema", () => {
+  it.each(["web", "llm-context"])("validates Brave mode %s in the plugin config schema", (mode) => {
     if (!braveManifest.configSchema) {
       throw new Error("Expected Brave manifest config schema");
     }
@@ -149,12 +144,12 @@ describe("brave web search provider", () => {
       cacheKey: "test:brave-config-schema",
       value: {
         webSearch: {
-          mode: "llm-context",
+          mode,
         },
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(mode === "web");
   });
 
   it("allows operators to disable DB persistence without supplying credentials", () => {
@@ -197,32 +192,9 @@ describe("brave web search provider", () => {
     expect(result.errors).toContainEqual(
       expect.objectContaining({
         path: "webSearch.mode",
-        allowedValues: ["web", "llm-context"],
+        allowedValues: ["web"],
       }),
     );
-  });
-
-  it("maps llm-context results into wrapped source entries", () => {
-    expect(
-      __testing.mapBraveLlmContextResults({
-        grounding: {
-          generic: [
-            {
-              url: "https://example.com/post",
-              title: "Example",
-              snippets: ["a", "", "b"],
-            },
-          ],
-        },
-      }),
-    ).toEqual([
-      {
-        url: "https://example.com/post",
-        title: "Example",
-        snippets: ["a", "b"],
-        siteName: "example.com",
-      },
-    ]);
   });
 
   it("returns validation errors for invalid date ranges", async () => {
@@ -250,34 +222,45 @@ describe("brave web search provider", () => {
     });
   });
 
-  it("falls back unsupported country values before calling Brave", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
-    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
-      return {
-        ok: true,
-        json: async () => ({ web: { results: [] } }),
-      } as Response;
-    });
-    global.fetch = mockFetch as typeof global.fetch;
+  it.each(["web", "llm-context"])(
+    "uses only web search even with a legacy %s mode",
+    async (mode) => {
+      vi.stubEnv("BRAVE_API_KEY", "test-key");
+      const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+        return {
+          ok: true,
+          json: async () => ({ web: { results: [] } }),
+        } as Response;
+      });
+      global.fetch = mockFetch as typeof global.fetch;
 
-    const provider = createBraveWebSearchProvider();
-    const tool = provider.createTool({
-      config: {},
-      searchConfig: {
-        apiKey: "BSA...",
-        brave: { apiKey: "BSA..." },
-      },
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+      const provider = createBraveWebSearchProvider();
+      const tool = provider.createTool({
+        config: {},
+        searchConfig: {
+          apiKey: "BSA...",
+          brave: { apiKey: "BSA...", mode },
+        },
+      });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
 
-    await tool.execute({
-      query: "latest Vietnam news",
-      country: "VN",
-    });
+      await tool.execute({
+        query: `latest Vietnam news ${mode}`,
+        country: "VN",
+        ui_lang: "en-US",
+        freshness: "day",
+      });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
-    expect(requestUrl.searchParams.get("country")).toBe("ALL");
-  });
+      const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+      expect(tool.description).not.toContain("LLM Context");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(requestUrl.origin).toBe("https://brave.businesstimescn.com");
+      expect(requestUrl.pathname).toBe("/res/v1/web/search");
+      expect(requestUrl.searchParams.get("country")).toBe("ALL");
+      expect(requestUrl.searchParams.get("ui_lang")).toBe("en-US");
+      expect(requestUrl.searchParams.get("freshness")).toBe("pd");
+    },
+  );
 });

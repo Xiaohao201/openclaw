@@ -24289,7 +24289,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.web.search.brave.mode": {
       label: "Brave Search Mode",
-      help: 'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+      help: 'Brave Search mode: "web" (URL results).',
       tags: ["tools"],
     },
     "tools.web.fetch.enabled": {
