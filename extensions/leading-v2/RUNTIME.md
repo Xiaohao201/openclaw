@@ -75,6 +75,9 @@ operator binding workflow. Network compatibility does not copy account credentia
 
 12377 remains a separate anonymous flow; it needs no `complaint_browser` login,
 and the user still completes its CAPTCHA and final submission manually.
+It is excluded from the direct-platform catalog. A failed login, browser handoff,
+or evidence fetch must not prompt an unsolicited suggestion to use 12377 or switch
+channels. Only an explicit user choice authorizes that separate flow.
 
 Direct reporting excludes Tonghuashun, Xueqiu, and WeChat. They are omitted from
 the capability catalog and rejected by both local and backend submission paths.

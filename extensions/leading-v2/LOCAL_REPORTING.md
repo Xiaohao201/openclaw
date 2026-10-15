@@ -1,10 +1,24 @@
 # Direct local reporting
 
-`complaint_submit` now defaults to a plugin-owned Python browser executor. It
-does not call `/legal/save-complaint-job`, publish RabbitMQ messages, or write
-complaint rows to MySQL. `complaint_task_status` reads local batches without an
-API key. Historical backend batches and explicit numeric task IDs still use
-the authenticated backend. Other leading-v2 tools retain their existing behavior.
+`complaint_submit` defaults to a plugin-owned Python browser executor. Before
+checking Python or acquiring the browser, it saves a local batch and an audit row
+in `legal_complaint_task`, using `backend.db` or the existing `WRITER_MYSQL_*`
+environment variables. Missing database configuration or an unconfirmed insert
+stops execution. Browser and runtime failures retain their task ID, batch ID,
+and failure reason. A potentially committed insert is never retried automatically.
+
+This audit path does not call `/legal/save-complaint-job` or publish RabbitMQ
+messages. It does not create legacy `legal_complaint` queue/detail rows. Audit
+tasks use `jobId=0`, the current user's `uid`, and `groupId=0` (owner visibility).
+They remain `Stop` so the legacy backend cannot treat them as pending work;
+the reason includes the batch ID and local state counts. Only when every link
+has an observed submission receipt does the task become `Done`. A receipt does
+not mean the platform accepted the allegation or removed content.
+
+`complaint_task_status` reads local batches and their numeric task IDs without an
+API key. Historical backend tasks still use the authenticated backend. If database
+progress synchronization fails, the local status exposes `TASK_RECORD_SYNC_FAILED`;
+check the batch before recovery, and do not resubmit an uncertain report.
 
 ## Install
 

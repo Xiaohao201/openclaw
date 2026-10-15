@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../api.js";
 import { createComplaintSubmitToolFactory } from "../ai/ai-tools.js";
+import { execute as executeDb } from "../client/db-client.js";
 import { ApiKeyResolver } from "../client/key-resolver.js";
-import { waitForLocalBatch } from "./complaint-local.js";
+import { stopLocalComplaints, waitForLocalBatch } from "./complaint-local.js";
 import { createComplaintTaskStatusToolFactory } from "./complaint-status-tool.js";
 import { createComplaintTaxonomyToolFactory } from "./complaint-taxonomy-tool.js";
 
@@ -13,15 +14,27 @@ let root: string;
 let api: OpenClawPluginApi;
 const parse = (value: unknown) => (value as { details: Record<string, unknown> }).details;
 const resolver = new ApiKeyResolver({}, undefined);
+const { acquireBrowser } = vi.hoisted(() => ({ acquireBrowser: vi.fn() }));
+vi.mock("../client/db-client.js", () => ({ execute: vi.fn(), query: vi.fn() }));
 // Transport fixture: session ownership and stale-tab behavior are exercised in
 // complaint-session-handoff.test.ts; this suite checks batch/process plumbing.
 vi.mock("./complaint-session-handoff.js", () => ({
-  sessionBrowserHandoffs: () => ({ acquire: async () => ({
-    handoff: { version: 1, targetId: "fixture", marker: "12345678-1234-1234-1234-123456789abc", binding: {} },
-    release() {},
-  }) }),
+  sessionBrowserHandoffs: () => ({ acquire: acquireBrowser }),
 }));
 beforeEach(async () => {
+  vi.mocked(executeDb).mockReset();
+  vi.mocked(executeDb).mockResolvedValue({ insertId: 101, affectedRows: 1 } as Awaited<
+    ReturnType<typeof executeDb>
+  >);
+  acquireBrowser.mockReset().mockResolvedValue({
+    handoff: {
+      version: 1,
+      targetId: "fixture",
+      marker: "12345678-1234-1234-1234-123456789abc",
+      binding: {},
+    },
+    release() {},
+  });
   root = await mkdtemp(join(tmpdir(), "complaint-tool-"));
   // Real child-process protocol with a deterministic test executor, no network/browser.
   await writeFile(
@@ -35,19 +48,31 @@ beforeEach(async () => {
     ].join("\n"),
   );
   api = {
-    pluginConfig: { complaintExecution: { runtimeDir: root } },
+    pluginConfig: {
+      complaintExecution: { runtimeDir: root },
+      backend: {
+        db: {
+          host: "db.example.test",
+          port: 3306,
+          user: "fixture",
+          password: "fixture",
+          database: "fixture",
+        },
+      },
+    },
     runtime: { state: { resolveStateDir: () => root } },
     logger: { info() {}, warn() {}, error() {}, debug() {} },
   } as unknown as OpenClawPluginApi;
   vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Backend access forbidden")));
 });
 afterEach(async () => {
+  await stopLocalComplaints();
   vi.unstubAllGlobals();
   await rm(root, { recursive: true, force: true });
 });
 
 describe("local tool integration", () => {
-  it("rejects a missing runtime before accepting or persisting a batch", async () => {
+  it("records a task and failure before returning a missing runtime", async () => {
     await rm(join(root, "runner.py"));
     const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
     const result = parse(
@@ -65,9 +90,19 @@ describe("local tool integration", () => {
       submitted: false,
       errorCode: "RUNTIME_MISSING",
     });
-    expect(result.batchId).toBeUndefined();
+    expect(result.batchId).toEqual(expect.any(String));
+    expect(result.taskId).toBe(101);
+    expect(executeDb).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("INSERT INTO legal_complaint_task"),
+      expect.any(Array),
+    );
     const status = createComplaintTaskStatusToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
-    expect(parse(await status.execute("list", {})).total).toBe(0);
+    expect(parse(await status.execute("list", {})).total).toBe(1);
+    expect(parse(await status.execute("status", { batchId: result.batchId })).links).toEqual([
+      expect.objectContaining({ taskId: 101, state: "not_submitted" }),
+    ]);
+    expect(acquireBrowser).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -84,6 +119,7 @@ describe("local tool integration", () => {
       }),
     );
     expect(result.accepted).toBe(true);
+    expect(result.taskId).toBe(101);
     expect(result.submitted).toBe(false);
     await waitForLocalBatch(result.batchId as string);
     const status = createComplaintTaskStatusToolFactory(api, resolver);
@@ -91,6 +127,11 @@ describe("local tool integration", () => {
       await status({ agentId: "rabbitmq-1" })!.execute("status", { batchId: result.batchId }),
     );
     expect(owned.summary).toMatchObject({ submitted: 1, unknown: 0 });
+    const byTaskId = parse(
+      await status({ agentId: "rabbitmq-1" })!.execute("task", { taskId: result.taskId }),
+    );
+    expect(byTaskId.batchId).toBe(result.batchId);
+    expect(byTaskId.summary).toMatchObject({ submitted: 1 });
     expect(
       parse(await status({ agentId: "rabbitmq-2" })!.execute("status", { batchId: result.batchId }))
         .success,
@@ -121,7 +162,86 @@ describe("local tool integration", () => {
     expect(result.platforms).not.toEqual(expect.arrayContaining(["wechat"]));
     expect(result.platforms).not.toEqual(expect.arrayContaining(["tonghuashun"]));
     expect(result.platforms).not.toEqual(expect.arrayContaining(["xueqiu"]));
-    expect(result.platforms).toEqual(expect.arrayContaining(["tencent", "report12377"]));
+    expect(result.platforms).toContain("tencent");
+    expect(result.platforms).not.toContain("report12377");
     expect(result.links).toEqual(links.map((link) => ({ link, platform: null })));
+  });
+
+  it("keeps a failed browser handoff traceable without suggesting another channel", async () => {
+    acquireBrowser.mockRejectedValue(new Error("No owned browser tab"));
+    const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
+    const result = parse(
+      await tool.execute("submit", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment: "依据这条链接的原始内容和用户提供的具体证据进行本地测试。",
+        links: ["https://weibo.com/1/2"],
+      }),
+    );
+    expect(result).toMatchObject({
+      taskId: 101,
+      submitted: false,
+      errorCode: "BROWSER_HANDOFF_REQUIRED",
+    });
+    expect(result.agentInstruction).toContain("不得推荐或切换到12377");
+    const status = createComplaintTaskStatusToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
+    expect(parse(await status.execute("status", { batchId: result.batchId })).links).toEqual([
+      expect.objectContaining({
+        taskId: 101,
+        state: "manual_required",
+        errorCode: "BROWSER_HANDOFF_REQUIRED",
+      }),
+    ]);
+    expect(vi.mocked(executeDb).mock.invocationCallOrder[0]).toBeLessThan(
+      acquireBrowser.mock.invocationCallOrder[0],
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not acquire a browser or execute when task recording fails", async () => {
+    vi.mocked(executeDb).mockRejectedValue(new Error("db unavailable"));
+    const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
+    const result = parse(
+      await tool.execute("submit", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment: "依据这条链接的原始内容和用户提供的具体证据进行本地测试。",
+        links: ["https://weibo.com/1/2"],
+      }),
+    );
+    expect(result).toMatchObject({
+      accepted: false,
+      submitted: false,
+      errorCode: "TASK_RECORD_FAILED",
+    });
+    expect(result.batchId).toEqual(expect.any(String));
+    expect(acquireBrowser).not.toHaveBeenCalled();
+    expect(executeDb).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains an explicit sync error when the database checkpoint fails", async () => {
+    vi.mocked(executeDb)
+      .mockResolvedValueOnce({ insertId: 101, affectedRows: 1 } as Awaited<
+        ReturnType<typeof executeDb>
+      >)
+      .mockRejectedValue(new Error("database unavailable"));
+    const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
+    const result = parse(
+      await tool.execute("submit", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment: "依据这条链接的原始内容和用户提供的具体证据进行本地测试。",
+        links: ["https://weibo.com/1/2"],
+      }),
+    );
+    await waitForLocalBatch(result.batchId as string);
+    const status = createComplaintTaskStatusToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
+    const resultStatus = parse(await status.execute("status", { batchId: result.batchId }));
+    expect(resultStatus.persistenceError).toBe("TASK_RECORD_SYNC_FAILED");
+    expect(resultStatus.summary).toMatchObject({ submitted: 0 });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
