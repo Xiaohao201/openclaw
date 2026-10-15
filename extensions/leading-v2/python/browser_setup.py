@@ -10,6 +10,7 @@ import threading
 import time
 
 from config import ALL_PLATFORMS
+from shared_browser import validate_handoff
 
 LOGIN_URLS = {
     "baidu": "https://www.baidu.com", "bilibili": "https://www.bilibili.com",
@@ -28,6 +29,9 @@ def setup(data, commands, emit, manager_factory=None):
     directory = Path(data.get("sessionDir", ""))
     if platform not in ALL_PLATFORMS or platform not in LOGIN_URLS or not directory.is_absolute():
         raise ValueError("Invalid login session")
+    # Login must borrow the same OpenClaw page as reporting. Missing or stale
+    # handoffs must never trigger BrowserManager's legacy standalone fallback.
+    handoff = validate_handoff(data.get("browserHandoff"))
     if manager_factory is None:
         from browser_manager import BrowserManager
         manager_factory = BrowserManager
@@ -49,6 +53,7 @@ def setup(data, commands, emit, manager_factory=None):
         import browser_manager
         browser_manager.HEADLESS = False
         manager = manager_factory()
+        manager.browser_handoff = handoff
         manager.init_browsers(platform)
         page = manager.pages[platform]
         page.goto(LOGIN_URLS[platform], wait_until="domcontentloaded", timeout=30000)
@@ -59,7 +64,7 @@ def setup(data, commands, emit, manager_factory=None):
             if visible is not None:
                 visible.click(timeout=5000)
                 break
-        emit(dict(state="awaiting_login", message="请在执行机打开的浏览器完成登录或验证；完成后明确确认保存。不会提交举报。"))
+        emit(dict(state="awaiting_login", message="已复用当前对话的 OpenClaw 浏览器标签页，请在该页面完成登录或验证；完成后确认。不会提交举报。"))
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             try:
@@ -70,10 +75,10 @@ def setup(data, commands, emit, manager_factory=None):
             if command == "finish":
                 from runner import save_sessions
                 save_sessions(manager, directory)
-                emit(dict(state="saved", message="已保存当前用户会话；这不代表平台已通过登录验证或举报已提交。可重新发起有明确授权的举报，旧批次不会自动重提。"))
+                emit(dict(state="saved", message="登录态保留在同一 OpenClaw 浏览器，原标签页保持打开；这不代表平台已通过登录验证或举报已提交，旧批次不会自动重提。"))
                 return
             if command == "cancel":
-                emit(dict(state="cancelled", message="登录流程已关闭，未提交举报。"))
+                emit(dict(state="cancelled", message="登录流程已结束，原 OpenClaw 浏览器和标签页保持打开；已有登录变化不会撤销，未提交举报。"))
                 return
             if command == "screenshot":
                 shot = page.screenshot(type="jpeg", quality=65, timeout=10000)
@@ -81,7 +86,7 @@ def setup(data, commands, emit, manager_factory=None):
                           screenshot=base64.b64encode(shot).decode("ascii")))
             elif command == "status":
                 emit(dict(state="awaiting_login", message="等待此用户完成登录并确认保存；不会自动提交举报。"))
-        emit(dict(state="expired", message="登录窗口已超时关闭，请重新发起登录。"))
+        emit(dict(state="expired", message="登录流程已超时结束，原 OpenClaw 浏览器和标签页保持打开；请先用 browser 查看该页面再发起登录。"))
     finally:
         if manager is not None:
             try:

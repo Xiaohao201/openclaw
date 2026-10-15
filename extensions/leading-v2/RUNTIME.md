@@ -41,31 +41,40 @@ login state. Corrupt bindings or conflicting profile/port assignments fail close
 
 After `browser open`, subsequent page operations without a `targetId` use the
 page observed in that conversation. They do not fall back to another conversation's
-last active tab. Only a confirmed complaint acquires the recorded target and its
-fresh page marker for the report executor; merely opening a page does not submit
-a complaint. Account changes, expired selections, and a busy report browser
+last active tab. Both confirmed login setup and complaint execution acquire the
+recorded target and its fresh page marker. They attach to the same running browser,
+profile, and tab used by OpenClaw; merely opening a page does not submit
+a complaint. Account changes, expired selections, and a busy browser
 require the user to revisit the page before a new handoff.
 
 Use `complaint_browser` in a `rabbitmq-<userId>` chat:
 
 1. `action=status` reports that user's binding and active login session.
-2. After the user's explicit authorization, `action=login`, `platform=weibo`
-   (or another supported platform), and `confirmed=true` opens their own browser.
+2. First use `browser open` to open the platform page in the current conversation,
+   or `browser snapshot` to refresh its existing page. After the user's explicit
+   authorization, `action=login`, `platform=weibo` (or another supported platform),
+   and `confirmed=true` reuses that exact tab. Login setup never starts a separate
+   browser. A missing page, disconnected browser, or changed binding stops setup.
 3. The user can log in on the execution machine. `action=screenshot` returns only
-   that login window for QR scanning. CAPTCHA and other interactive steps must be
-   completed by the user in that window.
-4. After the user confirms completion, `action=finish, confirmed=true` saves the
-   session and closes the task window. `action=cancel` closes it without saving an
-   isolated session. For a bound Chrome, login/logout changes are immediately part
-   of the existing profile; cancellation does not undo them.
+   that login tab for QR scanning. CAPTCHA and other interactive steps must be
+   completed by the user in that tab.
+4. After the user confirms completion, `action=finish, confirmed=true` acknowledges
+   the session. `action=cancel` ends setup. Both keep the original browser and tab
+   open. Login/logout changes belong to the shared profile immediately; cancellation
+   does not undo them, and no cookies are copied to a separate session.
+5. Use the returned `browserTargetId` as `targetId` in `browser snapshot` to refresh
+   the current conversation's page before further browser operations or reporting.
 
-The login window expires after ten minutes. Saving acknowledges session persistence,
+The login workflow expires after ten minutes, leaving the original tab open.
+Saving acknowledges session persistence,
 not platform authentication, report submission, or acceptance. Subsequent reports
 still check platform readiness. Old batches never resume or retry automatically.
 There is one login/report execution lock per user. Other users cannot read or control
 the session, and cannot supply a user ID or browser directory to the tool.
+Other conversations also cannot view or finish the borrowed login tab.
 
-Unbound users need no manual directory setup: the tool creates an isolated session.
+Unbound users need no manual directory setup: ordinary `browser` calls prepare
+their OpenClaw profile, which login setup and reporting both reuse.
 To reuse an existing operator Chrome, the administrator must explicitly bind that
 user with `runner.py --bind-browser --existing-chrome --user-id USER_ID --state-dir
 STATE_DIR`. This is not exposed as an arbitrary machine-profile selector to chat

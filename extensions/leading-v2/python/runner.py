@@ -4,11 +4,10 @@ import contextlib
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
-from shared_browser import SharedBrowserUnavailable
+from shared_browser import SharedBrowserUnavailable, validate_handoff
 
 
 def outcome(state, message, code="NONE"):
@@ -21,15 +20,9 @@ def validate_input(data):
         raise ValueError("Unsupported platform")
     handoff = data.get("browserHandoff")
     if handoff is not None:
-        from shared_browser import validate_binding
-        if (not isinstance(handoff, dict) or set(handoff) != {"version", "targetId", "marker", "binding"}
-                or handoff.get("version") != 1 or not isinstance(handoff.get("targetId"), str)
-                or not re.fullmatch(r"[a-zA-Z0-9_-]{1,200}", handoff["targetId"])
-                or not isinstance(handoff.get("marker"), str)
-                or not re.fullmatch(r"[a-f0-9-]{36}", handoff["marker"])
-                or data["platform"] == "report12377"):
+        validate_handoff(handoff)
+        if data["platform"] == "report12377":
             raise ValueError("Invalid session browser handoff")
-        validate_binding(handoff["binding"])
     url = urlsplit(data.get("link", ""))
     if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.port not in (None, 80, 443):
         raise ValueError("Invalid URL")
@@ -153,8 +146,8 @@ def execute(data, manager_factory=create_manager):
             if diagnostic:
                 return outcome("manual_required", "平台登录状态检查发生异常，不能据此判定未登录。请检查浏览器连接、页面加载及运行权限后再核验。", "LOGIN_CHECK_FAILED")
             if getattr(manager, "shared_browser", None) is not None:
-                return outcome("manual_required", "共享浏览器尚未确认平台登录，请用 complaint_browser 的 login 打开当前用户登录窗口，完成验证后 finish 保存。旧批次不会自动重提。", "LOGIN_REQUIRED")
-            return outcome("manual_required", "尚未确认当前用户的平台登录。请调用 complaint_browser(action=login, platform=" + data["platform"] + ", confirmed=true) 打开独立登录窗口，用户登录后调用 finish 保存；现有 Chrome 由管理员按用户绑定。不会自动重提旧批次。", "LOGIN_REQUIRED")
+                return outcome("manual_required", "共享浏览器尚未确认平台登录，请先用 browser 查看原标签页，再调用 complaint_browser 的 login 复用该页，完成验证后 finish。旧批次不会自动重提。", "LOGIN_REQUIRED")
+            return outcome("manual_required", "尚未确认当前用户的平台登录。请先用 OpenClaw browser 打开平台页面，再调用 complaint_browser(action=login, platform=" + data["platform"] + ", confirmed=true) 复用该标签页，用户登录后调用 finish。不会自动重提旧批次。", "LOGIN_REQUIRED")
         execution_started = True
         manager.perform_complaint(data["platform"], dict(data, id=os.getpid()))
         # Legacy handlers may return True even when the success marker is absent.

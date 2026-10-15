@@ -64,15 +64,16 @@ supply another user ID to the tool. Batches and browser sessions live under the
 OpenClaw state directory, partitioned by SHA-256 of that user ID. Session cookies
 from the original program are not shared or automatically imported.
 
-Initialize each user's platform login on the execution host (replace all values
-with the real state directory, user ID, and installed Python executable):
+In the current OpenClaw conversation, use `browser open` to open the platform.
+This prepares that user's OpenClaw profile and records the conversation's tab.
+`complaint_browser(action=login, platform=weibo, confirmed=true)` then reuses the
+same browser, login state, and tab after explicit login authorization. Already
+authenticated profiles need no separate login. Missing or stale handoffs fail
+without launching a replacement browser. See `RUNTIME.md` for the login lifecycle.
 
-```powershell
-python extensions/leading-v2/python/runner.py --login --platform weibo --user-id 123 --state-dir C:/openclaw-state
-```
-
-Complete login in the browser and press Enter in the terminal to save. This login
-command never submits a report. Headed execution requires an interactive desktop;
+After login, `finish` or `cancel` leaves the browser and tab open. Refresh the
+page with `browser snapshot`, using the returned `browserTargetId` as `targetId`,
+before continuing. Login setup never submits a report. Headed execution requires an interactive desktop;
 a background service account may need a separate desktop host. The actual logged-in
 platform account determines the reporting identity; `role` cannot switch accounts.
 

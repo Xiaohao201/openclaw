@@ -8,6 +8,7 @@ import { extractUserId } from "../client/agent-id.js";
 import { ComplaintBatchStore } from "./complaint-batch-store.js";
 import { localPlatforms, resolveLocalConfig } from "./complaint-local-contract.js";
 import { complaintProcessEnv } from "./complaint-local-process.js";
+import { sessionBrowserHandoffs } from "./complaint-session-handoff.js";
 
 const resultSchema = z
   .object({
@@ -24,6 +25,9 @@ type Session = {
   pending?: (result: BrowserResult) => void;
   closed: boolean;
   received: boolean;
+  sessionKey: string;
+  sessionId: string;
+  browserTargetId: string;
 };
 const runtime = globalThis as typeof globalThis & { __leadingBrowserSetup?: Map<string, Session> };
 const sessions = (runtime.__leadingBrowserSetup ??= new Map<string, Session>());
@@ -31,6 +35,16 @@ const failure: BrowserResult = {
   state: "failed",
   message: "登录进程中断或返回无效结果，未执行举报。请重新检查会话。",
 };
+
+function sessionResult(session: Session, result: BrowserResult) {
+  return {
+    ...result,
+    browserTargetId: session.browserTargetId,
+    instruction: session.closed
+      ? "原 OpenClaw 浏览器和标签页保持打开。继续操作时先调用 browser snapshot，并传入 browserTargetId 作为 targetId，刷新当前对话页面；旧举报批次不会自动重提。"
+      : "正在复用当前对话的 OpenClaw 标签页；登录结束前不要并发操作或关闭该浏览器。",
+  };
+}
 
 function waitForResponse(session: Session, send: () => void): Promise<BrowserResult> {
   if (session.pending) {
@@ -77,7 +91,7 @@ export async function stopComplaintBrowserSessions() {
 }
 
 export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
-  return (ctx: { agentId?: string }) => {
+  return (ctx: { agentId?: string; sessionKey?: string; sessionId?: string }) => {
     const userId = extractUserId(ctx.agentId);
     if (!userId) {
       return null;
@@ -86,7 +100,7 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
       name: "complaint_browser",
       label: "举报账号登录与会话",
       description:
-        "管理当前用户的举报浏览器。status 查询配置；login 打开此用户独立登录窗口或管理员已绑定的浏览器，需用户明确授权并传 confirmed=true；screenshot 查看该登录窗口以扫码；finish 仅在用户明确说已完成登录后确认保存；cancel 关闭。不会提交举报或重提旧批次。不得指定其他用户ID、任意资料目录或自行绑定机器上其他账号。首次用户可直接 login，扫码/验证码需本人完成；共享现有 Chrome 由管理员按用户绑定。保存会话不保证平台登录验证或举报成功。",
+        "复用当前对话的 OpenClaw 浏览器及标签页管理举报账号登录。先用 browser open 打开平台页面或 snapshot 查看当前页，再 login；不会另开独立浏览器。status 查询配置；login 需用户明确授权并传 confirmed=true；screenshot 查看登录页以扫码；finish 仅在用户明确说已完成登录后确认；cancel 结束登录流程。finish/cancel 保留原浏览器和标签页，登录态留在同一 profile，取消不会撤销登录变化。结束后用返回的 browserTargetId 调用 browser snapshot。不会提交举报或重提旧批次。不得指定其他用户ID、任意资料目录或自行绑定机器上其他账号。扫码/验证码需本人完成；确认保存不保证平台登录验证或举报成功。",
       parameters: Type.Object(
         {
           action: Type.Union(
@@ -118,14 +132,16 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
           api.runtime.state.resolveStateDir(),
         ).sessionDirectory(userId);
         let session = sessions.get(directory);
+        const ownsSession =
+          session && session.sessionId === ctx.sessionId && session.sessionKey === ctx.sessionKey;
         if (action === "status") {
-          let binding: "isolated" | "operator_bound" | "invalid" = "isolated";
+          let binding: "unprepared" | "bound" | "invalid" = "unprepared";
           let bindingAllowsFakeIp = false;
           try {
             const value: unknown = JSON.parse(
               await readFile(join(directory, "browser-binding.json"), "utf8"),
             );
-            binding = value && typeof value === "object" ? "operator_bound" : "invalid";
+            binding = value && typeof value === "object" ? "bound" : "invalid";
             bindingAllowsFakeIp = Boolean(
               value &&
               typeof value === "object" &&
@@ -142,17 +158,22 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
             userId,
             binding,
             allowFakeIp: config.allowFakeIp || bindingAllowsFakeIp,
-            session: session
-              ? { platform: session.platform, active: !session.closed, ...session.latest }
-              : null,
+            session:
+              session && ownsSession
+                ? {
+                    platform: session.platform,
+                    active: !session.closed,
+                    ...sessionResult(session, session.latest),
+                  }
+                : null,
             instruction:
-              "没有活跃登录窗口时可调用 login 并指定平台；不会自动复用其他用户账号。共享 Chrome 绑定须由执行机管理员完成。",
+              "先用当前对话的 browser open 打开平台页面，再调用 login 并指定平台。登录和举报复用 OpenClaw 同一浏览器，不启动独立浏览器；已有登录态可直接使用。",
           });
         }
         if ((action === "login" || action === "finish") && confirmed !== true) {
           return jsonResult({
             success: false,
-            error: "请先取得用户对打开登录窗口或保存登录会话的明确确认。",
+            error: "请先取得用户对在当前 OpenClaw 标签页登录或确认登录会话的明确授权。",
           });
         }
         if (action === "login") {
@@ -166,23 +187,44 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
             return jsonResult({
               success: false,
               state: "busy",
-              platform: session.platform,
-              error: "已有登录窗口，请查询、保存或取消后再打开。",
+              error: "当前用户已有登录流程，请在原对话中查询、完成或取消。",
             });
           }
-          const child = spawn(config.python, ["-u", join(config.runtimeDir, "browser_setup.py")], {
-            cwd: config.runtimeDir,
-            windowsHide: true,
-            shell: false,
-            stdio: ["pipe", "pipe", "pipe"],
-            env: complaintProcessEnv(config),
-          });
+          let lease;
+          try {
+            lease = await sessionBrowserHandoffs(api).acquire(ctx);
+          } catch (error) {
+            return jsonResult({
+              success: false,
+              errorCode: "BROWSER_HANDOFF_REQUIRED",
+              error: error instanceof Error ? error.message : "当前 OpenClaw 浏览器无法交接。",
+              instruction:
+                "请先用当前对话的 browser open 打开平台页面，再调用 login；不另开浏览器或切换举报渠道。",
+            });
+          }
+          let child: ChildProcessWithoutNullStreams;
+          try {
+            child = spawn(config.python, ["-u", join(config.runtimeDir, "browser_setup.py")], {
+              cwd: config.runtimeDir,
+              windowsHide: true,
+              shell: false,
+              stdio: ["pipe", "pipe", "pipe"],
+              env: complaintProcessEnv(config),
+            });
+          } catch {
+            lease.release();
+            return jsonResult(failure);
+          }
           session = {
             child,
             platform,
             closed: false,
             received: false,
-            latest: { state: "busy", message: "正在打开当前用户的登录窗口。" },
+            // acquire validates both fields against the trusted conversation identity.
+            sessionKey: ctx.sessionKey!,
+            sessionId: ctx.sessionId!,
+            browserTargetId: lease.handoff.targetId,
+            latest: { state: "busy", message: "正在连接当前对话的 OpenClaw 浏览器标签页。" },
           };
           sessions.set(directory, session);
           const current = session;
@@ -212,25 +254,38 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
           child.on("error", () => deliver(current, failure));
           child.on("close", () => {
             current.closed = true;
+            lease.release();
             if (!current.received || current.latest.state === "awaiting_login") {
               deliver(current, failure);
             }
             current.pending?.(current.latest);
           });
           return jsonResult(
-            await waitForResponse(current, () =>
-              child.stdin.write(JSON.stringify({ platform, sessionDir: directory }) + "\n"),
+            sessionResult(
+              current,
+              await waitForResponse(current, () =>
+                child.stdin.write(
+                  JSON.stringify({
+                    platform,
+                    sessionDir: directory,
+                    browserHandoff: lease.handoff,
+                  }) + "\n",
+                ),
+              ),
             ),
           );
         }
-        if (!session || session.closed) {
-          return jsonResult({ success: false, error: "没有活跃登录窗口，请先发起 login。" });
+        if (!session || session.closed || !ownsSession) {
+          return jsonResult({
+            success: false,
+            error: "当前对话没有活跃登录流程，请先用 browser 打开平台页面后发起 login。",
+          });
         }
         const current = session;
         const result = await waitForResponse(current, () =>
           current.child.stdin.write(JSON.stringify({ action }) + "\n"),
         );
-        const { screenshot, ...details } = result;
+        const { screenshot, ...details } = sessionResult(current, result);
         const response = jsonResult(details);
         if (screenshot) {
           response.content.push({ type: "image", mimeType: "image/jpeg", data: screenshot });

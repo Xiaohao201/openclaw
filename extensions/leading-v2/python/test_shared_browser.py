@@ -224,7 +224,8 @@ class SharedBrowserTest(unittest.TestCase):
         bind_profile(user, str(self.profile), self.binding['cdpUrl'])
         page = Mock()
         self.context.new_page.return_value = page
-        with patch('browser_manager.sync_playwright') as sync, \
+        with patch.dict(os.environ, {'OPENCLAW_COMPLAINT_SESSION_DIR': str(user)}), \
+                patch('browser_manager.sync_playwright') as sync, \
                 patch('shared_browser.socket.create_connection'):
             sync.return_value.start.return_value = self.playwright
             manager = BrowserManager()

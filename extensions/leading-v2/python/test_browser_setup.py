@@ -29,6 +29,9 @@ class BrowserSetupTest(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.data = dict(platform="weibo", sessionDir=self.temp.name)
+        self.data["browserHandoff"] = dict(
+            version=1, targetId="7", marker="12345678-1234-1234-1234-123456789abc",
+            binding=dict(version=1, cdpUrl="http://127.0.0.1:18800", profileDir=self.temp.name))
         self.manager = Mock()
         self.manager.pages = {"weibo": Mock()}
         self.manager.pages["weibo"].get_by_text.return_value.all.return_value = []
@@ -44,6 +47,66 @@ class BrowserSetupTest(unittest.TestCase):
         self.manager.perform_complaint.assert_not_called()
         self.manager.close_all.assert_called_once()
         self.assertFalse((Path(self.temp.name) / "execution.lock").exists())
+
+    def test_login_passes_the_openclaw_handoff_before_initializing_browser(self):
+        self.commands.put("cancel")
+        def initialized(platform):
+            self.assertEqual(self.manager.browser_handoff, self.data["browserHandoff"])
+        self.manager.init_browsers.side_effect = initialized
+        setup(self.data, self.commands, self.events.append, lambda: self.manager)
+
+    def test_invalid_or_missing_handoff_never_starts_a_browser(self):
+        for handoff in (None, {}, dict(self.data["browserHandoff"], marker="invalid"),
+                        dict(self.data["browserHandoff"], binding={}),
+                        dict(self.data["browserHandoff"], version=True)):
+            with self.subTest(handoff=handoff), self.assertRaises(ValueError):
+                setup(dict(self.data, browserHandoff=handoff), self.commands,
+                      self.events.append, lambda: self.fail("must not open"))
+        self.assertFalse((Path(self.temp.name) / "execution.lock").exists())
+
+    def test_reuses_openclaw_page_and_keeps_browser_and_login_state_on_finish(self):
+        from browser_manager import BrowserManager
+        import json
+        Path(self.temp.name, "browser-binding.json").write_text(
+            json.dumps(self.data["browserHandoff"]["binding"]), encoding="utf-8")
+        page = self.manager.pages["weibo"]
+        page.opener.return_value = None
+        page.evaluate.return_value = self.data["browserHandoff"]["marker"]
+        context = Mock(pages=[page])
+        browser = Mock(contexts=[context])
+        playwright = Mock()
+        playwright.chromium.connect_over_cdp.return_value = browser
+        self.commands.put("finish")
+        with patch("browser_manager.sync_playwright") as sync, patch("shared_browser.socket.create_connection"):
+            sync.return_value.start.return_value = playwright
+            setup(self.data, self.commands, self.events.append, BrowserManager)
+        playwright.chromium.connect_over_cdp.assert_called_once_with("http://127.0.0.1:18800", timeout=10000)
+        playwright.chromium.launch.assert_not_called()
+        playwright.chromium.launch_persistent_context.assert_not_called()
+        context.new_page.assert_not_called()
+        context.storage_state.assert_not_called()
+        context.close.assert_not_called()
+        browser.close.assert_not_called()
+        page.close.assert_not_called()
+        page.goto.assert_called_once()
+        self.assertEqual(self.events[-1]["state"], "saved")
+
+    def test_disconnected_browser_never_launches_another_window(self):
+        from browser_manager import BrowserManager
+        from shared_browser import SharedBrowserUnavailable
+        import json
+        Path(self.temp.name, "browser-binding.json").write_text(
+            json.dumps(self.data["browserHandoff"]["binding"]), encoding="utf-8")
+        playwright = Mock()
+        with patch("browser_manager.sync_playwright") as sync, \
+                patch("shared_browser.socket.create_connection", side_effect=ConnectionRefusedError):
+            sync.return_value.start.return_value = playwright
+            with self.assertRaises(SharedBrowserUnavailable):
+                setup(self.data, self.commands, self.events.append, BrowserManager)
+        playwright.chromium.launch.assert_not_called()
+        playwright.chromium.launch_persistent_context.assert_not_called()
+        self.assertFalse((Path(self.temp.name) / "execution.lock").exists())
+        self.assertFalse((Path(self.temp.name) / ".openclaw-complaint.lock").exists())
 
     def test_cancel_never_saves_or_submits(self):
         self.commands.put("cancel")
