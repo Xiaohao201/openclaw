@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
+import type { BrowserHandoff } from "./complaint-session-handoff.js";
 import {
   localOutcomeSchema,
   type LocalConfig,
@@ -13,7 +14,36 @@ export type RunLocalComplaint = (params: {
   sessionDir: string;
   config: LocalConfig;
   signal: AbortSignal;
+  browserHandoff?: BrowserHandoff;
 }) => Promise<LocalOutcome>;
+
+export function complaintProcessEnv(config: LocalConfig) {
+  return {
+    ...process.env,
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+    OPENCLAW_COMPLAINT_ALLOW_FAKE_IP: config.allowFakeIp ? "1" : "0",
+  };
+}
+
+export async function checkLocalComplaintRuntime(
+  config: LocalConfig,
+): Promise<LocalOutcome | null> {
+  try {
+    if ((await stat(join(config.runtimeDir, "runner.py"))).isFile()) {
+      return null;
+    }
+  } catch {
+    // Missing or unreadable files cannot be executed.
+  }
+  return {
+    state: "failed",
+    message:
+      "缺少可读取的 Python 执行器 runner.py，请安装完整插件或配置 complaintExecution.runtimeDir。",
+    offline: null,
+    errorCode: "RUNTIME_MISSING",
+  };
+}
 
 /** JSON travels over stdin, never through shell interpolation or command-line arguments. */
 export const runLocalComplaint: RunLocalComplaint = async ({
@@ -21,16 +51,11 @@ export const runLocalComplaint: RunLocalComplaint = async ({
   sessionDir,
   config,
   signal,
+  browserHandoff,
 }) => {
-  try {
-    await access(join(config.runtimeDir, "runner.py"));
-  } catch {
-    return {
-      state: "failed",
-      message: "缺少 Python 执行器 runner.py，请安装或配置 runtimeDir。",
-      offline: null,
-      errorCode: "RUNTIME_MISSING",
-    };
+  const unavailable = await checkLocalComplaintRuntime(config);
+  if (unavailable) {
+    return unavailable;
   }
   return new Promise((resolve, reject) => {
     const child = spawn(config.python, ["-u", join(config.runtimeDir, "runner.py")], {
@@ -39,7 +64,7 @@ export const runLocalComplaint: RunLocalComplaint = async ({
       shell: false,
       stdio: ["pipe", "pipe", "ignore"],
       signal,
-      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      env: complaintProcessEnv(config),
     });
     let output = "";
     let overflow = false;
@@ -90,7 +115,7 @@ export const runLocalComplaint: RunLocalComplaint = async ({
       }
     });
     child.stdin.end(
-      JSON.stringify({ ...item, sessionDir, headless: config.headless, phone: config.phone }),
+      JSON.stringify({ ...item, sessionDir, headless: config.headless, phone: config.phone, browserHandoff }),
     );
   });
 };

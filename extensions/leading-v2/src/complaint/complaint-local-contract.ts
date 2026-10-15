@@ -1,6 +1,8 @@
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import type { OpenClawConfig } from "../../api.js";
+import { isUnavailableComplaintLink } from "./complaint-platform-policy.js";
 
 // Plugin-owned routing, shared with Python through the validated input payload.
 export const localPlatforms: Record<string, readonly string[]> = {
@@ -15,23 +17,24 @@ export const localPlatforms: Record<string, readonly string[]> = {
   sohu: ["sohu.com"],
   tencent: ["qq.com"],
   tiantianfund: ["fund.eastmoney.com"],
-  tonghuashun: ["10jqka.com.cn"],
   toutiao: ["toutiao.com"],
-  wechat: ["mp.weixin.qq.com"],
   weibo: ["weibo.com", "weibo.cn"],
   xiaohongshu: ["xiaohongshu.com", "xhslink.com", "xhslink.cn"],
-  xueqiu: ["xueqiu.com"],
   yidianzixun: ["yidianzixun.com"],
   zhihu: ["zhihu.com"],
 };
 
 export function platformForLink(link: string): string | null {
+  // Do not let excluded WeChat hosts fall through to the broader qq.com route.
+  if (isUnavailableComplaintLink(link)) {
+    return null;
+  }
   try {
     const url = new URL(link);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port) {
       return null;
     }
-    // Prefer the most specific suffix (mp.weixin.qq.com before qq.com).
+    // Prefer the most specific suffix (fund.eastmoney.com before eastmoney.com).
     return (
       Object.entries(localPlatforms)
         .flatMap(([platform, domains]) => domains.map((domain) => ({ platform, domain })))
@@ -185,12 +188,19 @@ const configSchema = z
       .optional(),
   })
   .strict();
-export function resolveLocalConfig(config: Record<string, unknown>, rootDir?: string) {
+export function resolveLocalConfig(
+  config: Record<string, unknown>,
+  rootDir?: string,
+  hostConfig?: Pick<OpenClawConfig, "browser">,
+) {
   const parsed = configSchema.parse(config.complaintExecution ?? {});
   const block = config.complaintExecution as Record<string, unknown> | undefined;
   if (rootDir && block?.runtimeDir === undefined) {
     parsed.runtimeDir = join(rootDir, "python");
   }
-  return parsed;
+  return {
+    ...parsed,
+    allowFakeIp: hostConfig?.browser?.ssrfPolicy?.allowRfc2544BenchmarkRange === true,
+  };
 }
 export type LocalConfig = ReturnType<typeof resolveLocalConfig>;

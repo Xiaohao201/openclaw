@@ -12,9 +12,9 @@ def get_base_path():
 
 DebugRun = False
 HEADLESS = os.environ.get("OPENCLAW_COMPLAINT_HEADLESS") == "1"
-ALL_PLATFORMS = ["wechat", "baidu", "bilibili", "douyin", "eastmoney", "futu",
+ALL_PLATFORMS = ["baidu", "bilibili", "douyin", "eastmoney", "futu",
                  "kuaishou", "netease", "sina", "sohu", "tencent", "tiantianfund",
-                 "tonghuashun", "toutiao", "weibo", "xiaohongshu", "xueqiu",
+                 "toutiao", "weibo", "xiaohongshu",
                  "yidianzixun", "zhihu", "report12377"]
 PLATFORMS = ALL_PLATFORMS
 UC_PLATFORMS = []

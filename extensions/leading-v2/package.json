@@ -21,7 +21,49 @@
       "pluginApi": ">=2026.4.16"
     },
     "build": {
-      "openclawVersion": "2026.4.16"
+      "openclawVersion": "2026.4.16",
+      "runtimeAssets": [
+        "python/browser_setup.py",
+        "python/browser_actions.py",
+        "python/browser_manager.py",
+        "python/browser_session.py",
+        "python/category_llm.py",
+        "python/category_matcher.py",
+        "python/complaint_payload.py",
+        "python/config.py",
+        "python/eastmoney_platform.py",
+        "python/futu_platform.py",
+        "python/log_utils.py",
+        "python/netease_platform.py",
+        "python/network_guard.py",
+        "python/report_12377.py",
+        "python/requirements-phone.txt",
+        "python/requirements.txt",
+        "python/runner.py",
+        "python/self_healing/__init__.py",
+        "python/self_healing/evidence.py",
+        "python/self_healing/guard.py",
+        "python/self_healing/llm.py",
+        "python/self_healing/manager.py",
+        "python/self_healing/models.py",
+        "python/self_healing/proxy.py",
+        "python/self_healing/registry.py",
+        "python/self_healing/sanitizer.py",
+        "python/self_healing/schemas.py",
+        "python/shared_browser.py",
+        "python/sina_platform.py",
+        "python/sohu_platform.py",
+        "python/tencent_platform.py",
+        "python/tiantianfund_platform.py",
+        "python/tonghuashun_platform.py",
+        "python/xhs_phone_bridge.py",
+        "python/xhs_phone_network.py",
+        "python/xhs_phone_preflight.py",
+        "python/xhs_phone_ui.py",
+        "python/xhs_phone.py",
+        "python/xueqiu_platform.py",
+        "python/yidian_platform.py"
+      ]
     }
   }
 }

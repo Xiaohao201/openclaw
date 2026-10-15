@@ -1,6 +1,7 @@
 import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
 import type { LocalComplaintItem, LocalConfig, LocalOutcome } from "./complaint-local-contract.js";
 import { runLocalComplaint, type RunLocalComplaint } from "./complaint-local-process.js";
+import type { BrowserHandoff } from "./complaint-session-handoff.js";
 
 // Discovery and service registration must share lifecycle ownership in one host process.
 const runtime = globalThis as typeof globalThis & {
@@ -25,6 +26,7 @@ export async function submitLocalBatch(params: {
   items: LocalComplaintItem[];
   config: LocalConfig;
   run?: RunLocalComplaint;
+  browserLease?: { handoff: BrowserHandoff; release: () => void };
 }) {
   const { store, userId, items, config } = params;
   const batch = await store.create(
@@ -60,6 +62,7 @@ export async function submitLocalBatch(params: {
           sessionDir: store.sessionDirectory(userId),
           config,
           signal: controller.signal,
+          browserHandoff: params.browserLease?.handoff,
         });
       } catch {
         outcome = {
@@ -78,6 +81,14 @@ export async function submitLocalBatch(params: {
             : "rejected";
       await store.save(batch);
       if (outcome.state === "unknown" || outcome.state === "manual_required") {
+        for (const remaining of batch.entries.slice(index + 1)) {
+          remaining.execution = {
+            state: "not_submitted",
+            message: "前序链接需要人工处理或结果不明，批次已停止；本链接未执行，不会自动继续。",
+            offline: null,
+          };
+        }
+        await store.save(batch);
         break;
       }
     }
@@ -87,6 +98,7 @@ export async function submitLocalBatch(params: {
     .then(execute)
     .catch(() => {})
     .finally(() => {
+      params.browserLease?.release();
       active.delete(batch.batchId);
     });
   active.set(batch.batchId, { controller, done });
@@ -124,7 +136,9 @@ export function queryLocalBatch(batch: ComplaintBatch) {
       failureReason:
         state === "unknown"
           ? "无法确认执行结果，请人工核对，禁止自动重提。"
-          : (execution?.message ?? null),
+          : !running && execution?.state === "pending"
+            ? "批次已停止，本链接未执行，不会自动继续。"
+            : (execution?.message ?? null),
       offline: execution?.offline ?? null,
       errorCode: execution?.errorCode ?? null,
       queryCode: execution?.queryCode ?? null,

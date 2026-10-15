@@ -1,0 +1,8 @@
+
+> openclaw@2026.4.16 tsgo C:\Users\PC\Desktop\openclaw
+> node scripts/run-tsgo.mjs
+
+extensions/browser/src/browser-tool.test.ts(465,38): error TS2353: Object literal may only specify known properties, and 'url' does not exist in type '{ ok: boolean; running: boolean; }'.
+(node:33912) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ ELIFECYCLE  Command failed with exit code 2.

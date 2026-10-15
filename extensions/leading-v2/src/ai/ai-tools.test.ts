@@ -291,6 +291,22 @@ describe("job_stop", () => {
 });
 
 describe("complaint_submit", () => {
+  it.each(["https://www.10jqka.com.cn/1", "https://xueqiu.com/1", "https://mp.weixin.qq.com/s/1"])(
+    "rejects unavailable platforms before backend submission: %s",
+    async (link) => {
+      const result = parse(
+        await tool().execute("blocked", {
+          basisSource: "AgentJudgment",
+          confirmed: true,
+          subjectScope: "Enterprise",
+          judgment: "依据原始内容与已核验证据形成的单条举报事由，请平台审核。",
+          links: [link],
+        }),
+      );
+      expect(result).toMatchObject({ success: false, submitted: false, unsupportedLinks: [link] });
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
   const batchLinks = ["https://example.com/video/a", "https://example.com/video/b"];
   const batchParams = {
     basisSource: "AgentJudgment",
@@ -888,6 +904,30 @@ describe("complaint taxonomy discovery", () => {
       await import("../complaint/complaint-taxonomy-tool.js");
     return createComplaintTaxonomyToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
   }
+
+  it("filters unavailable platforms even if the backend still advertises them", async () => {
+    const links = [
+      "https://mp.weixin.qq.com/s/1",
+      "https://xueqiu.com/1",
+      "https://www.10jqka.com.cn/1",
+    ];
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      platforms: [
+        "Wechat",
+        { platform: "Xueqiu" },
+        { platform: "Tonghuashun" },
+        { platform: "Netease" },
+      ],
+      taxonomies: links.map((link) => ({ link })),
+      unsupportedLinks: [],
+    });
+    const catalog = parse(await (await tool()).execute("catalog", {}));
+    expect(catalog.platforms).toEqual([{ platform: "Netease" }]);
+    const result = parse(await (await tool()).execute("links", { links }));
+    expect(result.taxonomies).toEqual([]);
+    expect(result.unsupportedLinks).toEqual(links);
+  });
 
   it("queries live platforms without submitting a task", async () => {
     mockGetJson.mockResolvedValue({

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from network_guard import public_url
+from network_guard import public_url, configured_fake_ip
 
 BINDING_FILE = "browser-binding.json"
 
@@ -113,13 +113,14 @@ def bind_profile(session_dir, profile_dir, cdp_url=None, *, allow_benchmark=Fals
 
 
 class SharedBrowserLease:
-    def __init__(self, playwright, binding, *, headless):
+    def __init__(self, playwright, binding, *, headless, attach_only=False):
         binding = validate_binding(binding)
-        self.allow_benchmark = binding.get("allowRfc2544BenchmarkRange", False)
+        self.allow_benchmark = binding.get("allowRfc2544BenchmarkRange", False) or configured_fake_ip()
         self.context = None
         self.browser = None
         self.owned_context = False
         self.pages = set()
+        self.borrowed_pages = set()
         self.lock = Path(binding["profileDir"]) / ".openclaw-complaint.lock"
         self.lock_owned = False
         self.guard_installed = False
@@ -153,6 +154,8 @@ class SharedBrowserLease:
                     raise SharedBrowserUnavailable("共享浏览器上下文不唯一，请核查绑定的调试端口。")
                 self.context = self.browser.contexts[0]
             else:
+                if attach_only:
+                    raise SharedBrowserUnavailable("会话浏览器已断开，不能启动替代浏览器。")
                 self.context = playwright.chromium.launch_persistent_context(
                     binding["profileDir"], channel="chrome", headless=headless,
                     service_workers="block", viewport={"width": 1280, "height": 900},
@@ -196,12 +199,28 @@ class SharedBrowserLease:
         self.pages.add(page)
         return page
 
+    def attach_session_page(self, marker):
+        """Locate the exact marked document; never select by URL or tab position."""
+        matches = []
+        for page in self.context.pages:
+            try:
+                if page.evaluate("() => window.__openclaw_session_handoff_v1") == marker:
+                    matches.append(page)
+            except Exception:
+                continue
+        if len(matches) != 1:
+            raise SharedBrowserUnavailable("当前对话标签页已关闭、跳转或身份不唯一，请重新查看页面后再举报。")
+        page = matches[0]
+        self.pages.add(page)
+        self.borrowed_pages.add(page)
+        return page
+
     def close(self):
         try:
             if self.context is not None:
                 try:
                     for page in list(self.context.pages):
-                        if self.owns_page(page):
+                        if self.owns_page(page) and page not in self.borrowed_pages:
                             page.close()
                 finally:
                     if self.guard_installed:

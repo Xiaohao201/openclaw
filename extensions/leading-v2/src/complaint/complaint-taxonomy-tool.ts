@@ -6,6 +6,10 @@ import { getJson, resolveConfig } from "../client/http-client.js";
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import { localPlatforms, platformForLink, resolveLocalConfig } from "./complaint-local-contract.js";
+import {
+  isUnavailableComplaintLink,
+  isUnavailableComplaintPlatform,
+} from "./complaint-platform-policy.js";
 
 export function createComplaintTaxonomyToolFactory(
   api: OpenClawPluginApi,
@@ -85,9 +89,31 @@ export function createComplaintTaxonomyToolFactory(
           }
           return jsonResult({
             success: true,
-            ...(!links?.length ? { platforms: result.platforms } : {}),
-            taxonomies: result.taxonomies,
-            unsupportedLinks: result.unsupportedLinks,
+            ...(!links?.length
+              ? {
+                  platforms: (result.platforms as unknown[]).filter(
+                    (entry) => !isUnavailableComplaintPlatform(entry),
+                  ),
+                }
+              : {}),
+            taxonomies: result.taxonomies.filter((entry: unknown) => {
+              if (isUnavailableComplaintPlatform(entry)) {
+                return false;
+              }
+              return !(
+                entry &&
+                typeof entry === "object" &&
+                "link" in entry &&
+                typeof entry.link === "string" &&
+                isUnavailableComplaintLink(entry.link)
+              );
+            }),
+            unsupportedLinks: [
+              ...new Set([
+                ...result.unsupportedLinks,
+                ...(links ?? []).filter(isUnavailableComplaintLink),
+              ]),
+            ],
           });
         } catch (error) {
           return failure(api, "complaint_taxonomy", userId, error);

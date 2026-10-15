@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { withSessionBrowserHandoff } from "./browser-tool.handoff.js";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   executeActAction,
@@ -375,7 +376,7 @@ export function createBrowserTool(opts?: {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
-  return {
+  const tool: AnyAgentTool = {
     label: "Browser",
     name: "browser",
     description: [
@@ -755,4 +756,6 @@ export function createBrowserTool(opts?: {
       }
     },
   };
+  return withSessionBrowserHandoff(tool, Boolean(opts?.agentSessionKey), (profile, targetId, fn) =>
+    browserToolDeps.browserAct(undefined, { kind: "evaluate", targetId, fn }, { profile }));
 }
