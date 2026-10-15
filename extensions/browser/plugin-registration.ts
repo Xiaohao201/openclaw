@@ -13,7 +13,9 @@ import {
   runBrowserProxyCommand,
 } from "./register.runtime.js";
 
-export const browserPluginReload = { restartPrefixes: ["browser"] };
+// Profiles reconcile on each browser request. Other browser settings retain the
+// gateway's default restart behavior for unclaimed configuration paths.
+export const browserPluginReload = { hotPrefixes: ["browser.profiles"] };
 
 export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {

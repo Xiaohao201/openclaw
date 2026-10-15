@@ -183,12 +183,12 @@ export function buildRabbitMqDebugLaunchSpec(params: {
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENCLAW_SKIP_CHANNELS: "1",
+    OPENCLAW_LEADING_V2_BACKGROUND_POLLING:
+      params.env.OPENCLAW_LEADING_V2_BACKGROUND_POLLING ?? "0",
   };
   delete env.OPENCLAW_PROFILE;
-  // Start every plugin service normally. rabbitmq-consumer skips only its own
-  // real queue client when localDebug.enabled=true; a global skip would also
-  // disable cron-backed and service-backed capabilities that this simulator
-  // is expected to inherit from deployment.
+  // Keep plugin services available for interactive tools. Each plugin applies
+  // its own debug controls; a global skip would disable unrelated capabilities.
   delete env.OPENCLAW_SKIP_PLUGIN_SERVICES;
   return {
     command: process.execPath,

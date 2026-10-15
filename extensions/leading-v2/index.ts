@@ -84,7 +84,11 @@ export default definePluginEntry({
     // Completion-notification plumbing, shared by every async-task module below.
     // Process-global singleton: the tool-discovery register() and the service
     // register() must enqueue into and poll the SAME registry instance.
-    const notify = resolveNotifyConfig(api.pluginConfig ?? {});
+    // The local debug launcher disables both background loops by default while
+    // leaving interactive tools and their stores available.
+    const backgroundPollingEnabled = process.env.OPENCLAW_LEADING_V2_BACKGROUND_POLLING !== "0";
+    const notifyConfig = resolveNotifyConfig(api.pluginConfig ?? {});
+    const notify = { ...notifyConfig, enabled: backgroundPollingEnabled && notifyConfig.enabled };
     const pendingTasks = getSharedPendingRegistry();
 
     // --- 失效链接检测 (LinkController → Queue::OfflineLinksChecker, link_status_job) ---
@@ -301,23 +305,27 @@ export default definePluginEntry({
           // Scheduled agent runs burn tokens like any chat turn, so they are
           // billed onto the same history_messages columns. Providers quote unit
           // prices in different currencies; this folds them into one.
-          const usagePolicy = resolveUsageCurrencyPolicy(api.pluginConfig ?? {});
-          ctx.logger.info(
-            `[LEADING_V2] Scheduled-run usage accounting in ${usagePolicy.currency} ` +
-              `(rate=${usagePolicy.rate} for ${usagePolicy.foreignProviders.join(",")})`,
-          );
-          const runners = buildRunners({
-            config,
-            resolver,
-            registry: pendingTasks,
-            subagent: api.runtime?.subagent,
-            deliver: (n, to) => fanout.notify(n, to),
-            usagePolicy,
-            appConfig: api.config,
-            logger: ctx.logger,
-          });
-          scheduler = new Scheduler({ store: scheduleStore, runners, logger: ctx.logger });
-          scheduler.start();
+          if (backgroundPollingEnabled) {
+            const usagePolicy = resolveUsageCurrencyPolicy(api.pluginConfig ?? {});
+            ctx.logger.info(
+              `[LEADING_V2] Scheduled-run usage accounting in ${usagePolicy.currency} ` +
+                `(rate=${usagePolicy.rate} for ${usagePolicy.foreignProviders.join(",")})`,
+            );
+            const runners = buildRunners({
+              config,
+              resolver,
+              registry: pendingTasks,
+              subagent: api.runtime?.subagent,
+              deliver: (n, to) => fanout.notify(n, to),
+              usagePolicy,
+              appConfig: api.config,
+              logger: ctx.logger,
+            });
+            scheduler = new Scheduler({ store: scheduleStore, runners, logger: ctx.logger });
+            scheduler.start();
+          } else {
+            ctx.logger.info("[LEADING_V2] Background scheduling and completion polling disabled");
+          }
 
           ctx.logger.info("[LEADING_V2] Service initialized");
         } catch (error) {

@@ -24,6 +24,22 @@ describe("planRabbitMqDebugBuilds", () => {
 });
 
 describe("buildRabbitMqDebugLaunchSpec", () => {
+  it.each([undefined, "0", "1"])(
+    "defaults leading-v2 polling off while preserving an explicit override (%s)",
+    (polling) => {
+      const env = { OPENCLAW_LEADING_V2_BACKGROUND_POLLING: polling };
+      const launch = buildRabbitMqDebugLaunchSpec({
+        entryPath: "C:\\repo\\dist\\entry.js",
+        configPath: "C:\\temp\\openclaw.json",
+        stateDir: "C:\\Users\\tester\\.openclaw-dev",
+        env,
+      });
+
+      expect(launch.env.OPENCLAW_LEADING_V2_BACKGROUND_POLLING).toBe(polling ?? "0");
+      expect(env.OPENCLAW_LEADING_V2_BACKGROUND_POLLING).toBe(polling);
+    },
+  );
+
   it("starts plugin services while keeping external messaging channels disabled", () => {
     const launch = buildRabbitMqDebugLaunchSpec({
       entryPath: "C:\\repo\\dist\\entry.js",

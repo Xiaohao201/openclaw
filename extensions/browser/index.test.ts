@@ -53,7 +53,7 @@ function createApi() {
 
 describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
-    expect(browserPluginReload).toEqual({ restartPrefixes: ["browser"] });
+    expect(browserPluginReload).toEqual({ hotPrefixes: ["browser.profiles"] });
     expect(browserPluginNodeHostCommands).toEqual([
       expect.objectContaining({
         command: "browser.proxy",
