@@ -26,18 +26,24 @@ const SUHENG_DESIGN_CONTEXT = `[suheng-design]
 [/suheng-design]
 `;
 
-export function shouldInjectSuhengDesign(message: string): boolean {
+export function suhengDesignReason(message: string) {
   const trimmed = message.trim();
   if (!trimmed) {
-    return false;
+    return "no-match" as const;
   }
   if (EXPLICIT_SUHENG_DESIGN.test(trimmed)) {
-    return true;
+    return "explicit-design-spec" as const;
   }
-  return (
-    DESIGN_FOLLOWED_BY_TARGET.test(trimmed) ||
-    (VISUAL_CREATION_ACTION.test(trimmed) && VISUAL_ARTIFACT_TARGET.test(trimmed))
-  );
+  if (DESIGN_FOLLOWED_BY_TARGET.test(trimmed)) {
+    return "design-target" as const;
+  }
+  return VISUAL_CREATION_ACTION.test(trimmed) && VISUAL_ARTIFACT_TARGET.test(trimmed)
+    ? ("visual-creation-target" as const)
+    : ("no-match" as const);
+}
+
+export function shouldInjectSuhengDesign(message: string): boolean {
+  return suhengDesignReason(message) !== "no-match";
 }
 
 export function buildSuhengDesignContext(message: string): string {

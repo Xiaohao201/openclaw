@@ -73,6 +73,8 @@ Docs: https://docs.openclaw.ai
 - Video understanding: download extensionless video CDN links based on the guarded response content type, preserving signed URLs and reporting download failures instead of incorrectly requiring yt-dlp.
 - RabbitMQ/Suheng video analysis: reuse recently parsed video URLs within the same session when video understanding receives the original share link, with session isolation, expiry, and failed-parse invalidation.
 
+- RabbitMQ/Suheng intent routing: match the original user task separately from enterprise skill instructions and attachment/video evidence, preventing unrelated report, Word, and design guidance while retaining full execution context and logging per-rule reasons.
+
 ## 2026.4.15
 
 ### Changes

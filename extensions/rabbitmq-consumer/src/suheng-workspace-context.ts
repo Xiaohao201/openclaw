@@ -26,19 +26,29 @@ const WORD_GENERATION_CONTEXT = `[suheng-word]
 `;
 
 /** Limit the extra guidance to turns that can create workspace artifacts. */
-export function shouldInjectSuhengWorkspaceContext(message: string): boolean {
+export function suhengWorkspaceReason(message: string) {
   const normalizedMessage = message.trim();
   if (!normalizedMessage) {
-    return false;
+    return "no-match" as const;
   }
 
-  return (
-    WORD_REQUEST.test(normalizedMessage) ||
-    (FILE_CREATION_ACTION.test(normalizedMessage) &&
-      WORKSPACE_OR_ARTIFACT_TARGET.test(normalizedMessage)) ||
-    (PYTHON_OR_QUOTE_SIGNAL.test(normalizedMessage) &&
-      WORKSPACE_OR_ARTIFACT_TARGET.test(normalizedMessage))
-  );
+  if (WORD_REQUEST.test(normalizedMessage)) {
+    return "word-format" as const;
+  }
+  if (
+    FILE_CREATION_ACTION.test(normalizedMessage) &&
+    WORKSPACE_OR_ARTIFACT_TARGET.test(normalizedMessage)
+  ) {
+    return "file-creation-target" as const;
+  }
+  return PYTHON_OR_QUOTE_SIGNAL.test(normalizedMessage) &&
+    WORKSPACE_OR_ARTIFACT_TARGET.test(normalizedMessage)
+    ? ("python-or-quote-target" as const)
+    : ("no-match" as const);
+}
+
+export function shouldInjectSuhengWorkspaceContext(message: string): boolean {
+  return suhengWorkspaceReason(message) !== "no-match";
 }
 
 /** Stable guidance for Unicode-safe workspace and generated-code handling. */

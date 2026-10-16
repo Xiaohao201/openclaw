@@ -32,15 +32,16 @@ import { normalizeChineseProseQuotes, sanitizeInternalRefs } from "./sanitize-ou
 import { deduplicateSkillContext, readActiveSkillHistory } from "./session-skill-context.js";
 import { prepareHistorySessionSnapshot } from "./session-snapshot.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
-import { buildSuhengDesignContext } from "./suheng-design-context.js";
+import { buildSuhengDesignContext, suhengDesignReason } from "./suheng-design-context.js";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
-import { buildSuhengWorkspaceContext } from "./suheng-workspace-context.js";
+import { buildSuhengWorkspaceContext, suhengWorkspaceReason } from "./suheng-workspace-context.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
 import type { TopicInfo, TopicResolver } from "./topic-resolver.js";
 import { persistTurnUsage } from "./turn-usage-writer.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
+import { extractUserTask } from "./user-task.js";
 
 /** Hard cap on injected template body, so a huge MEDIUMTEXT can't blow the prompt. */
 const TEMPLATE_BODY_MAX = 6000;
@@ -73,14 +74,24 @@ const MONITORING_TOPIC_INTENT_PATTERNS = [
   /(?:负面|正面|中性)(?:舆情|信息|新闻|报道|内容|帖子|文章|动态)?.{0,10}(?:多少|几条|数据|趋势|分布|声量|热度)/iu,
 ];
 
-function shouldInjectTopicContext(message: string, templateReportPending: boolean): boolean {
+function topicContextReason(message: string, templateReportPending: boolean) {
   if (SUBJECT_AGNOSTIC_VIOLATION_CAPABILITY.test(message)) {
-    return false;
+    return "subject-agnostic" as const;
   }
-  return (
-    templateReportPending ||
-    MONITORING_TOPIC_INTENT_PATTERNS.some((pattern) => pattern.test(message))
-  );
+  if (templateReportPending) {
+    return "selected-template" as const;
+  }
+  const names = [
+    "monitoring-project",
+    "monitoring-data",
+    "monitoring-status",
+    "data-monitoring",
+    "query-monitoring",
+    "recent-sentiment",
+    "sentiment-statistics",
+  ] as const;
+  const index = MONITORING_TOPIC_INTENT_PATTERNS.findIndex((pattern) => pattern.test(message));
+  return index < 0 ? ("no-match" as const) : names[index];
 }
 
 /**
@@ -646,6 +657,21 @@ export async function processChatMessage(
 
     // Resolve the user message (prefer from chat body, fallback to record)
     const userMessage = chatMsg.message?.trim() || record.message;
+    const userTask = extractUserTask(userMessage, !!chatMsg.hasAttachment);
+    const intentText = userTask.text;
+    // Never log user text or injected evidence. Reasons are stable rule codes.
+    const auditIntent = (rule: string, matched: boolean, reason: string) => {
+      logger.info(
+        `[CHAT_INTENT] ${JSON.stringify({
+          historyId: chatMsg.historyId,
+          source: userTask.source,
+          excluded: userTask.excluded,
+          rule,
+          matched,
+          reason,
+        })}`,
+      );
+    };
     const sessionId = chatMsg.sessionId || record.sessionId;
     const userId = chatMsg.userId || record.userId;
     mercureTopic = chatMsg.topic || userId;
@@ -655,7 +681,12 @@ export async function processChatMessage(
     // typed the request directly. Relying on discovery among the full skill
     // catalog made identical report requests follow different evidence/search
     // workflows depending on whether the skill picker happened to be used.
-    const builtinSkillName = chatMsg.builtinSkillName ?? inferBuiltinSkillName(userMessage);
+    const builtinSkillName = chatMsg.builtinSkillName ?? inferBuiltinSkillName(intentText);
+    auditIntent(
+      "builtin-skill",
+      !!builtinSkillName,
+      chatMsg.builtinSkillName ? "explicit-selection" : (builtinSkillName ?? "no-match"),
+    );
     await validateBuiltinSkillSelection(
       builtinSkillName,
       skillLookup ? (name) => skillLookup.isPublishedPublicSkill(name) : undefined,
@@ -724,7 +755,7 @@ export async function processChatMessage(
           userId,
           topicResolver,
           logger,
-          requirement: userMessage,
+          requirement: intentText,
           runtime,
           token: chatMsg.historyId,
         });
@@ -768,8 +799,13 @@ export async function processChatMessage(
     // that enterprise into unrelated writing, analysis, and chat. Resolution
     // failure degrades to the plain [userId:...] prefix instead of failing.
     let topicContext = "";
-    const needsTopicContext =
-      !chatMsg.hasAttachment && shouldInjectTopicContext(userMessage, pendingReport !== null);
+    const topicReason = chatMsg.hasAttachment
+      ? "attachment-override"
+      : topicContextReason(intentText, pendingReport !== null);
+    const needsTopicContext = !["attachment-override", "subject-agnostic", "no-match"].includes(
+      topicReason,
+    );
+    auditIntent("monitoring-topic", needsTopicContext, topicReason);
     if (topicResolver && needsTopicContext) {
       try {
         const resolution = await topicResolver.getTopicIdsByUser(userId);
@@ -1167,7 +1203,21 @@ export async function processChatMessage(
       // Does this attachment turn ask for a report (vs an ad-hoc question like
       // "华东有多少条")? A selected template or an explicit report noun counts.
       // Period keywords alone intentionally do not trigger report behavior.
-      const wantsReport = !!selectedTemplate || /报告|简报|研判|通报/.test(userMessage);
+      const wantsReport = !!selectedTemplate || /报告|简报|研判|通报/.test(intentText);
+      const attachmentReport = !!chatMsg.hasAttachment && !pendingReport && wantsReport;
+      auditIntent(
+        "attachment-report",
+        attachmentReport,
+        !chatMsg.hasAttachment
+          ? "no-attachment"
+          : pendingReport
+            ? "background-report"
+            : selectedTemplate
+              ? "selected-template"
+              : wantsReport
+                ? "report-noun"
+                : "no-match",
+      );
 
       // Report turns: force the COMPLETE report inline. This path streams the
       // report AS the chat reply and stores it in history_messages.response —
@@ -1199,8 +1249,17 @@ export async function processChatMessage(
       // block (split off in Step 6). It self-gates per the "when to cite" rules,
       // so pure chat/creative turns simply omit it.
       const citationDirective = buildCitationDirective();
-      const suhengWorkspaceContext = buildSuhengWorkspaceContext(userMessage);
-      const suhengDesignContext = buildSuhengDesignContext(userMessage);
+      const suhengWorkspaceContext = buildSuhengWorkspaceContext(intentText);
+      const suhengDesignContext = buildSuhengDesignContext(intentText);
+      const workspaceReason = suhengWorkspaceReason(intentText);
+      auditIntent("citations", true, "always");
+      auditIntent("workspace", !!suhengWorkspaceContext, workspaceReason);
+      auditIntent(
+        "word",
+        workspaceReason === "word-format",
+        workspaceReason === "word-format" ? "word-format" : "no-match",
+      );
+      auditIntent("design", !!suhengDesignContext, suhengDesignReason(intentText));
       // Interactive turns keep the runtime-authorized tool catalog. A per-message
       // keyword allowlist breaks follow-ups ("make it clearer", "retry") even
       // while the model retains the earlier task. Runtime policy still enforces
