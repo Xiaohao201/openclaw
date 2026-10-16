@@ -183,6 +183,9 @@ export default definePluginEntry({
           ? async (userId) => await debugSkillLookup.listForUser(userId, api.logger)
           : undefined,
       });
+      for (const path of ["/", "/chat"]) {
+        api.registerHttpRoute({ path, auth: "plugin", match: "exact", handler });
+      }
       api.registerHttpRoute({
         path: "/plugins/rabbitmq-consumer/debug",
         auth: "plugin",

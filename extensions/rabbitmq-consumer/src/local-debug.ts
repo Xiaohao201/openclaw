@@ -862,14 +862,25 @@ export function createLocalDebugHttpHandler(params: {
   return async (req, res) => {
     const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
     const pathname = requestUrl.pathname;
-    if (pathname !== DEBUG_ROOT && pathname !== DEBUG_RUN_PATH && pathname !== DEBUG_SKILLS_PATH) {
+    // Only claim default navigation in local-debug mode. Explicit modes must
+    // reach the UI asset handler, including the redirect target itself.
+    const isDefaultEntry =
+      req.method === "GET" &&
+      (pathname === "/" || pathname === "/chat") &&
+      !requestUrl.searchParams.has("mode");
+    if (
+      !isDefaultEntry &&
+      pathname !== DEBUG_ROOT &&
+      pathname !== DEBUG_RUN_PATH &&
+      pathname !== DEBUG_SKILLS_PATH
+    ) {
       return false;
     }
     if (!isLoopback(req.socket.remoteAddress)) {
       sendJson(res, 403, { error: "RabbitMQ local debug is loopback-only" });
       return true;
     }
-    if (pathname === DEBUG_ROOT && req.method === "GET") {
+    if (isDefaultEntry || (pathname === DEBUG_ROOT && req.method === "GET")) {
       res.statusCode = 302;
       res.setHeader("cache-control", "no-store");
       res.setHeader("location", DEBUG_CONTROL_UI_PATH);
