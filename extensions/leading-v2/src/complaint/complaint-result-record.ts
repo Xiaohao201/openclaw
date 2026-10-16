@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import type { RowDataPacket } from "mysql2/promise";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { z } from "zod";
 import { execute, query } from "../client/db-client.js";
 import type { MySqlConfig } from "../client/types.js";
 import type { ComplaintBatch } from "./complaint-batch-store.js";
+import { safeErrorFields } from "./complaint-diagnostics.js";
 import type { LocalComplaintItem } from "./complaint-local-contract.js";
 
 const idSchema = z.number().int().positive().safe();
@@ -41,6 +43,11 @@ const bounded = (text: string, length: number) => Array.from(text).slice(0, leng
 const legacyText = (text: string, length: number) =>
   bounded(text.replace(/[\u{10000}-\u{10ffff}]/gu, "�"), length);
 
+function recordingFailure(code: RecordError, cause: unknown): Error {
+  // Driver errors may embed SQL and credentials. Only safe metadata may escape this boundary.
+  return new Error(code, { cause: safeErrorFields(cause) });
+}
+
 /** Record execution only. Never enqueue a backend task or submit a platform report. */
 export async function saveComplaintResult(params: {
   db: MySqlConfig | undefined;
@@ -58,6 +65,7 @@ export async function saveComplaintResult(params: {
   let complaintId = entry.recording?.complaintId;
   let screenshotUrl = entry.recording?.screenshotUrl ?? undefined;
   let errorCode: RecordError = "RESULT_RECORD_SYNC_FAILED";
+  let stage = "validate_context";
   try {
     if (!db || entry.link !== item.link || !platformNames[item.platform]) {
       throw new Error("Invalid complaint result context");
@@ -72,6 +80,7 @@ export async function saveComplaintResult(params: {
     const status = outcome.state === "done" ? "Done" : outcome.state === "failed" ? "Fail" : "Stop";
     // A deterministic unique slug makes connection retries safe. Do not update an existing
     // row until its task, owner and exact link have been verified by the following read.
+    stage = "insert_detail";
     await execute(
       db,
       "INSERT INTO legal_complaint (slug, jobId, taskId, uid, groupId, platform, link, role, reason, date, updateDate, status) " +
@@ -92,6 +101,7 @@ export async function saveComplaintResult(params: {
       ],
       { idempotent: true },
     );
+    stage = "select_owned_detail";
     const rows = await query<RowDataPacket[]>(
       db,
       "SELECT c.id FROM legal_complaint c JOIN legal_complaint_task t ON t.id = c.taskId " +
@@ -99,6 +109,7 @@ export async function saveComplaintResult(params: {
       [slug, taskId, uid, link, uid, batchId.replaceAll("-", "")],
     );
     if (rows.length !== 1) {
+      stage = "verify_detail_ownership";
       throw new Error("Complaint detail ownership mismatch");
     }
     complaintId = idSchema.parse(rows[0].id);
@@ -108,7 +119,10 @@ export async function saveComplaintResult(params: {
       try {
         const { uploadComplaintScreenshot } = await import("./complaint-evidence.runtime.js");
         screenshotUrl = await uploadComplaintScreenshot(sessionDir, outcome.screenshot);
-      } catch {
+      } catch (error) {
+        createSubsystemLogger("complaint/record").warn(
+          `evidence-upload-failed ${JSON.stringify({ batchId: batch.batchId, taskId: entry.taskId, ...safeErrorFields(error) })}`,
+        );
         evidenceError = "SCREENSHOT_UPLOAD_FAILED";
       }
     } else if (!outcome.screenshot && outcome.state === "done") {
@@ -119,6 +133,7 @@ export async function saveComplaintResult(params: {
         `${outcome.errorCode ?? "NONE"}: ${outcome.message}`,
       255,
     );
+    stage = "update_detail";
     const updated = await execute(
       db,
       "UPDATE legal_complaint SET status = ?, memo = ?, screenshot = ?, updateDate = NOW() " +
@@ -139,20 +154,25 @@ export async function saveComplaintResult(params: {
       { idempotent: true },
     );
     if (updated.affectedRows !== 1) {
+      stage = "verify_update_ownership";
       throw new Error("Complaint detail no longer owned by this batch");
     }
     if (evidenceError) {
+      stage = "record_evidence";
       errorCode = evidenceError;
       throw new Error(evidenceError);
     }
     entry.recording = { state: "saved", complaintId, screenshotUrl: screenshotUrl ?? null };
-  } catch {
+  } catch (error) {
+    createSubsystemLogger("complaint/record").warn(
+      `record-failed ${JSON.stringify({ batchId: batch.batchId, taskId: entry.taskId, stage, errorCode, ...safeErrorFields(error) })}`,
+    );
     entry.recording = {
       state: "failed",
       errorCode,
       ...(complaintId ? { complaintId } : {}),
       ...(screenshotUrl ? { screenshotUrl } : {}),
     };
-    throw new Error(errorCode);
+    throw recordingFailure(errorCode, error);
   }
 }

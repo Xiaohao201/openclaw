@@ -11,7 +11,7 @@ import time
 import os
 import random
 import re
-from log_utils import log_message
+from log_utils import log_message, log_diagnostic
 from category_matcher import normalize_category, category_alias_candidates, format_category_xpath
 from complaint_payload import prepare_complaint_data, extract_intent
 from browser_actions import check_checkbox, click_non_terminal_option
@@ -783,6 +783,8 @@ class BrowserManager:
         """抖音投诉流程"""
         overTime = 30000  # 超时时间10秒（毫秒）
 
+        diagnostic_stage = "navigate"
+        log_diagnostic(diagnostic_stage)
         try:
 
             # 步骤1: 进入指定的URL网页
@@ -823,6 +825,8 @@ class BrowserManager:
                 log_message(self.errMessage)
                 return True
 
+            diagnostic_stage = "open_report"
+            log_diagnostic(diagnostic_stage)
             if 'note' in current_url:
                 log_message("抖音投诉流程----note图文！")
                 # 步骤2: 点击下拉菜单
@@ -869,6 +873,8 @@ class BrowserManager:
             #   （在线核验：点单选圈 -> 提交按钮变可用；点父格/文字 -> 仍禁用。）
             # 说明3：抖音网页举报只有“单层”原因，没有二级子类；数据库 subCategory 是 App 端二级，
             #   网页流程不用，故不再选子类，以免把“其他违规”误模糊成一级“其他”。
+            diagnostic_stage = "select_reason"
+            log_diagnostic(diagnostic_stage)
             main_category = complaint_data.get('category')
             log_message("步骤4: 选择举报原因：{}".format(main_category))
             if not self._select_reason(
@@ -885,6 +891,8 @@ class BrowserManager:
             # 步骤6: 输入描述文本（可选！抖音选完原因“提交”即已可用；描述框选择器抖音会改版，
             #   找不到就跳过、绝不因此让整条投诉失败。多个选择器兜底：优先按“举报描述”标签锚定
             #   其后的 textarea（不依赖 placeholder），再退化到按 placeholder 关键字匹配。）
+            diagnostic_stage = "fill_description"
+            log_diagnostic(diagnostic_stage)
             description = complaint_data.get('reason', None)
             if description:
                 log_message("步骤6: 输入描述文本")
@@ -905,11 +913,15 @@ class BrowserManager:
 
             # 步骤7: 上传图片（可选，_upload_image 内部已容错、失败不抛出）
             log_message("步骤7: 上传图片")
+            diagnostic_stage = "upload_evidence"
+            log_diagnostic(diagnostic_stage)
             self._upload_image(page, complaint_data, "//input[@type='file']")
             time.sleep(2)
 
             # 步骤8: 点击提交按钮
             log_message("步骤8: 点击提交按钮")
+            diagnostic_stage = "submit"
+            log_diagnostic(diagnostic_stage)
             if not DebugRun:
                 self._click_submit(page.get_by_text("提交", exact=True))
             log_message("抖音投诉提交按钮已点击")
@@ -917,8 +929,12 @@ class BrowserManager:
 
             # 步骤9: 截图并上传到OSS
             log_message("步骤9: 截图并上传到OSS")
+            diagnostic_stage = "capture_evidence"
+            log_diagnostic(diagnostic_stage)
             self._save_screenshot(page, complaint_data)
 
+            diagnostic_stage = "verify_submission"
+            log_diagnostic(diagnostic_stage)
             # 步骤10: 验证提交结果（10秒内检查成功提示）
             if not DebugRun:
                 if self._check_submit_success(page, "//*[contains(text(), '提交成功')]"):
@@ -929,7 +945,8 @@ class BrowserManager:
             return True
 
         except Exception as e:
-            log_message(f"抖音投诉流程执行失败: {e}",True)
+            log_diagnostic(diagnostic_stage, e)
+            self.submission_diagnostic = f"抖音举报执行异常，阶段：{diagnostic_stage}；请结合执行器日志核查。"
             return False
     #endregion
     

@@ -1,13 +1,15 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { BrowserHandoff } from "./complaint-session-handoff.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { createExecutorDiagnosticStream, safeErrorFields } from "./complaint-diagnostics.js";
 import {
   localOutcomeSchema,
   type LocalConfig,
   type LocalComplaintItem,
   type LocalOutcome,
 } from "./complaint-local-contract.js";
+import type { BrowserHandoff } from "./complaint-session-handoff.js";
 
 export type RunLocalComplaint = (params: {
   item: LocalComplaintItem;
@@ -15,6 +17,7 @@ export type RunLocalComplaint = (params: {
   config: LocalConfig;
   signal: AbortSignal;
   browserHandoff?: BrowserHandoff;
+  diagnosticContext?: { batchId: string; taskId?: number | null };
 }) => Promise<LocalOutcome>;
 
 export function complaintProcessEnv(config: LocalConfig) {
@@ -52,7 +55,9 @@ export const runLocalComplaint: RunLocalComplaint = async ({
   config,
   signal,
   browserHandoff,
+  diagnosticContext,
 }) => {
+  const log = createSubsystemLogger("complaint/executor");
   const unavailable = await checkLocalComplaintRuntime(config);
   if (unavailable) {
     return unavailable;
@@ -62,13 +67,22 @@ export const runLocalComplaint: RunLocalComplaint = async ({
       cwd: config.runtimeDir,
       windowsHide: true,
       shell: false,
-      stdio: ["pipe", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "pipe"],
       signal,
       env: complaintProcessEnv(config),
     });
     let output = "";
     let overflow = false;
     let timedOut = false;
+    const context = { ...diagnosticContext, pid: child.pid };
+    log.info(`process-start ${JSON.stringify(context)}`);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on(
+      "data",
+      createExecutorDiagnosticStream((event) => {
+        log.info(`stage ${JSON.stringify({ ...context, ...event })}`);
+      }),
+    );
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
@@ -86,6 +100,7 @@ export const runLocalComplaint: RunLocalComplaint = async ({
       /* Exit/error below determines the outcome. */
     });
     child.on("error", (error: NodeJS.ErrnoException) => {
+      log.warn(`process-error ${JSON.stringify({ ...context, ...safeErrorFields(error) })}`);
       clearTimeout(timer);
       if (error.code === "ENOENT") {
         resolve({
@@ -98,8 +113,11 @@ export const runLocalComplaint: RunLocalComplaint = async ({
         reject(error);
       }
     });
-    child.on("close", (code) => {
+    child.on("close", (code, exitSignal) => {
       clearTimeout(timer);
+      log.info(
+        `process-exit ${JSON.stringify({ ...context, code, exitSignal, overflow, timedOut, aborted: signal.aborted })}`,
+      );
       if (code !== 0 || overflow || timedOut || signal.aborted) {
         reject(new Error("Local complaint process interrupted; submission may be unknown."));
         return;
@@ -111,11 +129,18 @@ export const runLocalComplaint: RunLocalComplaint = async ({
         }
         resolve(result);
       } catch (error) {
+        log.warn(`invalid-result ${JSON.stringify({ ...context, ...safeErrorFields(error) })}`);
         reject(error);
       }
     });
     child.stdin.end(
-      JSON.stringify({ ...item, sessionDir, headless: config.headless, phone: config.phone, browserHandoff }),
+      JSON.stringify({
+        ...item,
+        sessionDir,
+        headless: config.headless,
+        phone: config.phone,
+        browserHandoff,
+      }),
     );
   });
 };

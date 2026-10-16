@@ -7,6 +7,10 @@ import { saveComplaintResult } from "./complaint-result-record.js";
 
 vi.mock("../client/db-client.js", () => ({ execute: vi.fn(), query: vi.fn() }));
 vi.mock("./complaint-evidence.runtime.js", () => ({ uploadComplaintScreenshot: vi.fn() }));
+const diagnosticWarn = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/logging-core", () => ({
+  createSubsystemLogger: () => ({ warn: diagnosticWarn }),
+}));
 const db = {
   host: "fixture",
   port: 3306,
@@ -51,6 +55,22 @@ beforeEach(() => {
   };
 });
 describe("complaint result recording", () => {
+  it("records the failing database operation and code without SQL or credentials", async () => {
+    vi.mocked(execute).mockRejectedValueOnce(
+      Object.assign(new Error("private password and SQL"), {
+        code: "ETIMEDOUT",
+        errno: 1205,
+        sqlState: "HY000",
+      }),
+    );
+    await expect(save()).rejects.toThrow("RESULT_RECORD_SYNC_FAILED");
+    const logged = diagnosticWarn.mock.calls[0][0] as string;
+    expect(logged).toContain('"stage":"insert_detail"');
+    expect(logged).toContain('"code":"ETIMEDOUT"');
+    expect(logged).toContain(batch.batchId);
+    expect(logged).not.toContain("private");
+    expect(logged).not.toContain(item.link);
+  });
   it("upserts one owned detail and records its uploaded receipt and actual submission state", async () => {
     await save();
     expect(execute).toHaveBeenCalledWith(

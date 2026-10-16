@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
@@ -37,6 +39,9 @@ import type {
   ProfileRuntimeState,
 } from "./server-context.types.js";
 
+const availabilityLog = createSubsystemLogger("browser/availability");
+const activeEnsures = new WeakMap<ProfileRuntimeState, number>();
+
 type AvailabilityDeps = {
   opts: ContextOptions;
   profile: ResolvedBrowserProfile;
@@ -59,6 +64,11 @@ export function createProfileAvailability({
   getProfileState,
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
+  const lifecycle = (event: string, fields: Record<string, unknown> = {}) => {
+    availabilityLog.info(
+      `${event} ${JSON.stringify({ profile: profile.name, port: profile.cdpPort, gatewayPid: process.pid, ...fields })}`,
+    );
+  };
   const capabilities = getBrowserProfileCapabilities(profile);
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
@@ -96,7 +106,8 @@ export function createProfileAvailability({
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
     setProfileRunning(running);
-    running.proc.on("exit", () => {
+    running.proc.on("exit", (code, signal) => {
+      lifecycle("process-exit", { pid: running.pid, code, signal });
       // Guard against server teardown (e.g., SIGUSR1 restart)
       if (!opts.getState()) {
         return;
@@ -119,6 +130,7 @@ export function createProfileAvailability({
 
     const previousProfile = reconcile.previousProfile;
     if (profileState.running) {
+      lifecycle("stop", { reason: "config_reconcile", pid: profileState.running.pid });
       await stopOpenClawChrome(profileState.running).catch(() => {});
       setProfileRunning(null);
     }
@@ -171,7 +183,7 @@ export function createProfileAvailability({
     );
   };
 
-  const ensureBrowserAvailable = async (): Promise<void> => {
+  const ensureBrowserAvailableImpl = async (requestId: string): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
@@ -214,11 +226,18 @@ export function createProfileAvailability({
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
+      lifecycle("launch-request", {
+        requestId,
+        reason: "http_unreachable",
+        previousPid: profileState.running?.pid,
+      });
       const launched = await launchOpenClawChrome(current.resolved, profile);
       attachRunning(launched);
+      lifecycle("launch-complete", { requestId, pid: launched.pid });
       try {
         await waitForCdpReadyAfterLaunch();
       } catch (err) {
+        lifecycle("stop", { requestId, reason: "startup_cdp_timeout", pid: launched.pid });
         await stopOpenClawChrome(launched).catch(() => {});
         setProfileRunning(null);
         throw err;
@@ -258,16 +277,46 @@ export function createProfileAvailability({
       );
     }
 
+    lifecycle("stop", {
+      requestId,
+      reason: "websocket_unreachable",
+      pid: profileState.running.pid,
+    });
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 
+    lifecycle("launch-request", { requestId, reason: "websocket_unreachable" });
     const relaunched = await launchOpenClawChrome(current.resolved, profile);
     attachRunning(relaunched);
+    lifecycle("launch-complete", { requestId, pid: relaunched.pid });
 
     if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
       throw new Error(
         `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
       );
+    }
+  };
+
+  const ensureBrowserAvailable = async (): Promise<void> => {
+    const runtime = getProfileState();
+    const requestId = randomUUID();
+    const active = (activeEnsures.get(runtime) ?? 0) + 1;
+    activeEnsures.set(runtime, active);
+    lifecycle("ensure-start", { requestId, active, pid: runtime.running?.pid });
+    const started = Date.now();
+    try {
+      await ensureBrowserAvailableImpl(requestId);
+      lifecycle("ensure-ready", { requestId, elapsedMs: Date.now() - started });
+    } catch (error) {
+      lifecycle("ensure-failed", { requestId, elapsedMs: Date.now() - started });
+      throw error;
+    } finally {
+      const remaining = (activeEnsures.get(runtime) ?? 1) - 1;
+      if (remaining > 0) {
+        activeEnsures.set(runtime, remaining);
+      } else {
+        activeEnsures.delete(runtime);
+      }
     }
   };
 
@@ -287,6 +336,7 @@ export function createProfileAvailability({
       }
       return { stopped: idleStop.stopped };
     }
+    lifecycle("stop", { reason: "stop_requested", pid: profileState.running.pid });
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
     return { stopped: true };
