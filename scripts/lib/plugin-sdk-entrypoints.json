@@ -10,6 +10,7 @@
   "runtime",
   "runtime-doctor",
   "runtime-env",
+  "file-delivery-runtime",
   "proxy-capture",
   "runtime-secret-resolution",
   "setup",

@@ -4,6 +4,7 @@ import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-stor
 import type { LocalComplaintItem, LocalConfig } from "./complaint-local-contract.js";
 import { checkLocalComplaintRuntime } from "./complaint-local-process.js";
 import { createLocalBatch, submitLocalBatch } from "./complaint-local.js";
+import { saveComplaintResult } from "./complaint-result-record.js";
 import { sessionBrowserHandoffs } from "./complaint-session-handoff.js";
 import { createComplaintTaskRecord, type ComplaintTaskRecord } from "./complaint-task-record.js";
 
@@ -118,6 +119,14 @@ export async function submitRecordedLocalComplaint(params: {
       browserLease,
       batch,
       persistTask: record.save,
+      persistResult: (current, index) =>
+        saveComplaintResult({
+          db: resolveConfig(api.pluginConfig ?? {}).db,
+          batch: current,
+          index,
+          item: items[index],
+          sessionDir: store.sessionDirectory(userId),
+        }),
     });
     return { ...result, taskId: record.taskId };
   } catch {

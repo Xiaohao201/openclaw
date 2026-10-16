@@ -445,6 +445,18 @@ Beyond `api.runtime`, the API object also provides:
 | `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window |
 | `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                                                  |
 
+## File delivery
+
+`openclaw/plugin-sdk/file-delivery-runtime` provides the version 1
+`uploadFileForDelivery({ version: 1, data, displayName })` contract. It uploads
+authorized artifact bytes through the host's existing OSS file delivery configuration,
+enforces the configured extension and size limits, and returns
+`{ version: 1, url, objectKey, size }`. The URL uses the configured public storage domain.
+Configuration and credentials remain host-owned; plugins must validate the source
+bytes and obtain authorization for storage. Imports are lazy and do not load storage
+configuration during plugin discovery. Upload failures throw and must not cause a
+caller to repeat the external action that produced the artifact.
+
 ## Related
 
 - [SDK Overview](/plugins/sdk-overview) -- subpath reference

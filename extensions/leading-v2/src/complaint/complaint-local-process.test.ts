@@ -25,6 +25,21 @@ const params = () => ({
   signal: new AbortController().signal,
 });
 describe("Python process failures", () => {
+  it("accepts receipt metadata but rejects arbitrary screenshot paths from Python", async () => {
+    const result = {
+      state: "done",
+      message: "fixture",
+      offline: null,
+      screenshot: { fileName: "a".repeat(32) + ".png", capturedAt: "2026-10-16T00:00:00+00:00" },
+    };
+    const script = (value: unknown) =>
+      "import json; print(" + JSON.stringify(JSON.stringify(value)) + ")";
+    await writeFile(join(root, "runner.py"), script(result));
+    expect(await runLocalComplaint(params())).toMatchObject(result);
+    result.screenshot.fileName = "../private.png";
+    await writeFile(join(root, "runner.py"), script(result));
+    await expect(runLocalComplaint(params())).rejects.toThrow();
+  });
   it("passes the administrator phone binding through the child protocol", async () => {
     await writeFile(
       join(root, "runner.py"),

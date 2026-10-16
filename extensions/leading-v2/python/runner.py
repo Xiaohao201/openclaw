@@ -15,6 +15,15 @@ def outcome(state, message, code="NONE"):
     return dict(state=state, message=message, errorCode=code, offline=None)
 
 
+def with_evidence(result, manager):
+    screenshot = getattr(manager, 'result_screenshot', None)
+    if isinstance(screenshot, dict):
+        result['screenshot'] = screenshot
+    if getattr(manager, 'evidence_error', None) == 'SCREENSHOT_CAPTURE_FAILED':
+        result['evidenceError'] = 'SCREENSHOT_CAPTURE_FAILED'
+    return result
+
+
 def validate_input(data):
     from config import ALL_PLATFORMS
     if not isinstance(data, dict) or data.get("platform") not in ALL_PLATFORMS:
@@ -81,6 +90,9 @@ def execute_12377(data):
         result = outcome(mapped[state], message)
         if code:
             result["queryCode"] = code
+        if state == 'submitted':
+            from complaint_evidence import attach_screenshot
+            attach_screenshot(result, lambda: page.screenshot(type='png'), data['sessionDir'])
 
     with sync_playwright() as playwright:
         import browser_session
@@ -156,17 +168,17 @@ def execute(data, manager_factory=create_manager):
         manager.perform_complaint(data["platform"], dict(data, id=os.getpid()))
         # Legacy handlers may return True even when the success marker is absent.
         if manager.submission_confirmed:
-            return outcome("done", "已观察到平台提交成功提示；不代表已受理或处置。")
+            return with_evidence(outcome("done", "已观察到平台提交成功提示；不代表已受理或处置。"), manager)
         if data["platform"] == "xiaohongshu" and getattr(manager, "mobile_only_url", None):
             from xhs_phone import execute_phone
             return execute_phone(data, manager.mobile_only_url)
         code = manager.last_flow_result.error_code.value
         if code in ("LOGIN_REQUIRED", "CAPTCHA_REQUIRED", "MATERIAL_REQUIRED"):
-            return outcome("manual_required", "执行遇到登录、验证或材料要求，需要人工核查后处理。", code)
+            return with_evidence(outcome("manual_required", "执行遇到登录、验证或材料要求，需要人工核查后处理。", code), manager)
         diagnostic = getattr(manager, "submission_diagnostic", None)
         if getattr(manager, "submission_attempted", None) is False:
-            return outcome("failed", diagnostic or "举报流程在提交前停止，未点击提交。", code)
-        return outcome("unknown", diagnostic or "未观察到平台提交成功提示，不能确认结果；请人工核对，勿自动重提。", code)
+            return with_evidence(outcome("failed", diagnostic or "举报流程在提交前停止，未点击提交。", code), manager)
+        return with_evidence(outcome("unknown", diagnostic or "未观察到平台提交成功提示，不能确认结果；请人工核对，勿自动重提。", code), manager)
     except SharedBrowserUnavailable as exc:
         return outcome("manual_required", str(exc), "SHARED_BROWSER_UNAVAILABLE")
     except Exception as error:

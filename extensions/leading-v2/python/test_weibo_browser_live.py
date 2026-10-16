@@ -102,6 +102,9 @@ class WeiboBrowserLiveTest(unittest.TestCase):
                     self.assertEqual(len(owner.pages), 1)
                     self.assertFalse((session / "execution.lock").exists())
                     if expected == "done":
+                        screenshot = session / 'screenshots' / outcome['screenshot']['fileName']
+                        self.assertTrue(screenshot.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'))
+                        self.assertGreater(screenshot.stat().st_size, 100)
                         self.assertEqual(page.evaluate("window.fixtureCategories"), ["不友善言论", "人身攻击"])
                         self.assertEqual(page.evaluate("window.fixtureSubmissions"), 1)
                         self.assertIn("挑动性别对立", page.evaluate("window.fixtureReason"))

@@ -443,6 +443,9 @@ class BrowserManager:
         self.submission_diagnostic = None
         self.flow_stage = "PREPARE_FORM"
         self._selection_failure = None
+        self.result_screenshot = None
+        self.evidence_error = None
+        self._result_checked = False
         if platform not in self.pages or not self.pages[platform]:
             self.last_flow_result = FlowResult.from_legacy(
                 False, f"{platform} 浏览器页面未初始化", "OPEN_CONTENT"
@@ -3390,13 +3393,20 @@ class BrowserManager:
             return False
 
     def _save_screenshot(self, page, complaint_data, full_page=False, image_kind="complaint"):
-        from uuid import uuid4
-        directory = os.path.join(get_base_path(), "screenshots")
-        os.makedirs(directory, mode=0o700, exist_ok=True)
+        # Older handlers call this before checking the receipt. Capture only after
+        # the check, while the actual result page (including popups) is still open.
+        if not getattr(self, '_result_checked', False):
+            return False
+        if getattr(self, 'result_screenshot', None):
+            return True
         try:
-            page.screenshot(path=os.path.join(directory, uuid4().hex + ".png"), full_page=full_page)
+            from complaint_evidence import capture_screenshot
+            self.result_screenshot = capture_screenshot(
+                lambda: page.screenshot(type='png', full_page=full_page), get_base_path())
+            self.evidence_error = None
             return True
         except Exception:
+            self.evidence_error = 'SCREENSHOT_CAPTURE_FAILED'
             return False
 
     def _check_submit_success(self, page, xpath, timeout=3000):
@@ -3408,6 +3418,10 @@ class BrowserManager:
             return True
         except Exception:
             return False
+        finally:
+            self._result_checked = True
+            if getattr(self, 'submission_attempted', False):
+                self._save_screenshot(page, {})
         
     def _check_page_invalid(self, page, role, text):
         """检查页面是否存在"""

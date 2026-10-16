@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { localOutcomeSchema } from "./complaint-local-contract.js";
+import { complaintRecordingSchema, localOutcomeSchema } from "./complaint-local-contract.js";
 
 const batchIdSchema = z.string().uuid();
 const entrySchema = z.object({
@@ -10,6 +10,7 @@ const entrySchema = z.object({
   acceptance: z.enum(["not_attempted", "inflight", "accepted", "rejected", "unknown"]),
   taskId: z.number().int().positive().safe().nullable(),
   execution: localOutcomeSchema.optional(),
+  recording: complaintRecordingSchema.optional(),
 });
 const batchSchema = z.object({
   version: z.literal(1),
@@ -17,7 +18,7 @@ const batchSchema = z.object({
   userId: z.string().min(1),
   createdAt: z.string(),
   executor: z.literal("local").optional(),
-  persistenceError: z.literal("TASK_RECORD_SYNC_FAILED").optional(),
+  persistenceError: z.enum(["TASK_RECORD_SYNC_FAILED", "RESULT_RECORD_SYNC_FAILED"]).optional(),
   entries: z.array(entrySchema).min(1).max(1000),
 });
 export type ComplaintBatch = z.infer<typeof batchSchema>;
