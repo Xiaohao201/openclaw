@@ -9,8 +9,46 @@ the user's managed profile automatically, or use their explicit administrator
 binding. The Python login worker requires the trusted handoff; it cannot select a
 different account or start a replacement browser if the connection is unavailable.
 
+## Shared platform accounts across application users
+
+Automatically provisioned `leading-…` profiles retain separate CDP ports, browser
+data directories, and conversation tabs. Their platform login state is synchronized
+through a deployment-local pool. The initial source is the configured OpenClaw
+default browser (`browser.defaultProfile`), the same browser used by
+`pnpm openclaw browser` without a profile override. Existing accounts in an individual
+user profile do not override that initial source.
+
+Synchronization runs before browser operations, after page operations, and after
+`complaint_browser` login finishes or is cancelled. New users import the existing
+pool automatically. Login changes, token refreshes, and logout propagate on the
+next synchronization, including back to the default browser. An older browser
+revision cannot overwrite a newer shared revision. Existing pages are not reloaded
+or submitted again; a page may need refreshing to display the new account.
+
+Only the domains of the supported direct-reporting platforms participate. Cookies,
+local storage, and IndexedDB are synchronized; unrelated sites remain local to
+their browser. Platform CAPTCHA, device binding, and account expiry still apply.
+Session storage and device-bound credentials are not portable login state.
+
+The pool is stored as `leading-v2-shared-login.json` inside the OpenClaw state
+directory. It contains credentials: keep the deployment's existing filesystem
+access restrictions and do not commit or publish it. File locking and atomic writes
+protect concurrent updates. After the first import, the saved pool remains usable
+when the default browser is offline. If it has never been imported, browser actions
+stop with a setup error rather than silently choosing another account.
+
+For an `existing-session` default browser, enable Chrome remote debugging and
+allow its connection prompt as described below. Explicit administrator bindings
+for other profiles are not automatically added to the shared pool. Login sharing
+does not share conversation tabs, tasks, history records, or task ownership.
+
+Run the offline Chrome integration test by setting
+`OPENCLAW_TEST_SHARED_LOGIN_CHROME` to the Chrome executable path and running
+`pnpm test extensions/leading-v2/src/complaint/complaint-shared-login.browser.test.ts`.
+It uses temporary browser profiles, distinct ports, and intercepted fixture pages.
+
 Finishing, cancelling, or timing out login leaves the original browser and tab
-open. Login/logout changes remain in the shared profile, without cookie export.
+open. Login/logout changes remain in the profile and enter the shared platform pool.
 Afterwards, refresh the tab with `browser snapshot` using the tool's returned
 `browserTargetId` as `targetId` before another handoff. Login and reporting hold
 the same browser lease, so concurrent OpenClaw operations are blocked until release.

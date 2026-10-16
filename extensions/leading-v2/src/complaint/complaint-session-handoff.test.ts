@@ -13,6 +13,37 @@ const make = () =>
   }));
 
 describe("conversation browser handoff", () => {
+  it("synchronizes shared login before page operations and after observed changes", async () => {
+    const sync = vi.fn(async () => {});
+    const identity = {
+      profile: "leading-fixture",
+      binding: { version: 1, cdpUrl: "http://127.0.0.1:18801", profileDir: "fixture" },
+    };
+    const registry = new SessionBrowserHandoffs(async () => identity, sync);
+    await registry.before(a, { action: "status" });
+    expect(sync).not.toHaveBeenCalled();
+    await registry.before(a, { action: "open", targetUrl: "https://weibo.com" });
+    expect(sync).toHaveBeenLastCalledWith(identity, true);
+    await registry.observe(a, { action: "open" }, result);
+    expect(sync).toHaveBeenLastCalledWith(identity, false);
+    await registry.refreshSharedLogin(a);
+    expect(sync).toHaveBeenCalledTimes(3);
+    const lease = await registry.acquire(a);
+    await expect(registry.before(a, params)).rejects.toThrow();
+    expect(sync).toHaveBeenCalledTimes(3);
+    lease.release();
+  });
+
+  it("blocks browser operations when the shared login cannot be imported", async () => {
+    const registry = new SessionBrowserHandoffs(
+      async () => ({ profile: "user", binding: {} }),
+      async () => {
+        throw new Error("Login sync failed");
+      },
+    );
+    await expect(registry.before(a, { action: "open" })).rejects.toThrow("Login sync failed");
+  });
+
   it("prepares the user's browser before open and pins later calls to this session's page", async () => {
     const registry = make();
     await expect(registry.before(a, { action: "status" })).resolves.toEqual({
