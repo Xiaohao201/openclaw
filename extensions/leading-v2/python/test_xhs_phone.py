@@ -40,6 +40,40 @@ class FakePhone:
 
 
 class PhoneTests(unittest.TestCase):
+    def test_phone_entrypoint_extracts_intent_before_filling(self):
+        from test_complaint_payload import JUDGMENT
+        with tempfile.TemporaryDirectory() as directory:
+            user_id = 'fixture-user'
+            data = dict(sessionDir=str(Path(directory) / hashlib.sha256(user_id.encode()).hexdigest()),
+                        category='不实信息', reason=JUDGMENT,
+                        phone=dict(serial='fixture-phone', userId=user_id))
+            phone = FakePhone()
+            with patch('xhs_phone.tempfile.gettempdir', return_value=directory):
+                result = execute_phone(data, URL, lambda config: phone)
+            self.assertEqual(result['state'], 'done')
+            self.assertIn('挑动群体对立', phone.reason)
+            self.assertNotIn('事实背景', phone.reason)
+
+    def test_phone_matches_a_judgment_only_to_observed_category_aliases(self):
+        phone = AdbPhone(dict(serial='fixture'))
+        pages = [['对他人造成困扰或危害'], ['选择举报原因', '不实信息、谣言'], ['举报', '提交']]
+        index = [0]
+        taps = []
+        def tap(label, **kwargs):
+            self.assertIn(label, pages[index[0]])
+            taps.append(label)
+            index[0] += 1
+        def wait(predicate, message):
+            rows = [dict(text=text) for text in pages[index[0]]]
+            if not predicate(rows):
+                raise PhoneFailure(message)
+            return rows
+        phone.tap = tap
+        phone.wait_nodes = wait
+        phone.texts = lambda: pages[index[0]]
+        phone.select_category('事实背景：其他争论。举报事由：捏造事实传播谣言。', None)
+        self.assertEqual(taps, ['对他人造成困扰或危害', '不实信息、谣言'])
+
     def test_binding_and_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             data = dict(sessionDir=directory, category='不实信息', reason='测试')

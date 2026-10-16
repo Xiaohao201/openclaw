@@ -170,6 +170,17 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["state"], "unknown")
         self.assertNotIn("secret", result["message"])
 
+    def test_exception_before_tracked_submission_is_failed(self):
+        manager = Manager(confirmed=False)
+        manager.submission_attempted = False
+        def fail(*args):
+            raise RuntimeError("secret browser detail")
+        manager.perform_complaint = fail
+        result = execute(self.payload, manager_factory=lambda: manager)
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("未点击提交", result["message"])
+        self.assertNotIn("secret", result["message"])
+
     def test_rejects_invalid_payload_before_browser(self):
         for patch in ({"link": "file:///secret"}, {"sessionDir": "../relative"}, {"platform": "../bad"}, {"reason": ""}):
             with self.assertRaises(ValueError):

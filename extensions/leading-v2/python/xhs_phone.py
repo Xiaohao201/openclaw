@@ -14,6 +14,9 @@ from urllib.parse import urljoin, urlsplit
 import uuid
 
 from xhs_phone_ui import PhoneFailure, bounds, parse_nodes, select_node
+from category_matcher import category_alias_candidates, normalize_category
+from complaint_payload import extract_intent, prepare_complaint_data
+from self_healing.schemas import contains_terminal_action
 
 PACKAGE = 'com.xingin.xhs'
 GATES = ('当前内容仅支持在小红书app内查看', '请在小红书app内打开',
@@ -246,35 +249,45 @@ class AdbPhone:
         self.tap('举报', scroll='horizontal')
 
     def select_category(self, category, subcategory):
-        if any(value in ('提交', '下一步', '返回', '举报', '更多')
+        if any(value in ('提交', '下一步', '返回', '举报', '更多') or contains_terminal_action(value)
                for value in (category, subcategory)):
             raise PhoneFailure('举报分类不能是流程操作按钮。')
         group = '对他人造成困扰或危害'
-        choices = (group, category, '不实信息、谣言' if category == '不实信息' else category)
+        category = normalize_category(extract_intent(category))
+        def candidates(value):
+            labels = [value, *category_alias_candidates(value)]
+            if '不实信息' in labels:
+                labels.append('不实信息、谣言')
+            return list(dict.fromkeys(label for label in labels if label))
+        choices = (group, *candidates(category))
         nodes = self.wait_nodes(lambda rows: any(label in (n.get('text'), n.get('content-desc'))
                                                 for n in rows for label in choices),
                                 '举报分类页尚未就绪，请核查手机。')
         visible = [text for n in nodes for text in (n.get('text', ''), n.get('content-desc', ''))]
         if category == '侵犯我/我的组织的权益':
             raise PhoneFailure('侵权投诉需要身份及材料，请人工选择并处理。')
-        if group in visible:
+        # Prefer a category already visible; descend into the known group only when needed.
+        matched = next((label for label in candidates(category) if label in visible), None)
+        if group in visible and (matched is None or category == group):
             self.tap(group)
             if category == group:
                 category, subcategory = subcategory, None
             if not category:
                 raise PhoneFailure('请选择明确的举报原因。')
             self.wait_nodes(lambda rows: any(
-                category in (n.get('text'), n.get('content-desc')) or
+                any(label in (n.get('text'), n.get('content-desc')) for label in candidates(category)) or
                 '选择举报原因' in n.get('text', '') or
                 (category == '不实信息' and n.get('text') == '不实信息、谣言')
                 for n in rows), '举报原因列表尚未展开，请核查手机。')
-        # A version-specific exact alias, not fuzzy classification of user claims.
-        if category == '不实信息' and '不实信息、谣言' in self.texts():
-            category = '不实信息、谣言'
+        # Alias labels must actually occur in the current UI before they can be tapped.
+        visible = self.texts()
+        category = next((label for label in candidates(category) if label in visible), category)
         self.tap(category, scroll='vertical')
         if '下一步' in self.texts():
             self.tap('下一步')
         if subcategory:
+            visible = self.texts()
+            subcategory = next((label for label in candidates(subcategory) if label in visible), subcategory)
             self.tap(subcategory, scroll='vertical')
 
     def check_submit_ready(self):
@@ -338,6 +351,7 @@ class AdbPhone:
 
 
 def execute_phone(data, url, factory=AdbPhone, *, stop_before_submit=False):
+    data = prepare_complaint_data(data, max_reason_length=400)
     config = data.get('phone')
     if not isinstance(config, dict) or not config.get('serial') or not config.get('userId'):
         return result('manual_required', '此内容需要手机 App；请配置绑定用户的 phone.serial 和 phone.userId。', 'PHONE_NOT_CONFIGURED')

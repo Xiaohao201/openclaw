@@ -163,11 +163,16 @@ def execute(data, manager_factory=create_manager):
         code = manager.last_flow_result.error_code.value
         if code in ("LOGIN_REQUIRED", "CAPTCHA_REQUIRED", "MATERIAL_REQUIRED"):
             return outcome("manual_required", "执行遇到登录、验证或材料要求，需要人工核查后处理。", code)
-        return outcome("unknown", "未观察到平台提交成功提示，不能确认结果；请人工核对，勿自动重提。", code)
+        diagnostic = getattr(manager, "submission_diagnostic", None)
+        if getattr(manager, "submission_attempted", None) is False:
+            return outcome("failed", diagnostic or "举报流程在提交前停止，未点击提交。", code)
+        return outcome("unknown", diagnostic or "未观察到平台提交成功提示，不能确认结果；请人工核对，勿自动重提。", code)
     except SharedBrowserUnavailable as exc:
         return outcome("manual_required", str(exc), "SHARED_BROWSER_UNAVAILABLE")
     except Exception as error:
         if execution_started:
+            if getattr(manager, "submission_attempted", None) is False:
+                return outcome("failed", "举报流程在提交前发生异常，未点击提交。", "EXECUTION_INTERRUPTED")
             return outcome("unknown", "执行结果无法确认，禁止自动重提。", "EXECUTION_INTERRUPTED")
         return runtime_failure(error, phase)
     finally:

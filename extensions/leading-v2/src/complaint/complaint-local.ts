@@ -157,7 +157,12 @@ export function queryLocalBatch(batch: ComplaintBatch) {
       submissionStatus: state === "done" ? "Done" : null,
       failureReason:
         state === "unknown"
-          ? "无法确认执行结果，请人工核对，禁止自动重提。"
+          ? [
+              execution?.state === "unknown" ? execution.message : "",
+              "无法确认执行结果，请人工核对，禁止自动重提。",
+            ]
+              .filter(Boolean)
+              .join(" ")
           : !running && execution?.state === "pending"
             ? "批次已停止，本链接未执行，不会自动继续。"
             : (execution?.message ?? null),

@@ -22,6 +22,7 @@
 import re
 import json
 from difflib import SequenceMatcher
+from complaint_payload import extract_intent
 
 # 用于比较时需要剔除的“噪音字符”：各类空白与标点（包含中英文）。
 # 剔除后 "重复、旧闻" 与 "重复旧闻" 相等，"9. 标题党" 与 "标题党" 前缀可比。
@@ -35,6 +36,10 @@ _LEADING_INDEX_RE = re.compile(r"^\s*\d{1,3}\s*[\.、．)）\]\:：]\s*")
 # 大模型研判文本常描述“违规事实”，而不是直接给出平台类目。这里仅维护含义明确、
 # 跨平台稳定的少量别名；具体叶子类目排在父类目前，避免只点到仍需二次选择的父节点。
 _SEMANTIC_ALIAS_RULES = (
+    (
+        ("不友善言论", "不友善", "人身攻击", "恶意引战", "引战", "侮辱谩骂"),
+        ("不友善", "群体对立", "性别对立", "群体攻击", "攻击特定性别群体", "引战"),
+    ),
     (
         ("侮辱谩骂", "不友善言论", "人身攻击"),
         ("侮辱", "谩骂", "辱骂", "名誉贬损", "人格贬损", "贬损性"),
@@ -119,6 +124,31 @@ def similarity(a, b):
     return SequenceMatcher(None, _clean(a), _clean(b)).ratio()
 
 
+def category_alias_candidates(target):
+    """Ordered semantic labels to verify against a page that cannot enumerate options."""
+    target = _clean(extract_intent(normalize_category(target)))
+    matches = []
+    for index, (options, keywords) in enumerate(_SEMANTIC_ALIAS_RULES):
+        hits = sum(_clean(keyword) in target for keyword in keywords)
+        if hits:
+            matches.append((-hits, index, options))
+    return list(dict.fromkeys(option for _, _, options in sorted(matches) for option in options))
+
+
+def format_category_xpath(template, text):
+    """Insert a text literal, including mixed quotes, without altering XPath structure."""
+    if "'" not in text:
+        literal = "'" + text + "'"
+    elif '"' not in text:
+        literal = '"' + text + '"'
+    else:
+        literal = 'concat(' + ',"\'",'.join("'" + part + "'" for part in text.split("'")) + ')'
+    formatted = template.replace("'{text}'", literal).replace('"{text}"', literal)
+    if '{text}' in formatted:
+        raise ValueError('Category template must use a quoted text placeholder')
+    return formatted
+
+
 def semantic_alias_match(target, options):
     """用本地关键词把长篇研判文本归到平台真实选项。
 
@@ -126,7 +156,7 @@ def semantic_alias_match(target, options):
     命中关键词最多的一组；同组内优先返回更具体的叶子类目。无可靠命中时返回
     ``(None, -1, 0.0)``，让调用方继续使用大模型兜底。
     """
-    tgt = _clean(normalize_category(target))
+    tgt = _clean(extract_intent(normalize_category(target)))
     if not tgt:
         return (None, -1, 0.0)
 

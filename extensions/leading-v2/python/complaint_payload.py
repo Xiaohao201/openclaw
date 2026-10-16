@@ -1,51 +1,63 @@
 # -*- coding: utf-8 -*-
 """Helpers for normalizing complaint rows before browser execution."""
+import re
 
 
 COMPLAINT_REASON_MAX_LENGTH = 190
 
 
-def limit_complaint_reason(reason, rewriter=None):
+def extract_intent(text):
+    """Prefer the stated complaint over background before applying length limits."""
+    text = str(text or '').strip()
+    for heading in (r"(?:拟定)?(?:举报|投诉)(?:事由|原因)", r"研判(?:意见|结论)"):
+        matches = list(re.finditer(heading + r"\s*(?:[（(][^）)\n]{0,40}[）)])?\s*[：:]", text))
+        if matches:
+            intent = text[matches[-1].end():]
+            intent = re.split(r"(?:举报|投诉)诉求\s*[：:]", intent, maxsplit=1)[0].strip()
+            if intent:
+                return intent
+    return text
+
+
+def limit_complaint_reason(reason, rewriter=None, *, max_length=COMPLAINT_REASON_MAX_LENGTH):
     """Rewrite an overlong complaint reason and enforce the hard limit.
 
     AI rewriting is best effort.  The final slice is intentional: platform
     validation must never depend on the model following the length request.
     """
     text = str(reason or "").strip()
-    if len(text) <= COMPLAINT_REASON_MAX_LENGTH:
+    if len(text) <= max_length:
         return text
 
     rewritten = None
     try:
         if rewriter is None:
             # Local integration never loads machine-wide model credentials.
-            return text[:COMPLAINT_REASON_MAX_LENGTH]
-        rewritten = rewriter(text, COMPLAINT_REASON_MAX_LENGTH)
+            return text[:max_length]
+        rewritten = rewriter(text, max_length)
     except Exception:
         # AI availability must not block complaint submission. The hard slice
         # below is the guaranteed fallback for import, timeout and API errors.
         rewritten = None
 
     bounded = str(rewritten or "").strip() or text
-    return bounded[:COMPLAINT_REASON_MAX_LENGTH]
+    return bounded[:max_length]
 
 
-def prepare_complaint_data(data):
+def prepare_complaint_data(data, *, max_reason_length=COMPLAINT_REASON_MAX_LENGTH):
     """Normalize reason length and category-classification input.
 
-    Legacy tasks already carry ``category`` after the dispatcher classifies the
-    linked detection job. Direct AgentJudgment tasks intentionally skip that
-    dispatcher, so their bounded ``reason`` text is the best available semantic
-    input for the browser flow's existing option matcher.
+    Explicit category labels remain authoritative. For direct judgments, keep the
+    full allegation available for classification even when the form text is capped.
     """
     prepared = dict(data or {})
-    reason = str(prepared.get("reason") or "").strip()
+    reason = extract_intent(prepared.get("reason"))
     if reason:
-        reason = limit_complaint_reason(reason)
-        prepared["reason"] = reason
+        prepared["reason"] = limit_complaint_reason(reason, max_length=max_reason_length)
 
-    category = str(prepared.get("category") or "").strip()
+    category = extract_intent(prepared.get("category"))
     if category:
+        prepared["category"] = category
         return prepared
 
     if reason:
