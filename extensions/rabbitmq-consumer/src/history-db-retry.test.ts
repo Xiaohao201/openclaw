@@ -50,7 +50,9 @@ describe("history metadata retry", () => {
     await vi.runAllTimersAsync();
     const error = await outcome;
     expect(write).toHaveBeenCalledTimes(4);
-    expect(describeHistoryDbError(error)).toBe("code=ECONNRESET attempts=4");
+    expect(describeHistoryDbError(error)).toBe(
+      "code=ECONNRESET attempts=4 operation=updateMetadata",
+    );
     expect(String(error)).not.toContain("private database");
   });
   it.each(["ER_PARSE_ERROR", "ER_ACCESS_DENIED_ERROR", "ER_BAD_FIELD_ERROR", "UNKNOWN"])(
@@ -94,5 +96,11 @@ describe("history metadata retry", () => {
     expect(write).not.toHaveBeenCalled();
     expect(describeHistoryDbError({ code: "secret\nraw SQL" })).toBe("code=UNKNOWN attempts=1");
     expect(describeHistoryDbError(null)).toBe("code=UNKNOWN attempts=1");
+    expect(
+      describeHistoryDbError(new Error("fetch failed", { cause: { code: "ECONNRESET" } })),
+    ).toBe("code=ECONNRESET attempts=1");
+    const circular: { cause?: unknown } = {};
+    circular.cause = circular;
+    expect(describeHistoryDbError(circular)).toBe("code=UNKNOWN attempts=1");
   });
 });

@@ -1,5 +1,9 @@
 import mysql from "mysql2/promise";
-import { retryHistoryMetadataWrite, type HistoryMetadataWriteContext } from "./history-db-retry.js";
+import {
+  retryHistoryDbOperation,
+  retryHistoryMetadataWrite,
+  type HistoryDbContext,
+} from "./history-db-retry.js";
 import { createHistoryMetadataPatch } from "./history-metadata.js";
 import { createKeyedSerialQueue } from "./keyed-serial-queue.js";
 import type {
@@ -49,7 +53,8 @@ export class HistoryManager {
   private readerPool: mysql.Pool | null = null;
   private writerPool: mysql.Pool | null = null;
   private readonly metadataWrites = createKeyedSerialQueue();
-  private readonly metadataShutdown = new AbortController();
+  private readonly responseWrites = createKeyedSerialQueue();
+  private readonly shutdown = new AbortController();
 
   constructor(
     readerConfig: HistoryDbConfig,
@@ -132,12 +137,15 @@ export class HistoryManager {
   }
 
   /** Fetch a history record by ID. Returns null if not found. */
-  async getRecord(historyId: number): Promise<HistoryRecord | null> {
-    const pool = this.getReaderPool();
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-      `SELECT id, session_id, user_id, message, response, tools_used, metadata, created_at
+  async getRecord(historyId: number, context?: HistoryDbContext): Promise<HistoryRecord | null> {
+    const [rows] = await retryHistoryDbOperation(
+      () =>
+        this.getReaderPool().execute<mysql.RowDataPacket[]>(
+          `SELECT id, session_id, user_id, message, response, tools_used, metadata, created_at
        FROM ${this.tableSql} WHERE id = ?`,
-      [historyId],
+          [historyId],
+        ),
+      { ...context, operation: "getRecord", historyId, signal: this.shutdown.signal },
     );
 
     if (!rows || rows.length === 0) {
@@ -240,12 +248,25 @@ export class HistoryManager {
   }
 
   /** Update the response field for a history record. */
-  async updateResponse(historyId: number, response: string): Promise<void> {
-    const pool = this.getWriterPool();
-    await pool.execute(`UPDATE ${this.tableSql} SET response = ? WHERE id = ?`, [
-      response,
-      historyId,
-    ]);
+  async updateResponse(
+    historyId: number,
+    response: string,
+    context?: HistoryDbContext,
+  ): Promise<void> {
+    this.shutdown.signal.throwIfAborted();
+    // A lost acknowledgement may follow a committed UPDATE. Repeating the same
+    // assignment is safe, but an older retry must not overtake a newer answer.
+    await this.responseWrites(String(historyId), () =>
+      retryHistoryDbOperation(
+        async () => {
+          await this.getWriterPool().execute(
+            `UPDATE ${this.tableSql} SET response = ? WHERE id = ?`,
+            [response, historyId],
+          );
+        },
+        { ...context, operation: "updateResponse", historyId, signal: this.shutdown.signal },
+      ),
+    );
   }
 
   /**
@@ -259,9 +280,9 @@ export class HistoryManager {
   async updateMetadata(
     historyId: number,
     patch: Record<string, unknown>,
-    context?: HistoryMetadataWriteContext,
+    context?: HistoryDbContext,
   ): Promise<void> {
-    this.metadataShutdown.signal.throwIfAborted();
+    this.shutdown.signal.throwIfAborted();
     const update = createHistoryMetadataPatch(patch);
     if (!update) {
       return;
@@ -276,7 +297,7 @@ export class HistoryManager {
             [...update.values, historyId],
           );
         },
-        { ...context, historyId, signal: this.metadataShutdown.signal },
+        { ...context, historyId, signal: this.shutdown.signal },
       ),
     );
   }
@@ -350,7 +371,7 @@ export class HistoryManager {
 
   /** Close all connection pools. */
   async close(): Promise<void> {
-    this.metadataShutdown.abort();
+    this.shutdown.abort();
     if (this.readerPool) {
       await this.readerPool.end();
       this.readerPool = null;

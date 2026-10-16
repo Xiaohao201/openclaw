@@ -189,6 +189,7 @@ export class StreamingMercurePusher {
   private readonly historyId: number | undefined;
   private readonly flushIntervalMs: number;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private stopped = false;
   private fullText = "";
   /**
    * Offset into {@link fullText} up to which the VISIBLE stream has been pushed.
@@ -219,7 +220,7 @@ export class StreamingMercurePusher {
 
   /** Append a text delta from the LLM stream. */
   appendDelta(delta: string): void {
-    if (!delta) {
+    if (!delta || this.stopped) {
       return;
     }
     this.fullText += delta;
@@ -322,7 +323,8 @@ export class StreamingMercurePusher {
       this.artifactLinks?.sanitize(this.fullText) ?? this.fullText,
     );
     this.pending = this.pending.then(async () => {
-      if (safe) {
+      // Once failed, skip queued chunks; only an already-started POST must drain.
+      if (safe && !this.stopped) {
         await this.pusher.pushText(this.topic, safe, this.historyId);
       }
     });
@@ -354,13 +356,15 @@ export class StreamingMercurePusher {
   }
 
   /** Push an error after draining in-flight text pushes. */
-  async pushError(error: string): Promise<void> {
+  async pushError(error: string): Promise<boolean> {
+    this.stopped = true;
     this.cancelTimer();
     // Freeze the visible cursor so no further deltas can be streamed after the
     // error (any tail is dropped, matching the old buffer-clear behavior).
     this.pushedLen = this.fullText.length;
-    await this.pending;
-    await this.pusher.pushError(this.topic, error, this.historyId);
+    // A rejected text push must not poison the terminal notification chain.
+    await this.pending.catch(() => {});
+    return this.pusher.pushError(this.topic, error, this.historyId);
   }
 
   private scheduleFlush(): void {
@@ -369,7 +373,7 @@ export class StreamingMercurePusher {
     }
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.flush();
+      void this.flush().catch(() => {});
     }, this.flushIntervalMs);
   }
 

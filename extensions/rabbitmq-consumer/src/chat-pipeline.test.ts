@@ -10,7 +10,7 @@ import {
 } from "./chat-pipeline.js";
 import { buildCitationDirective } from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
-import { retryHistoryMetadataWrite } from "./history-db-retry.js";
+import { retryHistoryDbOperation, retryHistoryMetadataWrite } from "./history-db-retry.js";
 import type { HistoryManager } from "./history-manager.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import type { SkillLookup } from "./skill-lookup.js";
@@ -51,23 +51,24 @@ function createChatMessage(): ChatMessage {
 }
 
 function createHistoryManagerMock() {
-  const updateResponse = vi.fn(async () => {});
+  const updateResponse = vi.fn<HistoryManager["updateResponse"]>().mockResolvedValue(undefined);
   const updateMetadata = vi.fn<HistoryManager["updateMetadata"]>().mockResolvedValue(undefined);
+  const getRecord = vi.fn<HistoryManager["getRecord"]>().mockResolvedValue({
+    id: 1,
+    sessionId: SESSION_ID,
+    userId: USER_ID,
+    message: "hi there",
+    response: null,
+    toolsUsed: null,
+    metadata: null,
+    createdAt: new Date(),
+  });
   const historyManager = {
-    getRecord: async () => ({
-      id: 1,
-      sessionId: SESSION_ID,
-      userId: USER_ID,
-      message: "hi there",
-      response: null,
-      toolsUsed: null,
-      metadata: null,
-      createdAt: new Date(),
-    }),
+    getRecord,
     updateResponse,
     updateMetadata,
   } as unknown as HistoryManager;
-  return { historyManager, updateResponse, updateMetadata };
+  return { historyManager, getRecord, updateResponse, updateMetadata };
 }
 
 function createRuntimeMock(options: {
@@ -146,6 +147,167 @@ describe("processChatMessage", () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
 
+  const terminalEvents = () =>
+    vi.mocked(fetch).mock.calls.flatMap(([, init]) => {
+      const body = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      const event = JSON.parse(body.get("data") ?? "{}") as {
+        type: string;
+        historyId?: number;
+        error?: string;
+      };
+      return event.type === "error" || event.type === "done"
+        ? [{ ...event, topic: body.get("topic") }]
+        : [];
+    });
+
+  it.each(["reset", "missing"])(
+    "ends the frontend turn when the initial history read is %s",
+    async (kind) => {
+      const { historyManager, getRecord } = createHistoryManagerMock();
+      if (kind === "reset") {
+        getRecord.mockRejectedValue(
+          Object.assign(new Error("private database SQL"), { code: "ECONNRESET" }),
+        );
+      } else {
+        getRecord.mockResolvedValue(null);
+      }
+      const run = vi.fn();
+      const runtime = createRuntimeMock({ workspaceDir, onRun: run });
+      const result = await processChatMessage(
+        { ...createChatMessage(), topic: "lobster/user/42" },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+      );
+      expect(result).toMatch(/^Error:/);
+      expect(result).not.toContain("private database");
+      expect(run).not.toHaveBeenCalled();
+      expect(
+        terminalEvents().map(({ type, historyId, topic }) => ({ type, historyId, topic })),
+      ).toEqual([
+        { type: "error", historyId: 1, topic: "lobster/user/42" },
+        { type: "done", historyId: 1, topic: "lobster/user/42" },
+      ]);
+      if (kind === "reset") {
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("stage=getRecord"));
+      }
+      expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(
+        "Connection reset by frontend",
+      );
+    },
+  );
+
+  it("ends the frontend turn before failed timeline persistence settles and never downgrades a full response", async () => {
+    const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
+    updateResponse.mockRejectedValue(
+      Object.assign(new Error("private SQL"), { code: "ECONNRESET" }),
+    );
+    let releaseTimeline: () => void = () => {};
+    updateMetadata.mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseTimeline = resolve;
+      }),
+    );
+    const run = vi.fn();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: run,
+      onWait: (listener) =>
+        listener?.({ runId: "r1", seq: 1, stream: "assistant", ts: 1, data: { delta: "partial" } }),
+      sessionMessages: [{ role: "assistant", content: "full canonical answer" }],
+    });
+    const result = processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(terminalEvents().map((event) => event.type)).toEqual(["error", "done"]),
+      );
+    } finally {
+      releaseTimeline();
+    }
+    expect(await result).toMatch(/^Error:/);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(updateResponse).toHaveBeenCalledTimes(1);
+    expect(updateResponse.mock.calls[0][1]).toBe("full canonical answer");
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("stage=updateResponse"));
+    expect(JSON.stringify(terminalEvents())).not.toContain("private SQL");
+  });
+
+  it("reports an agent wait reset without blaming the frontend and preserves partial output", async () => {
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "assistant",
+          ts: 1,
+          data: { delta: "partial answer" },
+        });
+        throw Object.assign(new Error("private upstream URL"), { code: "ECONNRESET" });
+      },
+    });
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+    expect(result).toMatch(/^Error:/);
+    expect(updateResponse.mock.calls[0][1]).toBe("partial answer");
+    expect(terminalEvents().map((event) => event.type)).toEqual(["error", "done"]);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("stage=agent.wait"));
+    expect(JSON.stringify(vi.mocked(logger.error).mock.calls)).not.toContain("private upstream");
+  });
+
+  it("recovers reads and final response writes while running the agent and its tool only once", async () => {
+    const { historyManager, getRecord, updateResponse } = createHistoryManagerMock();
+    const record = await getRecord(1);
+    getRecord.mockClear();
+    const reset = Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    const read = vi.fn().mockRejectedValueOnce(reset).mockResolvedValue(record);
+    const write = vi.fn().mockRejectedValueOnce(reset).mockResolvedValue(undefined);
+    const signal = new AbortController().signal;
+    getRecord.mockImplementation((historyId, context) =>
+      retryHistoryDbOperation(read, { ...context, historyId, operation: "getRecord", signal }),
+    );
+    updateResponse.mockImplementation((historyId, _response, context) =>
+      retryHistoryDbOperation(write, {
+        ...context,
+        historyId,
+        operation: "updateResponse",
+        signal,
+      }),
+    );
+    const run = vi.fn();
+    const tool = vi.fn();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: run,
+      onWait: () => {
+        tool();
+      },
+      sessionMessages: [{ role: "assistant", content: "saved answer" }],
+    });
+    expect(
+      await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger),
+    ).toBe("saved answer");
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect(terminalEvents().map((event) => event.type)).toEqual(["done"]);
+  });
+
   it.each([false, true])(
     "uses upload evidence for live and persisted links (cancelled=%s)",
     async (cancelled) => {
@@ -202,7 +364,7 @@ describe("processChatMessage", () => {
       expect(response).toContain(`[下载报告](${url})`);
       expect(response).toContain(`[报告.html](${url})`);
       expect(response).not.toContain(wrong);
-      expect(updateResponse).toHaveBeenCalledWith(1, response);
+      expect(updateResponse).toHaveBeenCalledWith(1, response, { userId: USER_ID, logger });
       const requests = vi
         .mocked(fetch)
         .mock.calls.map(([, init]) => (typeof init?.body === "string" ? init.body : ""));
@@ -343,7 +505,7 @@ describe("processChatMessage", () => {
     );
 
     expect(aborted).toEqual([SESSION_KEY]);
-    expect(updateResponse).toHaveBeenCalledWith(1, "输出已暂停。");
+    expect(updateResponse).toHaveBeenCalledWith(1, "输出已暂停。", { userId: USER_ID, logger });
     expect(result).toBe("输出已暂停。");
   });
 
@@ -489,7 +651,7 @@ describe("processChatMessage", () => {
 
     expect(result).toBe("hello");
     expect(result).not.toContain("LEAK");
-    expect(updateResponse).toHaveBeenCalledWith(1, "hello");
+    expect(updateResponse).toHaveBeenCalledWith(1, "hello", { userId: USER_ID, logger });
   });
 
   it("tags every chat Mercure push with the originating historyId", async () => {
@@ -915,7 +1077,10 @@ describe("processChatMessage", () => {
     );
 
     expect(result).toBe("full canonical answer");
-    expect(updateResponse).toHaveBeenCalledWith(1, "full canonical answer");
+    expect(updateResponse).toHaveBeenCalledWith(1, "full canonical answer", {
+      userId: USER_ID,
+      logger,
+    });
   });
 
   it("persists Chinese prose with paired full-width quotation marks", async () => {
@@ -941,7 +1106,7 @@ describe("processChatMessage", () => {
 
     const expected = "弱势群体叙事自带燃点，“残疾夫妻”“脑瘫女孩住桥洞两年”。";
     expect(result).toBe(expected);
-    expect(updateResponse).toHaveBeenCalledWith(1, expected);
+    expect(updateResponse).toHaveBeenCalledWith(1, expected, { userId: USER_ID, logger });
   });
 
   it("extracts text from array-form (block) assistant content without throwing", async () => {
@@ -968,7 +1133,7 @@ describe("processChatMessage", () => {
     );
 
     expect(result).toBe("块状内容答案");
-    expect(updateResponse).toHaveBeenCalledWith(1, "块状内容答案");
+    expect(updateResponse).toHaveBeenCalledWith(1, "块状内容答案", { userId: USER_ID, logger });
   });
 
   it.each(["排查昨天的高风险舆情", "今天莱州一中的舆情情况如何？"])(
@@ -1675,7 +1840,7 @@ describe("processChatMessage", () => {
       expect(countFeedData).not.toHaveBeenCalled();
       expect(ranSubagent).toBe(true);
       expect(result).toBe("normal answer");
-      expect(updateResponse).toHaveBeenCalledWith(1, "normal answer");
+      expect(updateResponse).toHaveBeenCalledWith(1, "normal answer", { userId: USER_ID, logger });
     },
   );
 
@@ -2308,7 +2473,7 @@ describe("processChatMessage", () => {
 
       expect(result).toBe("最终报告正文");
       expect(waits).toHaveLength(2);
-      expect(updateResponse).toHaveBeenCalledWith(1, "最终报告正文");
+      expect(updateResponse).toHaveBeenCalledWith(1, "最终报告正文", { userId: USER_ID, logger });
       const metadataPatches = updateMetadata.mock.calls as unknown as Array<
         [number, { steps?: Array<{ status: string }> }]
       >;
