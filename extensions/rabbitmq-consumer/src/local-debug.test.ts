@@ -814,6 +814,55 @@ describe("rabbitmq local debug HTTP surface", () => {
     expect(response.headers.get("set-cookie")).toContain("SameSite=Strict");
   });
 
+  it.each(["/", "/?session=main", "/chat?session=main"])(
+    "opens the debug app and establishes its API session from %s",
+    async (path) => {
+      const listSkills = vi.fn(async () => []);
+      const baseUrl = await startHandler(async () => ({ response: "ok", events: [] }), listSkills);
+      const response = await fetch(`${baseUrl}${path}`, { redirect: "manual" });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/?mode=rabbitmq-debug");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const setCookie = response.headers.get("set-cookie");
+      expect(setCookie).toContain(`Path=${debugRoot}`);
+      expect(setCookie).toContain("HttpOnly");
+      expect(setCookie).toContain("SameSite=Strict");
+      const cookie = setCookie?.split(";", 1)[0];
+      if (!cookie) {
+        throw new Error("debug session cookie was not issued");
+      }
+      const skillsResponse = await fetch(`${baseUrl}${debugRoot}/skills?user_id=42`, {
+        headers: { cookie },
+      });
+      expect(skillsResponse.status).toBe(200);
+      expect(listSkills).toHaveBeenCalledWith("42");
+    },
+  );
+
+  it.each([
+    "/?mode=rabbitmq-debug",
+    "/?mode=control-ui",
+    "/chat?session=main&mode=control-ui",
+    "/assets/app.js",
+    "/settings",
+  ])("leaves the selected UI mode and unrelated routes to the Gateway (%s)", async (path) => {
+    const baseUrl = await startHandler(async () => ({ response: "ok", events: [] }));
+    const response = await fetch(`${baseUrl}${path}`, { redirect: "manual" });
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("does not redirect non-navigation requests at the root", async () => {
+    const baseUrl = await startHandler(async () => ({ response: "ok", events: [] }));
+    const response = await fetch(baseUrl, { method: "POST", redirect: "manual" });
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
   it("rejects API requests without the path-scoped debug session", async () => {
     const run = vi.fn(async () => ({ response: "unused", events: [] }));
     const listSkills = vi.fn(async () => []);

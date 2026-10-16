@@ -34,6 +34,7 @@ describe("rabbitmq-consumer registration", () => {
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
       name: "video_link_parse",
     });
+    expect(api.registerHttpRoute).not.toHaveBeenCalled();
   });
 
   it("registers the local page while hard-disabling remote services", async () => {
@@ -65,6 +66,12 @@ describe("rabbitmq-consumer registration", () => {
       name: "collaboration_history_query",
       optional: true,
     });
+
+    for (const path of ["/", "/chat"]) {
+      expect(api.registerHttpRoute).toHaveBeenCalledWith(
+        expect.objectContaining({ path, auth: "plugin", match: "exact" }),
+      );
+    }
 
     expect(api.registerHttpRoute).toHaveBeenCalledWith(
       expect.objectContaining({
