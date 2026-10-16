@@ -29,6 +29,7 @@
         "python/browser_session.py",
         "python/category_llm.py",
         "python/category_matcher.py",
+        "python/complaint_evidence.py",
         "python/complaint_payload.py",
         "python/config.py",
         "python/eastmoney_platform.py",

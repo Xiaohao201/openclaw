@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ComplaintBatchStore } from "./complaint-batch-store.js";
+import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
 import { parseLocalRequest, resolveLocalConfig } from "./complaint-local-contract.js";
 import {
   queryLocalBatch,
@@ -30,6 +30,72 @@ const request = (links = ["https://weibo.com/1/2"]) => ({
 });
 
 describe("direct local reporting", () => {
+  it("persists the observed outcome before recording a screenshot and exposes the saved detail", async () => {
+    const persistResult = vi.fn(async (batch: ComplaintBatch, index: number) => {
+      expect((await store.get("1", batch.batchId))?.entries[index].execution?.state).toBe("done");
+      batch.entries[index].recording = {
+        state: "saved",
+        complaintId: 123,
+        screenshotUrl: "https://images.example.test/receipt.png",
+      };
+    });
+    const run = vi.fn().mockResolvedValue({ state: "done", message: "receipt", offline: null });
+    const result = await submitLocalBatch({
+      store,
+      userId: "1",
+      items: parseLocalRequest(request()),
+      config: resolveLocalConfig({}),
+      run,
+      persistResult,
+    });
+    await waitForLocalBatch(result.batchId);
+    expect(persistResult).toHaveBeenCalledTimes(1);
+    expect(queryLocalBatch((await store.get("1", result.batchId))!).links[0]).toMatchObject({
+      state: "done",
+      complaintId: 123,
+      screenshot: "https://images.example.test/receipt.png",
+      recordingState: "saved",
+      recordingError: null,
+    });
+  });
+  it("stops on result storage errors without erasing or repeating the successful submission", async () => {
+    const links = ["https://weibo.com/1", "https://weibo.com/2"];
+    const persistResult = vi.fn(async (batch: ComplaintBatch, index: number) => {
+      batch.entries[index].recording = {
+        state: "failed",
+        errorCode: "SCREENSHOT_UPLOAD_FAILED",
+        complaintId: 123,
+      };
+      throw new Error("SCREENSHOT_UPLOAD_FAILED");
+    });
+    const run = vi.fn().mockResolvedValue({ state: "done", message: "receipt", offline: null });
+    const result = await submitLocalBatch({
+      store,
+      userId: "1",
+      items: parseLocalRequest({
+        ...request(links),
+        linkJudgments: links.map((link) => ({ link, judgment: reason })),
+      }),
+      config: resolveLocalConfig({}),
+      run,
+      persistResult,
+    });
+    await waitForLocalBatch(result.batchId);
+    const status = queryLocalBatch((await store.get("1", result.batchId))!);
+    expect(status.persistenceError).toBe("RESULT_RECORD_SYNC_FAILED");
+    expect(status.links[0]).toMatchObject({
+      state: "done",
+      recordingState: "failed",
+      complaintId: 123,
+      recordingError: "SCREENSHOT_UPLOAD_FAILED",
+    });
+    expect(status.links[1].state).toBe("not_submitted");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it("rejects links the legacy detail table cannot store before execution", () => {
+    expect(() => parseLocalRequest(request(["https://weibo.com/" + "a".repeat(1000)]))).toThrow();
+    expect(() => parseLocalRequest(request(["https://weibo.com/😀"]))).toThrow();
+  });
   it.each([
     ["baidu", "https://baijiahao.baidu.com/s?id=123456"],
     ["bilibili", "https://www.bilibili.com/video/BV1testfixture"],

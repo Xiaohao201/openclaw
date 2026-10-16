@@ -57,7 +57,18 @@ const requestSchema = z
     confirmed: z.literal(true),
     subjectScope: z.enum(["Institution", "Enterprise"]),
     judgment: reasonSchema,
-    links: z.array(z.string().trim().min(1).max(2048)).min(1).max(1000),
+    // legal_complaint.link is a legacy varchar(1000) utf8mb3 column.
+    links: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(1000)
+          .regex(/^[^\u{10000}-\u{10ffff}]*$/u),
+      )
+      .min(1)
+      .max(1000),
     role: z.enum(["Personal", "Enterprise"]).default("Personal"),
     linkJudgments: z
       .array(z.object({ link: z.string(), judgment: reasonSchema }).strict())
@@ -164,9 +175,40 @@ export const localOutcomeSchema = z
     offline: z.boolean().nullable(),
     errorCode: z.string().max(100).optional(),
     queryCode: z.string().max(128).optional(),
+    screenshot: z
+      .object({
+        fileName: z.string().regex(/^[a-f0-9]{32}\.png$/),
+        capturedAt: z.string().datetime({ offset: true }),
+      })
+      .strict()
+      .optional(),
+    evidenceError: z.literal("SCREENSHOT_CAPTURE_FAILED").optional(),
   })
   .strict();
 export type LocalOutcome = z.infer<typeof localOutcomeSchema>;
+
+export const complaintRecordingSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      state: z.literal("saved"),
+      complaintId: z.number().int().positive().safe(),
+      screenshotUrl: z.string().url().max(255).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("failed"),
+      complaintId: z.number().int().positive().safe().optional(),
+      screenshotUrl: z.string().url().max(255).optional(),
+      errorCode: z.enum([
+        "RESULT_RECORD_SYNC_FAILED",
+        "SCREENSHOT_MISSING",
+        "SCREENSHOT_CAPTURE_FAILED",
+        "SCREENSHOT_UPLOAD_FAILED",
+      ]),
+    })
+    .strict(),
+]);
 
 const configSchema = z
   .object({

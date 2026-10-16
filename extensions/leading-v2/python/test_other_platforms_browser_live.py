@@ -76,6 +76,9 @@ class OtherPlatformsBrowserLiveTest(unittest.TestCase):
                     self.assertEqual(page.evaluate('window.fixtureCategories'), categories)
                     self.assertEqual(page.evaluate('window.fixtureSubmissions'), 1 if expected == 'done' else 0)
                     if expected == 'done':
+                        screenshot = session / 'screenshots' / outcome['screenshot']['fileName']
+                        self.assertTrue(screenshot.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'))
+                        self.assertGreater(screenshot.stat().st_size, 100)
                         form = page.frame_locator('iframe') if platform == 'bilibili' else page
                         self.assertEqual(form.locator('textarea').input_value(), '捏造事实传播谣言。')
                     else:

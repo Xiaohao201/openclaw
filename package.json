@@ -96,6 +96,10 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
+    "./plugin-sdk/file-delivery-runtime": {
+      "types": "./dist/plugin-sdk/file-delivery-runtime.d.ts",
+      "default": "./dist/plugin-sdk/file-delivery-runtime.js"
+    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"

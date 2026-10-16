@@ -46,11 +46,22 @@ export async function submitLocalBatch(params: {
   browserLease?: { handoff: BrowserHandoff; release: () => void };
   batch?: ComplaintBatch;
   persistTask?: (batch: ComplaintBatch) => Promise<void>;
+  persistResult?: (batch: ComplaintBatch, index: number) => Promise<void>;
 }) {
   const { store, userId, items, config } = params;
   const batch = params.batch ?? (await createLocalBatch(store, userId, items));
-  const checkpoint = async () => {
+  const checkpoint = async (resultIndex?: number) => {
     await store.save(batch);
+    if (resultIndex !== undefined && params.persistResult) {
+      try {
+        await params.persistResult(batch, resultIndex);
+      } catch (error) {
+        batch.persistenceError = "RESULT_RECORD_SYNC_FAILED";
+        await store.save(batch);
+        throw error;
+      }
+      await store.save(batch);
+    }
     try {
       await params.persistTask?.(batch);
     } catch (error) {
@@ -100,7 +111,7 @@ export async function submitLocalBatch(params: {
           : outcome.state === "unknown"
             ? "unknown"
             : "rejected";
-      await checkpoint();
+      await checkpoint(index);
       if (outcome.state === "unknown" || outcome.state === "manual_required") {
         for (const remaining of batch.entries.slice(index + 1)) {
           remaining.execution = {
@@ -169,6 +180,11 @@ export function queryLocalBatch(batch: ComplaintBatch) {
       offline: execution?.offline ?? null,
       errorCode: execution?.errorCode ?? null,
       queryCode: execution?.queryCode ?? null,
+      complaintId: entry.recording?.complaintId ?? null,
+      screenshot: entry.recording?.screenshotUrl ?? null,
+      recordingState: entry.recording?.state ?? null,
+      recordingError: entry.recording?.state === "failed" ? entry.recording.errorCode : null,
+      evidenceError: execution?.evidenceError ?? null,
     };
   });
   return {
@@ -190,6 +206,6 @@ export function queryLocalBatch(batch: ComplaintBatch) {
     },
     links,
     agentInstruction:
-      "只有 done 表示观察到平台提交成功提示，不代表受理或处置。manual_required 需要在执行机处理登录/验证。unknown 禁止自动重提。offline 与提交结果独立。",
+      "只有 done 表示观察到平台提交成功提示，不代表受理或处置。截图和入库结果见 screenshot、recordingState、recordingError；保存失败不得重新举报。manual_required 需要在执行机处理登录/验证。unknown 禁止自动重提。offline 与提交结果独立。",
   };
 }

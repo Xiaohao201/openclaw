@@ -130,6 +130,14 @@ class AdbPhone:
         if self._bridge is not None:
             self._bridge.close()
 
+    def screenshot(self):
+        self.foreground()
+        completed = subprocess.run(
+            [self.adb, '-s', self.serial, 'exec-out', 'screencap', '-p'],
+            capture_output=True, timeout=10, check=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return completed.stdout
+
     def run(self, args):
         if time.monotonic() >= self.deadline:
             raise PhoneFailure('手机操作超时，请核对当前页面。')
@@ -371,8 +379,12 @@ def execute_phone(data, url, factory=AdbPhone, *, stop_before_submit=False):
             json.dump(dict(pid=os.getpid(), createdAt=datetime.now(timezone.utc).isoformat()), file)
         phone = factory(config)
         phone.allow_submit = not stop_before_submit
-        return submit_phone(phone, url, data['category'], data.get('subCategory'), data['reason'],
-                            stop_before_submit=stop_before_submit)
+        outcome = submit_phone(phone, url, data['category'], data.get('subCategory'), data['reason'],
+                               stop_before_submit=stop_before_submit)
+        if outcome['state'] in ('done', 'unknown'):
+            from complaint_evidence import attach_screenshot
+            attach_screenshot(outcome, lambda: phone.screenshot(), data['sessionDir'])
+        return outcome
     except Exception:
         return result('manual_required', '手机初始化失败，请检查 ADB 和设备授权。', 'PHONE_UNAVAILABLE')
     finally:

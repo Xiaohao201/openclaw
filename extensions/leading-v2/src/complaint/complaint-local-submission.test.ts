@@ -13,10 +13,12 @@ const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
   submit: vi.fn(),
+  saveResult: vi.fn(),
 }));
 vi.mock("./complaint-batch-store.js", () => ({
   ComplaintBatchStore: class {
     save = mocks.saveBatch;
+    sessionDirectory = () => "fixture-session";
   },
 }));
 vi.mock("./complaint-local.js", () => ({
@@ -24,6 +26,7 @@ vi.mock("./complaint-local.js", () => ({
   submitLocalBatch: mocks.submit,
 }));
 vi.mock("./complaint-task-record.js", () => ({ createComplaintTaskRecord: mocks.createRecord }));
+vi.mock("./complaint-result-record.js", () => ({ saveComplaintResult: mocks.saveResult }));
 vi.mock("./complaint-local-process.js", () => ({ checkLocalComplaintRuntime: mocks.checkRuntime }));
 vi.mock("./complaint-session-handoff.js", () => ({
   sessionBrowserHandoffs: () => ({ acquire: mocks.acquire }),
@@ -68,6 +71,19 @@ beforeEach(() => {
 });
 
 describe("recorded local complaint coordination", () => {
+  it("wires result recording to the executing user's session and task", async () => {
+    await submitRecordedLocalComplaint(params);
+    const { persistResult } = mocks.submit.mock.calls[0][0];
+    await persistResult(batch, 0);
+    expect(mocks.saveResult).toHaveBeenCalledExactlyOnceWith({
+      db: undefined,
+      batch,
+      index: 0,
+      item: items[0],
+      sessionDir: "fixture-session",
+    });
+    expect(batch.entries[0].taskId).toBe(42);
+  });
   it("does not insert or acquire a browser when local storage fails", async () => {
     mocks.createBatch.mockRejectedValue(new Error("disk full"));
     expect(await submitRecordedLocalComplaint(params)).toMatchObject({

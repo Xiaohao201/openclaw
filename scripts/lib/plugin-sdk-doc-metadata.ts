@@ -83,6 +83,9 @@ export const pluginSdkDocMetadata = {
   "runtime-store": {
     category: "runtime",
   },
+  "file-delivery-runtime": {
+    category: "runtime",
+  },
   "allow-from": {
     category: "utilities",
   },
