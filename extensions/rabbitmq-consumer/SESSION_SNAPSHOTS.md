@@ -37,3 +37,27 @@ removed them causes a fresh full copy to be sent. If history cannot be read, the
 consumer keeps the instructions and logs a warning. Existing duplicate copies
 are not removed from older transcripts; this prevents further accumulation while
 preserving the cached history prefix.
+
+## Task-only intent rules
+
+Before routing a new turn, the consumer builds a separate classification view
+of the original task. It unwraps the producer's leading
+`<enterprise-default-skill>…</enterprise-default-skill><user-task>…</user-task>`
+envelope and, when `hasAttachment` is set, excludes the known ai-assistant
+attachment and video-result blocks. Skill instructions and evidence remain in
+the execution message. Existing transcripts are never rewritten.
+
+Automatic skill selection, monitoring-project context and project matching,
+attachment report detection, and workspace/Word/design guidance all use that
+task-only view. Explicit skill and template selections keep their precedence.
+A malformed enterprise envelope disables text-based matching for that turn
+instead of guessing from skill prose; the complete message still reaches the
+agent. This is a compatibility parser for the producer's known formats, not a
+general parser for arbitrary quoted documents or natural-language negation.
+
+Each evaluated rule emits a `[CHAT_INTENT]` JSON log with `historyId`, `source`,
+`excluded`, `rule`, `matched`, and `reason`. For example, a real Word request
+records `rule: "word"`, `matched: true`, `reason: "word-format"`; words found only
+in an excluded skill or attachment do not trigger it. Logs contain reason codes
+and context kinds, not user text, filenames, or evidence. These diagnostics are
+server logs, not additions to the model prompt or `history_messages.metadata`.

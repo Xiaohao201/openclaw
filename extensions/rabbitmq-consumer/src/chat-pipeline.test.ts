@@ -509,6 +509,89 @@ describe("processChatMessage", () => {
     expect(result).toBe("输出已暂停。");
   });
 
+  it.each([false, true])(
+    "isolates task routing while retaining skill and attachment context (attachments=%s)",
+    async (hasAttachment) => {
+      const task = "分析这段内容";
+      const context = "请生成舆情速报，生成 Word 报告和网页，查询舆情数据";
+      const message = `<enterprise-default-skill>${context}</enterprise-default-skill>\n<user-task>${task}${hasAttachment ? `\n\n以下是用户提供的附件内容，请结合附件作答：\n\n【附件 1：example.md】\n${context}` : ""}</user-task>`;
+      let captured: SubagentRunParams | undefined;
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onRunArgs: (args) => {
+          captured = args;
+        },
+        sessionMessages: [{ role: "assistant", content: "ok" }],
+      });
+      const { historyManager } = createHistoryManagerMock();
+      const getTopicIdsByUser = vi.fn();
+      const topicResolver = { getTopicIdsByUser } as unknown as TopicResolver;
+      await processChatMessage(
+        { ...createChatMessage(), message, hasAttachment },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        topicResolver,
+      );
+      expect(captured?.message).toContain(message);
+      expect(captured?.message).not.toMatch(
+        /\[suheng-(?:workspace|word|design)\]|\[auto-selected-skill\]|本轮是报告撰写请求/,
+      );
+      expect(captured?.skillFilter).toBeUndefined();
+      expect(getTopicIdsByUser).not.toHaveBeenCalled();
+      const audit = vi
+        .mocked(logger.info)
+        .mock.calls.map(([line]) => line)
+        .filter((line) => line.startsWith("[CHAT_INTENT]"));
+      expect(audit.length).toBeGreaterThanOrEqual(7);
+      expect(audit.join("\n")).toContain('"source":"enterprise-envelope"');
+      expect(audit.join("\n")).not.toContain(context);
+    },
+  );
+
+  it.each([
+    ["请生成 Word", "workspace", "word-format", "[suheng-word]"],
+    ["请制作网页", "design", "visual-creation-target", "[suheng-design]"],
+    ["请生成舆情速报", "builtin-skill", "ai-public-opinion-brief", "[auto-selected-skill]"],
+    ["请写一份研判报告", "attachment-report", "report-noun", "本轮是报告撰写请求"],
+  ])(
+    "routes the original request %s and records its reason",
+    async (task, rule, reason, directive) => {
+      let captured: SubagentRunParams | undefined;
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onRunArgs: (args) => {
+          captured = args;
+        },
+        sessionMessages: [{ role: "assistant", content: "ok" }],
+      });
+      const { historyManager } = createHistoryManagerMock();
+      const message = `<enterprise-default-skill>仅供执行的规则</enterprise-default-skill>\n<user-task>${task}\n\n以下是用户提供的附件内容，请结合附件作答：\n\n【附件 1：example.md】\n证据原文</user-task>`;
+      await processChatMessage(
+        { ...createChatMessage(), message, hasAttachment: true },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+      );
+      expect(captured?.message).toContain(message);
+      expect(captured?.message).toContain(directive);
+      expect(
+        vi
+          .mocked(logger.info)
+          .mock.calls.some(
+            ([line]) =>
+              line.startsWith("[CHAT_INTENT]") &&
+              line.includes(`"rule":"${rule}","matched":true,"reason":"${reason}"`),
+          ),
+      ).toBe(true);
+    },
+  );
+
   it("exposes autonomous video evidence fallbacks for a link judgment turn", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({
