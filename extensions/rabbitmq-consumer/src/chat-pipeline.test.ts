@@ -10,6 +10,7 @@ import {
 } from "./chat-pipeline.js";
 import { buildCitationDirective } from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
+import { retryHistoryMetadataWrite } from "./history-db-retry.js";
 import type { HistoryManager } from "./history-manager.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import type { SkillLookup } from "./skill-lookup.js";
@@ -51,7 +52,7 @@ function createChatMessage(): ChatMessage {
 
 function createHistoryManagerMock() {
   const updateResponse = vi.fn(async () => {});
-  const updateMetadata = vi.fn(async () => {});
+  const updateMetadata = vi.fn<HistoryManager["updateMetadata"]>().mockResolvedValue(undefined);
   const historyManager = {
     getRecord: async () => ({
       id: 1,
@@ -606,11 +607,15 @@ describe("processChatMessage", () => {
           data: { phase: "start", name: "exec", toolCallId: "t1" },
         });
         await vi.waitFor(() => {
-          expect(updateMetadata).toHaveBeenCalledWith(1, {
-            steps: expect.arrayContaining([
-              expect.objectContaining({ status: "running", label: "正在查询分析数据" }),
-            ]),
-          });
+          expect(updateMetadata).toHaveBeenCalledWith(
+            1,
+            {
+              steps: expect.arrayContaining([
+                expect.objectContaining({ status: "running", label: "正在查询分析数据" }),
+              ]),
+            },
+            { userId: USER_ID, logger },
+          );
         });
       },
     });
@@ -660,6 +665,61 @@ describe("processChatMessage", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Persisting running steps failed"),
     );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('historyId=1 userId="42" code=UNKNOWN attempts=1'),
+    );
+  });
+
+  it("recovers a metadata write without running the agent or its tool action again", async () => {
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+    const write = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("private connection details"), { code: "ECONNRESET" }),
+      )
+      .mockResolvedValue(undefined);
+    updateMetadata.mockImplementationOnce((historyId, _patch, context) =>
+      retryHistoryMetadataWrite(write, {
+        ...context,
+        historyId,
+        signal: new AbortController().signal,
+      }),
+    );
+    const run = vi.fn();
+    const toolAction = vi.fn();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: run,
+      onWait: (listener) => {
+        toolAction();
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          data: { phase: "start", name: "exec", toolCallId: "once" },
+        });
+        listener?.({
+          runId: "r1",
+          seq: 2,
+          stream: "tool",
+          ts: 2,
+          data: { phase: "end", name: "exec", toolCallId: "once" },
+        });
+      },
+      sessionMessages: [{ role: "assistant", content: "done" }],
+    });
+    expect(
+      await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger),
+    ).toBe("done");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(toolAction).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(logger.warn).mock.calls.flat().join(" ")).not.toContain(
+      "private connection details",
+    );
+    const last = updateMetadata.mock.calls.at(-1)?.[1].steps as Array<{ status: string }>;
+    expect(last.every((step) => step.status !== "running")).toBe(true);
   });
 
   it("finalizes a still-running tool step before persisting the history timeline", async () => {

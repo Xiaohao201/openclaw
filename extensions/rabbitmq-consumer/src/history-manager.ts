@@ -1,4 +1,7 @@
 import mysql from "mysql2/promise";
+import { retryHistoryMetadataWrite, type HistoryMetadataWriteContext } from "./history-db-retry.js";
+import { createHistoryMetadataPatch } from "./history-metadata.js";
+import { createKeyedSerialQueue } from "./keyed-serial-queue.js";
 import type {
   CollaborationHistoryQueryResult,
   ChatMessage,
@@ -45,6 +48,8 @@ export class HistoryManager {
   private readonly tableSql: string;
   private readerPool: mysql.Pool | null = null;
   private writerPool: mysql.Pool | null = null;
+  private readonly metadataWrites = createKeyedSerialQueue();
+  private readonly metadataShutdown = new AbortController();
 
   constructor(
     readerConfig: HistoryDbConfig,
@@ -64,6 +69,12 @@ export class HistoryManager {
       password: config.password,
       database: config.database,
       connectionLimit: 3,
+      // mysql2 starts idle eviction only when maxIdle is below connectionLimit.
+      maxIdle: 2,
+      idleTimeout: 60_000,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10_000,
+      connectTimeout: 10_000,
       waitForConnections: true,
       charset: "utf8mb4",
       timezone: "+08:00",
@@ -241,41 +252,33 @@ export class HistoryManager {
    * Merge a patch into a record's `metadata` JSON. Independent writers touch
    * different keys — the work-process timeline (`{ steps: [...] }`), citation
    * sources (`{ citations: [...] }`), and the report-generator (`{ report }`) —
-   * so this reads the current metadata and spreads the patch over it rather than
-   * overwriting, or one writer would clobber another's keys. The read uses the
-   * writer pool to avoid reading a stale replica of our own just-written row.
-   * The caller passes a plain object; it is serialized here. Best-effort: a
-   * failure must never fail the chat turn.
+   * so assign only the supplied fields atomically on the writer connection.
+   * Serialize each row's updates across retries so older snapshots cannot
+   * overtake a newer terminal state. Callers keep persistence best-effort.
    */
-  async updateMetadata(historyId: number, patch: Record<string, unknown>): Promise<void> {
-    const pool = this.getWriterPool();
-    let existing: Record<string, unknown> = {};
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-      `SELECT metadata FROM ${this.tableSql} WHERE id = ?`,
-      [historyId],
-    );
-    const raw = rows?.[0]?.metadata;
-    // mysql2 returns a JSON column as an already-parsed object (the normal
-    // case); tolerate a legacy string value too. Missing the object branch made
-    // every write clobber the sibling keys — e.g. the later steps write wiped
-    // the citations written earlier in the same turn, so history lost footnotes.
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-      existing = raw as Record<string, unknown>;
-    } else if (typeof raw === "string" && raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          existing = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // Corrupt/legacy metadata — start fresh rather than fail the write.
-      }
+  async updateMetadata(
+    historyId: number,
+    patch: Record<string, unknown>,
+    context?: HistoryMetadataWriteContext,
+  ): Promise<void> {
+    this.metadataShutdown.signal.throwIfAborted();
+    const update = createHistoryMetadataPatch(patch);
+    if (!update) {
+      return;
     }
-    const merged = { ...existing, ...patch };
-    await pool.execute(`UPDATE ${this.tableSql} SET metadata = ? WHERE id = ?`, [
-      JSON.stringify(merged),
-      historyId,
-    ]);
+    await this.metadataWrites(String(historyId), () =>
+      retryHistoryMetadataWrite(
+        async () => {
+          // mysql2 evicts fatal connections. Reacquire from the pool on each attempt;
+          // destroying the shared pool would disrupt other conversations.
+          await this.getWriterPool().execute(
+            `UPDATE ${this.tableSql} SET metadata = ${update.expression} WHERE id = ?`,
+            [...update.values, historyId],
+          );
+        },
+        { ...context, historyId, signal: this.metadataShutdown.signal },
+      ),
+    );
   }
 
   /**
@@ -347,6 +350,7 @@ export class HistoryManager {
 
   /** Close all connection pools. */
   async close(): Promise<void> {
+    this.metadataShutdown.abort();
     if (this.readerPool) {
       await this.readerPool.end();
       this.readerPool = null;

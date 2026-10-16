@@ -15,6 +15,7 @@ import {
 } from "./citations.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
+import { describeHistoryDbError } from "./history-db-retry.js";
 import type { HistoryManager } from "./history-manager.js";
 import { mediaLinesToMarkdown } from "./media-lines.js";
 import {
@@ -524,6 +525,9 @@ export async function processChatMessage(
   };
   const storedSteps: StoredStep[] = [];
   let timelinePersisted = false;
+  const metadataWriteContext = { userId: chatMsg.userId, logger };
+  const metadataFailureContext = (error: unknown) =>
+    `historyId=${chatMsg.historyId} userId=${JSON.stringify(chatMsg.userId)} ${describeHistoryDbError(error)}`;
   let pendingTimelineWrite = Promise.resolve();
   const persistRunningTimeline = () => {
     if (timelinePersisted) {
@@ -533,10 +537,10 @@ export async function processChatMessage(
     // mutate storedSteps. Serialize writes so an older snapshot cannot win.
     const steps = storedSteps.map((step) => ({ ...step }));
     pendingTimelineWrite = pendingTimelineWrite
-      .then(() => historyManager.updateMetadata(chatMsg.historyId, { steps }))
+      .then(() => historyManager.updateMetadata(chatMsg.historyId, { steps }, metadataWriteContext))
       .catch((error) => {
         logger.warn(
-          `[CHAT_PIPELINE] Persisting running steps failed (non-fatal): ${String(error)}`,
+          `[CHAT_PIPELINE] Persisting running steps failed (non-fatal): ${metadataFailureContext(error)}`,
         );
       });
   };
@@ -559,10 +563,14 @@ export async function processChatMessage(
       }
     }
     try {
-      await historyManager.updateMetadata(chatMsg.historyId, { steps: storedSteps });
+      await historyManager.updateMetadata(
+        chatMsg.historyId,
+        { steps: storedSteps },
+        metadataWriteContext,
+      );
     } catch (metaErr) {
       logger.warn(
-        `[CHAT_PIPELINE] Persisting steps metadata failed (non-fatal): ${String(metaErr)}`,
+        `[CHAT_PIPELINE] Persisting steps metadata failed (non-fatal): ${metadataFailureContext(metaErr)}`,
       );
     }
   };
@@ -1334,9 +1342,15 @@ export async function processChatMessage(
       // replay footnotes on reload (best-effort; merges with the timeline steps).
       if (citations.length > 0) {
         try {
-          await historyManager.updateMetadata(chatMsg.historyId, { citations });
+          await historyManager.updateMetadata(
+            chatMsg.historyId,
+            { citations },
+            metadataWriteContext,
+          );
         } catch (metaErr) {
-          logger.warn(`[CHAT_PIPELINE] Persist citations failed: ${String(metaErr)}`);
+          logger.warn(
+            `[CHAT_PIPELINE] Persist citations failed: ${metadataFailureContext(metaErr)}`,
+          );
         }
       }
 
