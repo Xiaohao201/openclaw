@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { MediaUnderstandingOutput } from "../../media-understanding/types.js";
 import { ToolInputError } from "./common.js";
@@ -11,6 +11,15 @@ import {
   type VideoUnderstandToolDeps,
 } from "./video-understand-tool.js";
 import type { ExtractedFrame, VideoProbe } from "./video-understand.runtime.js";
+import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+
+vi.mock("./web-guarded-fetch.js", () => ({
+  fetchWithWebToolsNetworkGuard: vi.fn(),
+}));
+
+afterEach(() => {
+  vi.mocked(fetchWithWebToolsNetworkGuard).mockReset();
+});
 
 const CFG = {} as OpenClawConfig;
 
@@ -694,6 +703,39 @@ describe("runVideoUnderstand output", () => {
 });
 
 describe("video_understand tool", () => {
+  it.each([
+    { status: 200, contentType: "video/mp4" },
+    { status: 403, contentType: "text/html" },
+  ])("cancels unread probe responses before release ($status)", async ({ status, contentType }) => {
+    const url = "https://cdn.example.com/signed-video/?mime_type=video_mp4";
+    const events: string[] = [];
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          events.push("cancel");
+        },
+      }),
+      { status, headers: { "content-type": contentType } },
+    );
+    vi.mocked(fetchWithWebToolsNetworkGuard).mockResolvedValue({
+      response,
+      finalUrl: url,
+      release: async () => {
+        events.push("release");
+      },
+    });
+    const { deps, recorder } = makeDeps();
+    delete deps.fetchPageHtml;
+
+    const result = await runVideoUnderstand({ url, cfg: CFG, deps });
+
+    expect(events).toEqual(["cancel", "release"]);
+    expect(recorder.acquired).toEqual([url]);
+    expect(recorder.describeCalls[0]?.capability).toBe("video");
+    expect(result.route).toBe("whole-video");
+    expect(result.description).toBe("整片描述");
+  });
+
   it.each(["disabled", "scope-deny", "no-attachment"] as const)(
     "preserves runner skip reason %s",
     async (outcome) => {

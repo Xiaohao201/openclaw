@@ -290,6 +290,8 @@ async function fetchPageHtmlDefault(url: string): Promise<string | null> {
       const body = await response.text();
       return body.slice(0, PAGE_FETCH_MAX_BYTES);
     } finally {
+      // Unread media responses must be cancelled before the dispatcher can close.
+      await response.body?.cancel().catch(() => {});
       await release();
     }
   } catch {
