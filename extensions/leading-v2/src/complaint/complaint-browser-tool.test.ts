@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, OpenClawPluginApi } from "../../api.js";
 import {
   createComplaintBrowserToolFactory,
@@ -9,6 +9,11 @@ import {
 } from "./complaint-browser-tool.js";
 import { resolveLocalConfig } from "./complaint-local-contract.js";
 import { sessionBrowserHandoffs } from "./complaint-session-handoff.js";
+
+vi.mock("./complaint-shared-login.runtime.js", () => ({
+  synchronizeSharedBrowserLogin: vi.fn(async () => {}),
+  SharedLoginSourceUnavailable: class extends Error {},
+}));
 
 let root: string;
 let api: OpenClawPluginApi;

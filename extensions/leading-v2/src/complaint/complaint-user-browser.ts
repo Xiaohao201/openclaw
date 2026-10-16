@@ -65,7 +65,7 @@ async function saveJson(path: string, value: unknown) {
   }
 }
 
-function defaultChromeDirectory() {
+export function defaultChromeDirectory() {
   if (process.platform === "win32") {
     return join(
       process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"),
