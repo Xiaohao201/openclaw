@@ -25,6 +25,107 @@ const DB_CONFIG: HistoryDbConfig = {
   database: "superworker",
 };
 
+describe("HistoryManager retried reads and response writes", () => {
+  let manager: InstanceType<typeof HistoryManager>;
+  const context = { userId: "42", logger: { warn: vi.fn() } };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockExecute.mockReset();
+    manager = new HistoryManager(DB_CONFIG);
+  });
+
+  afterEach(async () => {
+    await manager.close();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("recovers a history read and identifies the database operation", async () => {
+    mockExecute.mockRejectedValueOnce(
+      Object.assign(new Error("private host"), { code: "ECONNRESET" }),
+    );
+    mockExecute.mockResolvedValueOnce([[{ id: 42, user_id: "42", message: "hello" }], undefined]);
+    const result = manager.getRecord(42, context);
+    await vi.runAllTimersAsync();
+    expect(await result).toMatchObject({ id: 42, userId: "42", message: "hello" });
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("operation=getRecord"),
+    );
+    expect(JSON.stringify(context.logger.warn.mock.calls)).not.toContain("private host");
+  });
+
+  it("does not retry a successful read of a missing row", async () => {
+    mockExecute.mockResolvedValueOnce([[], undefined]);
+    expect(await manager.getRecord(42, context)).toBeNull();
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older response retry ahead of a newer response without blocking other rows", async () => {
+    mockExecute.mockRejectedValueOnce(
+      Object.assign(new Error("reset after commit"), { code: "ECONNRESET" }),
+    );
+    mockExecute.mockResolvedValue([[], undefined]);
+    const first = manager.updateResponse(42, "first answer", context);
+    const next = manager.updateResponse(42, "new answer", context);
+    const other = manager.updateResponse(43, "independent", context);
+    await vi.advanceTimersByTimeAsync(0);
+    await other;
+    await vi.runAllTimersAsync();
+    await Promise.all([first, next]);
+    expect(mockExecute.mock.calls.map((call) => call[1])).toEqual([
+      ["first answer", 42],
+      ["independent", 43],
+      ["first answer", 42],
+      ["new answer", 42],
+    ]);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("operation=updateResponse"),
+    );
+  });
+
+  it.each(["getRecord", "updateResponse"] as const)(
+    "bounds retries for %s and cancels them on close",
+    async (operation) => {
+      mockExecute.mockRejectedValue(
+        Object.assign(new Error("private SQL"), { code: "ECONNRESET" }),
+      );
+      const run = () =>
+        operation === "getRecord"
+          ? manager.getRecord(42, context)
+          : manager.updateResponse(42, "answer", context);
+      const exhausted = run().catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      expect(await exhausted).toMatchObject({ operation, code: "ECONNRESET", attempts: 4 });
+      expect(mockExecute).toHaveBeenCalledTimes(4);
+      const cancelled = run().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      await manager.close();
+      expect(await cancelled).toMatchObject({ name: "AbortError" });
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(run()).rejects.toMatchObject({ name: "AbortError" });
+      expect(mockExecute).toHaveBeenCalledTimes(5);
+    },
+  );
+
+  it("does not retry an INSERT whose commit acknowledgement was lost", async () => {
+    const error = Object.assign(new Error("reset after commit"), { code: "ECONNRESET" });
+    mockExecute.mockRejectedValueOnce(error);
+    await expect(
+      manager.createRecord({
+        historyId: 42,
+        sessionId: "test",
+        userId: "42",
+        message: "hello",
+        useMemory: true,
+        useWebsearch: false,
+      }),
+    ).rejects.toBe(error);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("HistoryManager.updateMetadata", () => {
   let manager: InstanceType<typeof HistoryManager>;
 

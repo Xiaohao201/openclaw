@@ -185,6 +185,38 @@ describe("StreamingMercurePusher push ordering", () => {
     expect(calls).toEqual(["text:部分输出", "error:boom"]);
   });
 
+  it("can report failure after a rejected text push and does not stream late deltas", async () => {
+    vi.mocked(fakePusher.pushText).mockRejectedValueOnce(new Error("reset"));
+    vi.mocked(fakePusher.pushError).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 42, 80);
+    pusher.appendDelta("partial");
+    await expect(pusher.flush()).rejects.toThrow("reset");
+    expect(await pusher.pushError("failed")).toBe(false);
+    pusher.appendDelta("late text");
+    expect(await pusher.pushError("failed")).toBe(true);
+    await vi.runAllTimersAsync();
+    expect(fakePusher.pushText).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drops queued text on failure instead of delaying the terminal event behind a backlog", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 42, 80);
+    pusher.appendDelta("in flight");
+    await vi.advanceTimersByTimeAsync(80);
+    pusher.appendDelta("queued tail");
+    await vi.advanceTimersByTimeAsync(80);
+    const failed = pusher.pushError("failed");
+    resolvers.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    const sentCount = vi.mocked(fakePusher.pushText).mock.calls.length;
+    for (const resolve of resolvers) {
+      resolve();
+    }
+    await failed;
+    expect(sentCount).toBe(1);
+    expect(calls).toEqual(["text:in flight", "error:failed"]);
+  });
+
   it("preserves structural whitespace when markdown is split across flush windows", async () => {
     // Regression: the flusher used to run the whitespace-tidying sanitizer per
     // chunk, so a flush boundary landing on the blank line between blocks (or on

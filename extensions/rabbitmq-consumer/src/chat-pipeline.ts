@@ -8,6 +8,7 @@ import {
 import { ArtifactLinks } from "./artifact-links.js";
 import { materializeAttachments } from "./attachment-materializer.js";
 import { inferBuiltinSkillName, validateBuiltinSkillSelection } from "./builtin-skill-routing.js";
+import { notifyChatFailure } from "./chat-failure.js";
 import {
   buildCitationDirective,
   splitCitations,
@@ -505,6 +506,31 @@ export async function processChatMessage(
 
   // Declare streamPusherCtx early so it's available in catch block
   const streamPusherCtx: { streamPusher: StreamingMercurePusher | null } = { streamPusher: null };
+  let mercureTopic = chatMsg.topic || chatMsg.userId;
+  let stage:
+    | "getRecord"
+    | "prepare"
+    | "agent.run"
+    | "agent.wait"
+    | "agent.messages"
+    | "updateResponse"
+    | "finalize"
+    | "notifyFrontend" = "getRecord";
+  const historyDbContext = { userId: chatMsg.userId, logger };
+  const failureContext = (error: unknown) =>
+    `historyId=${chatMsg.historyId} userId=${JSON.stringify(chatMsg.userId)} stage=${stage} ${describeHistoryDbError(error)}`;
+  const saveResponse = (response: string) =>
+    historyManager.updateResponse(chatMsg.historyId, response, historyDbContext);
+  let failureNotification: Promise<void> | undefined;
+  const notifyFailure = (message: string) =>
+    (failureNotification ??= notifyChatFailure({
+      mercure,
+      stream: streamPusherCtx.streamPusher,
+      topic: mercureTopic,
+      historyId: chatMsg.historyId,
+      message,
+      logger,
+    }));
 
   // Work-process ("工作过程") timeline accumulated as the turn streams, then
   // persisted to history_messages.metadata so the lobster history view can
@@ -525,7 +551,6 @@ export async function processChatMessage(
   };
   const storedSteps: StoredStep[] = [];
   let timelinePersisted = false;
-  const metadataWriteContext = { userId: chatMsg.userId, logger };
   const metadataFailureContext = (error: unknown) =>
     `historyId=${chatMsg.historyId} userId=${JSON.stringify(chatMsg.userId)} ${describeHistoryDbError(error)}`;
   let pendingTimelineWrite = Promise.resolve();
@@ -537,7 +562,7 @@ export async function processChatMessage(
     // mutate storedSteps. Serialize writes so an older snapshot cannot win.
     const steps = storedSteps.map((step) => ({ ...step }));
     pendingTimelineWrite = pendingTimelineWrite
-      .then(() => historyManager.updateMetadata(chatMsg.historyId, { steps }, metadataWriteContext))
+      .then(() => historyManager.updateMetadata(chatMsg.historyId, { steps }, historyDbContext))
       .catch((error) => {
         logger.warn(
           `[CHAT_PIPELINE] Persisting running steps failed (non-fatal): ${metadataFailureContext(error)}`,
@@ -566,7 +591,7 @@ export async function processChatMessage(
       await historyManager.updateMetadata(
         chatMsg.historyId,
         { steps: storedSteps },
-        metadataWriteContext,
+        historyDbContext,
       );
     } catch (metaErr) {
       logger.warn(
@@ -605,11 +630,13 @@ export async function processChatMessage(
         `userId=${chatMsg.userId}, sessionId=${chatMsg.sessionId}`,
     );
 
-    const record = await historyManager.getRecord(chatMsg.historyId);
+    const record = await historyManager.getRecord(chatMsg.historyId, historyDbContext);
     if (!record) {
       logger.error(`[CHAT_PIPELINE] History record not found: ${chatMsg.historyId}`);
+      await notifyFailure("未找到这条会话记录，请刷新后重试。");
       return `Error: History record ${chatMsg.historyId} not found`;
     }
+    stage = "prepare";
 
     // Step 2: Idempotency check
     if (record.response) {
@@ -621,7 +648,7 @@ export async function processChatMessage(
     const userMessage = chatMsg.message?.trim() || record.message;
     const sessionId = chatMsg.sessionId || record.sessionId;
     const userId = chatMsg.userId || record.userId;
-    const mercureTopic = chatMsg.topic || userId;
+    mercureTopic = chatMsg.topic || userId;
 
     // The frontend may explicitly select a bundled skill. For unmistakable
     // public-opinion deliverables, also route deterministically when the user
@@ -657,6 +684,7 @@ export async function processChatMessage(
 
     if (!userMessage) {
       logger.error(`[CHAT_PIPELINE] Empty message for historyId=${chatMsg.historyId}`);
+      await notifyFailure("消息内容为空，请重新输入。");
       return "Error: Empty message";
     }
 
@@ -779,7 +807,9 @@ export async function processChatMessage(
 
     if (options?.abortSignal?.aborted) {
       const stopped = "输出已暂停。";
-      await historyManager.updateResponse(chatMsg.historyId, stopped);
+      stage = "updateResponse";
+      await saveResponse(stopped);
+      stage = "notifyFrontend";
       await mercure.pushDone(mercureTopic, chatMsg.historyId);
       return stopped;
     }
@@ -1214,6 +1244,7 @@ export async function processChatMessage(
         }
       }
 
+      stage = "agent.run";
       const runResult = await runtime.subagent.run({
         sessionKey,
         message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${turnSkillContext.message}${templateContext}${turnSkillContext.skillContext}`,
@@ -1238,6 +1269,7 @@ export async function processChatMessage(
       let waitResult: Awaited<ReturnType<PluginRuntime["subagent"]["waitForRun"]>>;
       let elapsedWaitMs = 0;
       while (true) {
+        stage = "agent.wait";
         waitResult = await runtime.subagent.waitForRun({
           runId: runResult.runId,
           timeoutMs: turnTimeoutMs,
@@ -1250,9 +1282,12 @@ export async function processChatMessage(
           const partialText = streamPusherCtx.streamPusher.getFullText().trim();
           const stopped =
             artifactLinks.sanitize(partialText || "输出已暂停。") + artifactLinks.deliveryLinks();
-          await historyManager.updateResponse(chatMsg.historyId, stopped);
+          stage = "updateResponse";
+          await saveResponse(stopped);
+          stage = "finalize";
           await persistTimeline("completed");
           await persistUsage();
+          stage = "notifyFrontend";
           await streamPusherCtx.streamPusher.finish();
           logger.info(`[CHAT_PIPELINE] Cancelled: historyId=${chatMsg.historyId}`);
           return stopped;
@@ -1269,16 +1304,18 @@ export async function processChatMessage(
 
       if (waitResult.status === "error") {
         logger.error(`[CHAT_PIPELINE] Subagent error: ${waitResult.error}`);
-        await streamPusherCtx.streamPusher.pushError(waitResult.error ?? "Unknown error");
+        const notification = notifyFailure("本次任务执行失败，请稍后重试。");
         // Persist the timeline with unfinished steps marked failed, so the
         // history view shows a clean failed timeline rather than a spinner.
         await persistTimeline("failed");
         // The failed run still consumed tokens; bill what it spent.
         await persistUsage();
+        await notification;
         return `Error: ${waitResult.error}`;
       }
 
       // Step 6: Extract response from session messages as the canonical source
+      stage = "agent.messages";
       const sessionMessages = await runtime.subagent.getSessionMessages({
         sessionKey,
         limit: 5,
@@ -1336,17 +1373,15 @@ export async function processChatMessage(
       }
 
       // Step 7: Update history record
-      await historyManager.updateResponse(chatMsg.historyId, safeResponse);
+      stage = "updateResponse";
+      await saveResponse(safeResponse);
+      stage = "finalize";
 
       // Persist citation sources into metadata so the lobster history view can
       // replay footnotes on reload (best-effort; merges with the timeline steps).
       if (citations.length > 0) {
         try {
-          await historyManager.updateMetadata(
-            chatMsg.historyId,
-            { citations },
-            metadataWriteContext,
-          );
+          await historyManager.updateMetadata(chatMsg.historyId, { citations }, historyDbContext);
         } catch (metaErr) {
           logger.warn(
             `[CHAT_PIPELINE] Persist citations failed: ${metadataFailureContext(metaErr)}`,
@@ -1403,6 +1438,7 @@ export async function processChatMessage(
       // Step 8: Emit citation sources (whole payload) then finish streaming —
       // flush remaining buffer + push done signal. Citations go before done so
       // the frontend has them when it finalizes the bubble.
+      stage = "notifyFrontend";
       if (citations.length > 0) {
         await streamPusherCtx.streamPusher.pushCitations(citations);
       }
@@ -1419,51 +1455,51 @@ export async function processChatMessage(
       unsubscribe();
     }
   } catch (error) {
-    const err = error as { code?: string; cause?: { code?: string } };
-    const errCode = err?.code ?? err?.cause?.code ?? "unknown";
-
-    // ECONNRESET means the frontend closed the connection while we were processing.
-    // This typically happens when the frontend times out before we could respond.
-    if (errCode === "ECONNRESET") {
-      logger.warn(
-        `[CHAT_PIPELINE] Connection reset by frontend (timeout?) for historyId=${chatMsg.historyId}. ` +
-          `The response may not have reached the client.`,
-      );
-      // Try to persist what we have in the history record before failing
+    // A socket reset can originate in MySQL, an agent RPC or another dependency;
+    // its code alone says nothing about the browser's connection.
+    logger.error(`[CHAT_PIPELINE] Turn failed: ${failureContext(error)}`);
+    const failedStage = stage;
+    const message =
+      failedStage === "getRecord"
+        ? "暂时无法读取会话记录，请稍后重试。"
+        : failedStage === "updateResponse"
+          ? "暂时无法保存回复，请稍后刷新查看。"
+          : "本次处理未能完成，请稍后重试。";
+    // Start terminal delivery before any DB cleanup. An unavailable database
+    // must not prevent the live UI from learning that the turn has failed.
+    const notification = notifyFailure(message);
+    const partialText = streamPusherCtx.streamPusher?.getFullText();
+    // A final response UPDATE may have committed before its acknowledgement was
+    // lost. Never follow its exhausted retry with a shorter streamed snapshot.
+    if (
+      partialText &&
+      failedStage !== "updateResponse" &&
+      failedStage !== "finalize" &&
+      failedStage !== "notifyFrontend"
+    ) {
       try {
-        const partialText = streamPusherCtx.streamPusher?.getFullText();
-        if (partialText) {
-          // Strip any half-written citations block from the interrupted stream,
-          // plus inline [n] markers left dangling by the lost sources block.
-          const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
-          const safePartial = mediaLinesToMarkdown(
-            normalizeChineseProseQuotes(
-              sanitizeInternalRefs(
-                artifactLinks.sanitize(stripDanglingCitationMarkers(partialVisible, partialCites)),
-              ),
+        const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
+        const safePartial = mediaLinesToMarkdown(
+          normalizeChineseProseQuotes(
+            sanitizeInternalRefs(
+              artifactLinks.sanitize(stripDanglingCitationMarkers(partialVisible, partialCites)),
             ),
-          );
-          await historyManager.updateResponse(
-            chatMsg.historyId,
-            safePartial + artifactLinks.deliveryLinks(),
-          );
-          logger.info(
-            `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars) before connection reset`,
-          );
-        }
-      } catch {
-        // best effort - don't fail the whole handler
+          ),
+        );
+        stage = "updateResponse";
+        await saveResponse(safePartial + artifactLinks.deliveryLinks());
+        logger.info(
+          `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars): historyId=${chatMsg.historyId}`,
+        );
+      } catch (partialError) {
+        logger.warn(
+          `[CHAT_PIPELINE] Partial response persistence failed (non-fatal): ${failureContext(partialError)}`,
+        );
       }
-      // Finalize the timeline too, so a reopened history shows a failed (not
-      // spinning) work-process panel.
-      await persistTimeline("failed");
-      await persistUsage();
-      return `Error: Connection reset by client (possible timeout). Response may be incomplete.`;
     }
-
-    logger.error(`[CHAT_PIPELINE] Unhandled error: ${String(error)}, code=${errCode}`);
     await persistTimeline("failed");
     await persistUsage();
-    return `Error: ${String(error)}`;
+    await notification;
+    return `Error: ${message}`;
   }
 }
