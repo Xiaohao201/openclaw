@@ -1,3 +1,4 @@
+import mysql from "mysql2/promise";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HistoryDbConfig, TurnUsageRecord } from "./types.js";
 
@@ -24,77 +25,125 @@ const DB_CONFIG: HistoryDbConfig = {
   database: "superworker",
 };
 
-/** A metadata SELECT result carrying `raw` in the metadata column. */
-function metaRow(raw: unknown): [unknown[], unknown] {
-  return [[{ metadata: raw }], undefined];
-}
-
-/** Parse the JSON written by the last UPDATE (metadata is the first bind param). */
-function lastWrittenMetadata(): Record<string, unknown> {
-  const updateCall = mockExecute.mock.calls
-    .toReversed()
-    .find((c) => typeof c[0] === "string" && c[0].startsWith("UPDATE"));
-  if (!updateCall) {
-    throw new Error("no UPDATE executed");
-  }
-  const params = updateCall[1] as unknown[];
-  return JSON.parse(params[0] as string) as Record<string, unknown>;
-}
-
 describe("HistoryManager.updateMetadata", () => {
   let manager: InstanceType<typeof HistoryManager>;
 
   beforeEach(() => {
+    mockExecute.mockReset();
     manager = new HistoryManager(DB_CONFIG);
   });
 
   afterEach(async () => {
     await manager.close();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
-  it("merges into a JSON-object metadata without clobbering sibling keys", async () => {
-    // mysql2 returns a JSON column as an already-parsed object. The steps write
-    // must preserve the citations written earlier in the same turn — the exact
-    // regression that made history lose footnotes.
-    mockExecute.mockResolvedValueOnce(metaRow({ citations: [{ id: 1, url: "https://x" }] }));
-    mockExecute.mockResolvedValueOnce([[], undefined]); // UPDATE ack
-
-    await manager.updateMetadata(42, { steps: [{ id: "answer" }] });
-
-    const written = lastWrittenMetadata();
-    expect(written.citations).toEqual([{ id: 1, url: "https://x" }]);
-    expect(written.steps).toEqual([{ id: "answer" }]);
-  });
-
-  it("merges into a legacy string metadata value", async () => {
-    mockExecute.mockResolvedValueOnce(metaRow(JSON.stringify({ steps: [{ id: "answer" }] })));
-    mockExecute.mockResolvedValueOnce([[], undefined]);
-
-    await manager.updateMetadata(42, { citations: [{ id: 1 }] });
-
-    const written = lastWrittenMetadata();
-    expect(written.steps).toEqual([{ id: "answer" }]);
-    expect(written.citations).toEqual([{ id: 1 }]);
-  });
-
-  it("starts fresh when metadata is null", async () => {
-    mockExecute.mockResolvedValueOnce(metaRow(null));
-    mockExecute.mockResolvedValueOnce([[], undefined]);
-
-    await manager.updateMetadata(42, { citations: [{ id: 1 }] });
-
-    expect(lastWrittenMetadata()).toEqual({ citations: [{ id: 1 }] });
-  });
-
-  it("does not treat a JSON array metadata value as a mergeable object", async () => {
-    // A stray array must not spread into numeric keys; start fresh instead.
-    mockExecute.mockResolvedValueOnce(metaRow([1, 2, 3]));
-    mockExecute.mockResolvedValueOnce([[], undefined]);
-
+  it("recycles idle connections before reusing a stale socket", async () => {
+    mockExecute.mockResolvedValue([[], undefined]);
     await manager.updateMetadata(42, { steps: [] });
+    expect(mysql.createPool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionLimit: 3,
+        maxIdle: 2,
+        idleTimeout: 60_000,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10_000,
+        connectTimeout: 10_000,
+      }),
+    );
+  });
 
-    expect(lastWrittenMetadata()).toEqual({ steps: [] });
+  it("updates only supplied JSON fields in one atomic statement with bound values", async () => {
+    mockExecute.mockResolvedValue([[], undefined]);
+    const key = 'quoted".field';
+    const value = { text: "O'Reilly", list: [1, null, false] };
+    await manager.updateMetadata(42, { [key]: value, nullable: null });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockExecute.mock.calls[0];
+    expect(sql).toContain("JSON_SET(");
+    expect(sql).toContain("JSON_VALID(metadata)");
+    expect(sql).not.toContain(key);
+    expect(sql).not.toContain(value.text);
+    expect(params).toEqual([
+      `$.${JSON.stringify(key)}`,
+      JSON.stringify(value),
+      '$."nullable"',
+      "null",
+      42,
+    ]);
+  });
+
+  it("normalizes legacy metadata on the writer without reading or overwriting sibling fields", async () => {
+    mockExecute.mockResolvedValue([[], undefined]);
+    await manager.updateMetadata(42, { steps: [] });
+    expect(mockExecute).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "CASE WHEN JSON_VALID(metadata) THEN CASE WHEN JSON_TYPE(metadata) = 'OBJECT' THEN metadata ELSE JSON_OBJECT() END ELSE JSON_OBJECT() END",
+      ),
+      ['$."steps"', "[]", 42],
+    );
+    expect(mockExecute.mock.calls[0][0]).not.toContain("SELECT");
+  });
+
+  it("does not issue a query for an empty patch or unsupported JSON values", async () => {
+    await manager.updateMetadata(42, {});
+    await manager.updateMetadata(42, { omitted: undefined });
+    await expect(manager.updateMetadata(42, { invalid: BigInt(1) })).rejects.toThrow();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("keeps a retry ahead of the same row's terminal state while other rows can progress", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockExecute.mockRejectedValueOnce(Object.assign(new Error("reset"), { code: "ECONNRESET" }));
+    mockExecute.mockResolvedValue([[], undefined]);
+    const patch = { steps: [{ status: "running" }] };
+    const running = manager.updateMetadata(42, patch);
+    patch.steps[0].status = "mutated";
+    const terminal = manager.updateMetadata(42, { steps: [{ status: "completed" }] });
+    const other = manager.updateMetadata(43, { citations: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    await other;
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    await vi.runAllTimersAsync();
+    await Promise.all([running, terminal]);
+    const params = mockExecute.mock.calls.map((call) => call[1] as unknown[]);
+    expect(params.map((values) => values.at(-1))).toEqual([42, 43, 42, 42]);
+    expect(params[0]).toEqual(params[2]);
+    expect(params[0][1]).toBe('[{"status":"running"}]');
+    expect(params[3][1]).toBe('[{"status":"completed"}]');
+    expect(mysql.createPool).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows the next snapshot after retry exhaustion", async () => {
+    vi.useFakeTimers();
+    const error = Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    mockExecute.mockRejectedValue(error);
+    const failed = manager.updateMetadata(42, { steps: [] }).catch((cause: unknown) => cause);
+    await vi.runAllTimersAsync();
+    expect(await failed).toMatchObject({ code: "ECONNRESET", attempts: 4 });
+    mockExecute.mockResolvedValueOnce([[], undefined]);
+    await manager.updateMetadata(42, { steps: [{ status: "completed" }] });
+    expect(mockExecute).toHaveBeenCalledTimes(5);
+  });
+
+  it("cancels pending retries and queued writes on shutdown without reopening the pool", async () => {
+    vi.useFakeTimers();
+    mockExecute.mockRejectedValue(Object.assign(new Error("reset"), { code: "ECONNRESET" }));
+    const first = manager.updateMetadata(42, { steps: [] }).catch((error: unknown) => error);
+    const queued = manager.updateMetadata(42, { steps: [] }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    await manager.close();
+    expect(await first).toMatchObject({ name: "AbortError" });
+    expect(await queued).toMatchObject({ name: "AbortError" });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(manager.updateMetadata(42, { steps: [] })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(mysql.createPool).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -130,12 +179,20 @@ describe("HistoryManager.addUsage", () => {
   }
 
   beforeEach(() => {
+    mockExecute.mockReset();
     manager = new HistoryManager(DB_CONFIG);
   });
 
   afterEach(async () => {
     await manager.close();
     vi.clearAllMocks();
+  });
+
+  it("does not retry a usage increment after an ambiguous connection failure", async () => {
+    const error = Object.assign(new Error("reset after commit"), { code: "ECONNRESET" });
+    mockExecute.mockRejectedValueOnce(error);
+    await expect(manager.addUsage(42, USAGE)).rejects.toBe(error);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 
   it("accumulates onto existing values so a later report write cannot erase the chat turn", async () => {
