@@ -1,4 +1,5 @@
 """One direct browser operation per process, with no database or MQ dependency."""
+from log_utils import log_diagnostic
 import argparse
 import contextlib
 import hashlib
@@ -134,8 +135,10 @@ def execute(data, manager_factory=create_manager):
         manager = manager_factory()
         manager.browser_handoff = data.get("browserHandoff")
         phase = "browser_attach"
+        log_diagnostic(phase)
         manager.init_browsers(data["platform"])
         phase = "login_check"
+        log_diagnostic(phase)
         if data["platform"] == "xiaohongshu":
             from xhs_phone import mobile_only_target, execute_phone
             page = manager.pages["xiaohongshu"]
@@ -165,6 +168,8 @@ def execute(data, manager_factory=create_manager):
                 return outcome("manual_required", "共享浏览器尚未确认平台登录，请先用 browser 查看原标签页，再调用 complaint_browser 的 login 复用该页，完成验证后 finish。旧批次不会自动重提。", "LOGIN_REQUIRED")
             return outcome("manual_required", "尚未确认当前用户的平台登录。请先用 OpenClaw browser 打开平台页面，再调用 complaint_browser(action=login, platform=" + data["platform"] + ", confirmed=true) 复用该标签页，用户登录后调用 finish。不会自动重提旧批次。", "LOGIN_REQUIRED")
         execution_started = True
+        phase = "perform_complaint"
+        log_diagnostic(phase)
         manager.perform_complaint(data["platform"], dict(data, id=os.getpid()))
         # Legacy handlers may return True even when the success marker is absent.
         if manager.submission_confirmed:
@@ -182,6 +187,7 @@ def execute(data, manager_factory=create_manager):
     except SharedBrowserUnavailable as exc:
         return outcome("manual_required", str(exc), "SHARED_BROWSER_UNAVAILABLE")
     except Exception as error:
+        log_diagnostic(phase, error)
         if execution_started:
             if getattr(manager, "submission_attempted", None) is False:
                 return outcome("failed", "举报流程在提交前发生异常，未点击提交。", "EXECUTION_INTERRUPTED")

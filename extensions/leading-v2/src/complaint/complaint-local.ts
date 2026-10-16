@@ -95,6 +95,7 @@ export async function submitLocalBatch(params: {
           config,
           signal: controller.signal,
           browserHandoff: params.browserLease?.handoff,
+          diagnosticContext: { batchId: batch.batchId, taskId: entry.taskId },
         });
       } catch {
         outcome = {

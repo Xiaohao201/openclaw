@@ -8,6 +8,18 @@ import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
+const lifecycleInfo = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", () => {
+  const logger = {
+    info: lifecycleInfo,
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: () => logger,
+  };
+  return { createSubsystemLogger: () => logger };
+});
+
 function setupEnsureBrowserAvailableHarness() {
   vi.useFakeTimers();
 
@@ -31,6 +43,19 @@ afterEach(() => {
 });
 
 describe("browser server-context ensureBrowserAvailable", () => {
+  it("records overlapping ensures for the same runtime and clears the counter", async () => {
+    const { profile, isChromeCdpReady } = setupEnsureBrowserAvailableHarness();
+    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(true);
+    isChromeCdpReady.mockResolvedValue(true);
+    await Promise.all([profile.ensureBrowserAvailable(), profile.ensureBrowserAvailable()]);
+    await profile.ensureBrowserAvailable();
+    const starts = lifecycleInfo.mock.calls
+      .map(([message]) => message as string)
+      .filter((message) => message.startsWith("ensure-start "))
+      .map((message) => JSON.parse(message.slice("ensure-start ".length)));
+    expect(starts.map((event) => event.active)).toEqual([1, 2, 1]);
+    expect(new Set(starts.map((event) => event.requestId)).size).toBe(3);
+  });
   it("waits for CDP readiness after launching to avoid follow-up PortInUseError races (#21149)", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
       setupEnsureBrowserAvailableHarness();
@@ -41,6 +66,17 @@ describe("browser server-context ensureBrowserAvailable", () => {
     await vi.advanceTimersByTimeAsync(100);
     await expect(promise).resolves.toBeUndefined();
 
+    expect(
+      lifecycleInfo.mock.calls.some(
+        ([message]) =>
+          message.startsWith("launch-request ") && message.includes('"reason":"http_unreachable"'),
+      ),
+    ).toBe(true);
+    expect(
+      lifecycleInfo.mock.calls.some(
+        ([message]) => message.startsWith("launch-complete ") && message.includes('"pid":123'),
+      ),
+    ).toBe(true);
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(isChromeCdpReady).toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();

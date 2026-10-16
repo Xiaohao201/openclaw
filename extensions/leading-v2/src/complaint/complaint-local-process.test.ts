@@ -1,12 +1,17 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveLocalConfig } from "./complaint-local-contract.js";
 import { runLocalComplaint } from "./complaint-local-process.js";
 
+const diagnosticInfo = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/logging-core", () => ({
+  createSubsystemLogger: () => ({ info: diagnosticInfo, warn: vi.fn() }),
+}));
 let root: string;
 beforeEach(async () => {
+  diagnosticInfo.mockClear();
   root = await mkdtemp(join(tmpdir(), "complaint-process-"));
 });
 afterEach(async () => {
@@ -25,6 +30,25 @@ const params = () => ({
   signal: new AbortController().signal,
 });
 describe("Python process failures", () => {
+  it("forwards only structured executor metadata with batch correlation", async () => {
+    await writeFile(
+      join(root, "runner.py"),
+      [
+        "import json, sys",
+        "print('raw private secret', file=sys.stderr)",
+        "print('OPENCLAW_DIAGNOSTIC ' + json.dumps(dict(stage='navigate', errorType='TimeoutError', message='private')), file=sys.stderr)",
+        "print(json.dumps(dict(state='failed', message='fixture', offline=None)))",
+      ].join("\n"),
+    );
+    await runLocalComplaint({
+      ...params(),
+      diagnosticContext: { batchId: "fixture-batch", taskId: 42 },
+    });
+    const logged = JSON.stringify(diagnosticInfo.mock.calls);
+    expect(logged).toContain("navigate");
+    expect(logged).toContain("fixture-batch");
+    expect(logged).not.toContain("private");
+  });
   it("accepts receipt metadata but rejects arbitrary screenshot paths from Python", async () => {
     const result = {
       state: "done",
