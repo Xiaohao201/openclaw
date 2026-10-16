@@ -261,5 +261,25 @@ describe("direct local reporting", () => {
     batch.executor = "local";
     batch.entries[0].execution = { state: "running", message: "", offline: null };
     expect(queryLocalBatch(batch).summary.unknown).toBe(1);
+    expect(queryLocalBatch(batch).links[0].failureReason).toContain("禁止自动重提");
+  });
+
+  it("preserves the executor's failure stage and uncertain-result detail", async () => {
+    const batch = await store.create("1", request().links);
+    for (const state of ["failed", "unknown"] as const) {
+      const message = `${state}: SELECT_REASON / FINAL_SUBMIT diagnostic`;
+      batch.entries[0].execution = {
+        state,
+        message,
+        offline: null,
+        errorCode: "FORM_VALIDATION_FAILED",
+      };
+      const result = queryLocalBatch(batch).links[0];
+      expect(result.state).toBe(state);
+      expect(result.failureReason).toContain(message);
+      if (state === "unknown") {
+        expect(result.failureReason).toContain("禁止自动重提");
+      }
+    }
   });
 });

@@ -58,6 +58,7 @@
         "python/tencent_platform.py",
         "python/tiantianfund_platform.py",
         "python/tonghuashun_platform.py",
+        "python/weibo_categories.py",
         "python/xhs_phone_bridge.py",
         "python/xhs_phone_network.py",
         "python/xhs_phone_preflight.py",

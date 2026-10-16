@@ -12,12 +12,14 @@ import os
 import random
 import re
 from log_utils import log_message
-from category_matcher import normalize_category
-from complaint_payload import prepare_complaint_data
+from category_matcher import normalize_category, category_alias_candidates, format_category_xpath
+from complaint_payload import prepare_complaint_data, extract_intent
 from browser_actions import check_checkbox, click_non_terminal_option
 import browser_session
 from network_guard import install_network_guard
-from self_healing import FlowResult, SelfHealingManager
+from self_healing import ErrorCode, FlowResult, FlowStatus, SelfHealingManager
+from self_healing.sanitizer import sanitize_html
+from self_healing.schemas import contains_terminal_action
 import netease_platform as netease
 import eastmoney_platform as eastmoney
 import tonghuashun_platform as tonghuashun
@@ -28,6 +30,7 @@ import sina_platform as sina
 import yidian_platform as yidian
 import tiantianfund_platform as tiantianfund
 import futu_platform as futu
+import weibo_categories
 
 
 # 枚举“平台真实选项”时要排除的 UI 动作词——它们绝不是举报原因，若被误当成选项
@@ -52,6 +55,8 @@ class BrowserManager:
         self.login_status_errors = {}
         self.errMessage = ""
         self.submission_confirmed = False
+        self.submission_attempted = None  # No browser flow has started yet.
+        self.submission_diagnostic = None
         self.last_flow_result = FlowResult.succeeded()
         self.self_healing = SelfHealingManager(
             enabled=SELF_HEALING_ENABLED,
@@ -432,6 +437,12 @@ class BrowserManager:
     
     def perform_complaint(self, platform, complaint_data):
         """执行投诉流程"""
+        self.errMessage = ""
+        self.submission_confirmed = False
+        self.submission_attempted = False
+        self.submission_diagnostic = None
+        self.flow_stage = "PREPARE_FORM"
+        self._selection_failure = None
         if platform not in self.pages or not self.pages[platform]:
             self.last_flow_result = FlowResult.from_legacy(
                 False, f"{platform} 浏览器页面未初始化", "OPEN_CONTENT"
@@ -441,9 +452,6 @@ class BrowserManager:
         # 统一限制所有平台的举报理由，同时覆盖绕过 MQ 的直接调用。
         complaint_data = prepare_complaint_data(complaint_data)
         log_message(f"开始处理 {platform} 投诉……")
-
-        self.errMessage = ""
-        self.submission_confirmed = False
 
         raw_page = self.pages[platform]
         self.mobile_only_url = None
@@ -476,13 +484,12 @@ class BrowserManager:
             handler = handlers.get(platform)
             if handler is None:
                 self.errMessage = f"不支持的平台: {platform}"
-                succeeded = False
             else:
-                succeeded = bool(handler(page, complaint_data))
-            self.last_flow_result = FlowResult.from_legacy(
-                succeeded, self.errMessage
+                handler(page, complaint_data)
+            self.last_flow_result = self._selection_failure or FlowResult.from_legacy(
+                self.submission_confirmed, self.errMessage
             )
-            if not succeeded:
+            if not self.submission_confirmed:
                 evidence_id = self.self_healing.handle_flow_failure(
                     platform,
                     raw_page,
@@ -499,10 +506,10 @@ class BrowserManager:
                         message=self.last_flow_result.message,
                         evidence_id=evidence_id,
                     )
-            return succeeded
+            return self.submission_confirmed
         except Exception as e:
             self.errMessage = self.errMessage or f"{platform} 投诉流程执行失败: {e}"
-            self.last_flow_result = FlowResult.from_legacy(
+            self.last_flow_result = self._selection_failure or FlowResult.from_legacy(
                 False, self.errMessage
             )
             evidence_id = self.self_healing.handle_flow_failure(
@@ -524,9 +531,14 @@ class BrowserManager:
             log_message(self.errMessage, True)
             return False
         finally:
-            self.self_healing.finish_flow(
-                getattr(self.last_flow_result, "success", False)
-            )
+            if not self.submission_confirmed and self.submission_diagnostic is None:
+                stage = self.last_flow_result.step or self.flow_stage
+                if self.submission_attempted:
+                    self.submission_diagnostic = (
+                        "FINAL_SUBMIT：已尝试点击提交，但未确认平台成功回执；结果未知，禁止自动重提。")
+                else:
+                    self.submission_diagnostic = f"{stage}：举报流程在提交前停止，未点击提交。"
+            self.self_healing.finish_flow(self.submission_confirmed)
         
     def close_all(self):
         """关闭所有浏览器实例"""
@@ -631,7 +643,7 @@ class BrowserManager:
             log_message("步骤7: 点击提交按钮")
             page.wait_for_selector("//span[contains(text(),'提交')]", timeout=overTime)
             if not DebugRun:
-                page.locator("//span[contains(text(),'提交')]").click()
+                self._click_submit(page.locator("//span[contains(text(),'提交')]"))
             log_message("微信投诉提交按钮已点击")
             time.sleep(0.5)
 
@@ -706,14 +718,23 @@ class BrowserManager:
             sub_category = complaint_data.get('subCategory')
             if normalize_category(sub_category):
                 log_message("步骤6: 选择子原因：{}".format(sub_category))
-                self._select_reason(
+                if not self._select_reason(
                     page, sub_category,
                     click_xpath_tpl='//div[@class="choice-item" and contains(text(), "{text}")]',
                     options_selector='//div[@class="choice-item"]',
-                    ready_timeout=overTime, label="子原因")
+                    ready_timeout=overTime, label="子原因"):
+                    self.errMessage = "未找到匹配的举报子原因"
+                    return False
                 time.sleep(0.5)
             else:
-                log_message("步骤6: 未找到子原因，跳过选择")
+                children = page.locator('//div[@class="choice-item"]')
+                if any(children.nth(index).is_visible() for index in range(min(children.count(), 120))):
+                    if not self._select_reason(
+                            page, complaint_data.get('reason') or main_category,
+                            options_selector='//div[@class="choice-item"]',
+                            ready_timeout=overTime, label="举报子原因"):
+                        self.errMessage = "未找到匹配的举报子原因"
+                        return False
 
             # 步骤7: 输入描述文本
             log_message("步骤7: 输入描述文本")
@@ -729,7 +750,7 @@ class BrowserManager:
             # 步骤9: 点击提交按钮
             log_message("步骤9: 点击提交按钮")
             if not DebugRun:
-                page.get_by_text("提交", exact=True).click()
+                self._click_submit(page.get_by_text("提交", exact=True))
             log_message("小红书投诉提交按钮已点击")
             time.sleep(1)
 
@@ -887,7 +908,7 @@ class BrowserManager:
             # 步骤8: 点击提交按钮
             log_message("步骤8: 点击提交按钮")
             if not DebugRun:
-                page.get_by_text("提交", exact=True).click()
+                self._click_submit(page.get_by_text("提交", exact=True))
             log_message("抖音投诉提交按钮已点击")
             time.sleep(1)
 
@@ -997,7 +1018,7 @@ class BrowserManager:
             # 步骤6: 点击提交按钮
             log_message("步骤6: 点击提交按钮")
             if not DebugRun:
-                page.get_by_text("确认", exact=True).click()
+                self._click_submit(page.get_by_text("确认", exact=True))
             log_message("今日头条投诉提交按钮已点击")
             time.sleep(0.5)
 
@@ -1079,7 +1100,7 @@ class BrowserManager:
             # 步骤6: 点击提交按钮
             log_message("步骤6: 点击提交按钮")
             if not DebugRun:
-                page.get_by_text("提交反馈", exact=True).click()
+                self._click_submit(page.get_by_text("提交反馈", exact=True))
             log_message("百度投诉提交按钮已点击")
             time.sleep(0.5)
 
@@ -1170,10 +1191,12 @@ class BrowserManager:
             sub_category = complaint_data.get('subCategory')
             if normalize_category(sub_category):
                 log_message("步骤5: 选择子原因：{}".format(sub_category))
-                self._select_reason(
+                if not self._select_reason(
                     page, sub_category,
                     click_xpath_tpl="//div[contains(text(),'{text}')]",
-                    ready_timeout=overTime, label="子原因")
+                    ready_timeout=overTime, label="子原因"):
+                    self.errMessage = "未找到匹配的举报子原因"
+                    return False
                 time.sleep(0.5)
             else:
                 log_message("步骤5: 未找到子原因，跳过选择")
@@ -1194,7 +1217,7 @@ class BrowserManager:
             log_message("步骤8: 点击提交按钮")
             page.wait_for_selector("//button[contains(text(),'提交举报')]", timeout=overTime)
             if not DebugRun:
-                page.locator("//button[contains(text(),'提交举报')]").click()
+                self._click_submit(page.locator("//button[contains(text(),'提交举报')]"))
             log_message("知乎投诉提交按钮已点击")
             time.sleep(0.5)
 
@@ -1221,13 +1244,22 @@ class BrowserManager:
         """微博投诉流程"""
         overTime = 10000  # 超时时间10秒（毫秒）
         popup_page = None  # 新标签页
+        self.submission_attempted = False
+        stage = "OPEN_CONTENT"
+
+        def reason_failed(selection, label):
+            self.errMessage = f"未找到匹配的{label}"
+            options = sanitize_html(" / ".join(selection.options[:20]))[:800]
+            self.submission_diagnostic = (
+                f"SELECT_REASON：{self.errMessage}；页面可选项：{options or '无'}。未点击提交。"
+            )
 
         try:
 
             # 步骤1: 进入指定的URL网页
             log_message("步骤1: 进入指定的URL网页")
             url = complaint_data.get('link', 'https://www.weibo.com/')
-            page.goto(url)
+            page.goto(url, wait_until='domcontentloaded', timeout=30000)
             log_message("步骤1: GET完成……")
             
             url = page.url
@@ -1235,9 +1267,11 @@ class BrowserManager:
             if(page.get_by_text("内容不存在").count() > 0):
                 self.errMessage = "未找到页面……链接已失效？"
                 log_message(self.errMessage)
-                return True
+                self.submission_diagnostic = "OPEN_CONTENT：目标内容不存在，未点击提交。"
+                return False
 
             # 步骤2: 点击下拉菜单
+            stage = "OPEN_REPORT_ENTRY"
             log_message("步骤2: 点击下拉菜单")
             page.wait_for_selector("//i[@title='更多']", timeout=overTime)
             page.locator("//i[@title='更多']").click()
@@ -1259,14 +1293,12 @@ class BrowserManager:
             popup_page.wait_for_selector("//h4[text()='侵权投诉专区']", timeout=overTime+5000)
 
             # 步骤4: 选择举报原因（兼容库文本与页面文字差异）
+            stage = "SELECT_REASON"
             main_category = complaint_data.get('category')
             log_message("步骤4: 选择举报原因：{}".format(main_category))
-            if not self._select_reason(
-                    popup_page, main_category,
-                    click_xpath_tpl="//a[contains(text(),'{text}')]",
-                    options_selector="//a",
-                    ready_timeout=overTime, label="举报原因"):
-                self.errMessage = "未找到匹配的举报原因"
+            selection = weibo_categories.select_reason(popup_page, main_category)
+            if selection.selected is None:
+                reason_failed(selection, "举报原因")
                 try:
                     popup_page.close()
                 except Exception:
@@ -1278,14 +1310,23 @@ class BrowserManager:
             sub_category = complaint_data.get('subCategory')
             if normalize_category(sub_category):
                 log_message("步骤5: 选择子原因：{}".format(sub_category))
-                self._select_reason(
-                    popup_page, sub_category,
-                    click_xpath_tpl="//a[contains(text(),'{text}')]",
-                    options_selector="//a",
-                    ready_timeout=overTime, label="子原因")
+                sub_selection = weibo_categories.select_reason(popup_page, sub_category)
+                if sub_selection.selected is None:
+                    reason_failed(sub_selection, "举报子原因")
+                    popup_page.close()
+                    return False
                 time.sleep(0.5)
-            else:
-                log_message("步骤5: 未找到子原因，跳过选择")
+            elif not (
+                    popup_page.locator("//textarea[contains(@placeholder,'请详细填写')]").is_visible()
+                    or popup_page.locator("//input[@name='chk']").is_visible()):
+                # Some categories expose a second level only after the first click.
+                # Once the form is visible, new agreement/help links are not categories.
+                sub_selection = weibo_categories.select_reason(
+                    popup_page, main_category, previous_options=selection.options)
+                if sub_selection.options and sub_selection.selected is None:
+                    reason_failed(sub_selection, "举报子原因")
+                    popup_page.close()
+                    return False
 
 
             # 步骤6: 如果有确认弹框信息点击确认。
@@ -1310,6 +1351,7 @@ class BrowserManager:
                 pass  # 不需要实名信息，继续
 
             # 步骤6.5: 如果需要文字描述添加文字描述
+            stage = "FILL_DESCRIPTION"
             try:
                 popup_page.wait_for_selector("//textarea[contains(@placeholder,'请详细填写')]", timeout=3000)
                 description = complaint_data.get('reason', 'none')
@@ -1319,6 +1361,7 @@ class BrowserManager:
                 pass
 
             # 步骤7: 勾选确认条约
+            stage = "CONFIRM_TERMS"
             log_message("步骤7: 勾选确认条约")
             check_checkbox(popup_page, "//input[@name='chk']", timeout=overTime)
             log_message("步骤7: 已勾选确认条约")
@@ -1326,11 +1369,14 @@ class BrowserManager:
 
 
             # 步骤8: 点击提交按钮
+            stage = "FINAL_SUBMIT"
             log_message("步骤8: 点击提交按钮")
             popup_page.wait_for_selector("//a[contains(text(),'提交')]", timeout=overTime)
             if not DebugRun:
-                popup_page.locator("//a[contains(text(),'提交')]").click()
-            log_message("微博投诉提交按钮已点击")
+                self._click_submit(popup_page.locator("//a[contains(text(),'提交')]"))
+                log_message("微博投诉提交按钮已点击")
+            else:
+                self.submission_diagnostic = "FINAL_SUBMIT：调试模式，未点击提交。"
             time.sleep(0.5)
 
             # 步骤9: 截图并上传到OSS
@@ -1343,6 +1389,8 @@ class BrowserManager:
                 if self._check_submit_success(popup_page, "//*[contains(text(), '提交成功')]"):
                     log_message(f"{complaint_data['platform']}:投诉提交成功!")
                 else:
+                    self.errMessage = "提交结果未知：未观察到成功提示"
+                    self.submission_diagnostic = "FINAL_SUBMIT：已尝试点击提交，但未观察到平台成功提示；结果未知，禁止自动重提。"
                     log_message(f"{complaint_data['id']}:未检测到成功标志！",True)
 
             time.sleep(1)
@@ -1352,10 +1400,16 @@ class BrowserManager:
             popup_page.close()
             log_message("已关闭举报页面并返回主页面")
 
-            return True
+            return self.submission_confirmed
 
         except Exception as e:
             log_message(f"微博投诉流程执行失败: {e}",True)
+            self.errMessage = self.errMessage or f"微博流程在 {stage} 阶段执行失败"
+            self.submission_diagnostic = (
+                f"{stage}：浏览器操作失败。" +
+                ("已尝试点击提交，结果未知，禁止自动重提。" if self.submission_attempted
+                 else "未点击提交。")
+            )
             # 确保在异常情况下也尝试关闭新标签页
             try:
                 if popup_page:
@@ -1425,7 +1479,7 @@ class BrowserManager:
             log_message("步骤8: 点击提交按钮")
             page.wait_for_selector("//button[contains(text(),'提交')]", timeout=overTime)
             if not DebugRun:
-                page.locator("//button[contains(text(),'提交')]").click()
+                self._click_submit(page.locator("//button[contains(text(),'提交')]"))
             log_message("快手投诉提交按钮已点击")
             time.sleep(0.5)
 
@@ -1478,20 +1532,10 @@ class BrowserManager:
                 # 步骤4-5: 选择举报原因（在iframe中；兼容库文本差异）
                 main_category = complaint_data.get('category')
                 log_message("步骤4-5: 选择举报原因：{}".format(main_category))
-                # 使用frame_locator定位iframe中的元素（FrameLocator 无 wait_for_selector，逐候选尝试）
+                # FrameLocator has no wait_for_selector; the shared matcher uses locators.
                 frame = page.locator('iframe[name="appeal"]').content_frame
-                clicked = False
-                for i, cand in enumerate(self._category_candidates(main_category)):
-                    try:
-                        loc = frame.get_by_text(cand, exact=False).first
-                        loc.wait_for(timeout=overTime if i == 0 else 2000)
-                        loc.click()
-                        clicked = True
-                        log_message(f"举报原因选择：'{main_category}' -> '{cand}'")
-                        break
-                    except Exception:
-                        continue
-                if not clicked:
+                if not self._select_reason(frame, main_category, exact_text=True,
+                                           ready_timeout=overTime, label="举报原因"):
                     self.errMessage = "未找到匹配的举报原因"
                     return False
                 time.sleep(1)
@@ -1510,7 +1554,7 @@ class BrowserManager:
                 # 步骤8: 点击提交按钮
                 log_message("步骤8: 点击提交按钮")
                 if not DebugRun:
-                    page.locator("iframe[name=\"appeal\"]").content_frame.get_by_text("提交").click()
+                    self._click_submit(page.locator("iframe[name=\"appeal\"]").content_frame.get_by_text("提交"))
                 log_message("B站投诉提交按钮已点击")
                 time.sleep(0.5)
 
@@ -1553,7 +1597,7 @@ class BrowserManager:
                 # 步骤8: 点击提交按钮
                 log_message("步骤8: 点击提交按钮")
                 if not DebugRun:
-                    page.get_by_text("确定", exact=True).click()
+                    self._click_submit(page.get_by_text("确定", exact=True))
                 log_message("B站投诉提交按钮已点击")
                 time.sleep(0.5)
 
@@ -1690,7 +1734,7 @@ class BrowserManager:
                     netease.SUBMIT_FALLBACK_SELECTOR)
             submit_button.first.wait_for(state="visible", timeout=overTime)
             if not DebugRun:
-                submit_button.first.click()
+                self._click_submit(submit_button.first)
             log_message("网易投诉提交按钮已点击")
             report_page.wait_for_timeout(500)
 
@@ -1820,7 +1864,7 @@ class BrowserManager:
                 log_message("步骤6: 已定位最终提交按钮（调试模式未点击）")
             else:
                 log_message("步骤6: 点击东方财富最终提交按钮")
-                submit_button.click()
+                self._click_submit(submit_button)
                 if self._check_submit_success(
                         report_page, eastmoney.SUCCESS_XPATH, timeout=10000):
                     log_message(f"{complaint_data['platform']}:投诉提交成功!")
@@ -1918,8 +1962,7 @@ class BrowserManager:
                 complaint_data.get('category') or '').strip()
             raw_description = str(
                 complaint_data.get('reason') or '').strip()
-            category_source = "{} {}".format(
-                main_category, raw_description).strip()
+            category_source = main_category or raw_description
 
             log_message(f"步骤3: 选择天天基金举报原因：{main_category}")
             if not self._select_reason(
@@ -1969,7 +2012,7 @@ class BrowserManager:
                 log_message("步骤6: 已定位天天基金最终提交按钮（调试模式未点击）")
             else:
                 log_message("步骤6: 点击天天基金最终提交按钮")
-                submit_button.click()
+                self._click_submit(submit_button)
                 if self._check_submit_success(
                         report_page, tiantianfund.SUCCESS_XPATH,
                         timeout=10000):
@@ -2155,14 +2198,14 @@ class BrowserManager:
                     log_message("步骤6: 已定位确认提交按钮（调试模式未点击）")
                 else:
                     log_message("步骤6: 点击同花顺最终提交按钮")
-                    final_button.click()
+                    self._click_submit(final_button)
             elif step_text == "提交":
                 # 这类一级原因没有详情页；当前按钮已经是最终提交按钮。
                 if DebugRun:
                     log_message("步骤4: 已定位最终提交按钮（调试模式未点击）")
                 else:
                     log_message("步骤4: 点击同花顺最终提交按钮")
-                    step_button.click()
+                    self._click_submit(step_button)
             else:
                 self.errMessage = f"无法识别同花顺流程按钮：{step_text}"
                 log_message(self.errMessage, True)
@@ -2258,7 +2301,7 @@ class BrowserManager:
                 log_message("步骤4: 已定位腾讯最终提交按钮（调试模式未点击）")
             else:
                 log_message("步骤4: 点击腾讯最终提交按钮")
-                final_button.click()
+                self._click_submit(final_button)
 
             if not DebugRun:
                 if self._check_submit_success(
@@ -2417,7 +2460,7 @@ class BrowserManager:
                 log_message("步骤6: 已定位雪球最终提交按钮（调试模式未点击）")
             else:
                 log_message("步骤6: 点击雪球最终提交按钮")
-                final_button.click()
+                self._click_submit(final_button)
 
             if not DebugRun:
                 if self._check_submit_success(
@@ -2509,8 +2552,7 @@ class BrowserManager:
                 complaint_data.get('category') or '').strip()
             description_source = str(
                 complaint_data.get('reason') or '').strip()
-            category_source = "{} {}".format(
-                main_category, description_source).strip()
+            category_source = main_category or description_source
             log_message(f"步骤3: 选择富途牛牛圈举报原因：{main_category}")
             if not self._select_reason(
                     page, category_source,
@@ -2593,7 +2635,7 @@ class BrowserManager:
                     log_message(self.errMessage, True)
                     return False
                 log_message("步骤6: 点击富途最终提交按钮")
-                final_button.click()
+                self._click_submit(final_button)
 
             if not DebugRun:
                 if self._check_submit_success(
@@ -2631,8 +2673,7 @@ class BrowserManager:
             complaint_data.get('category') or '').strip()
         description_source = str(
             complaint_data.get('reason') or '').strip()
-        category_source = "{} {}".format(
-            main_category, description_source).strip()
+        category_source = main_category or description_source
 
         log_message(f"步骤3: 选择新浪社群举报类型：{main_category}")
         if not self._select_reason(
@@ -2679,7 +2720,7 @@ class BrowserManager:
             log_message("步骤5: 已定位新浪社群最终提交按钮（调试模式未点击）")
         else:
             log_message("步骤5: 点击新浪社群最终提交按钮")
-            final_button.click()
+            self._click_submit(final_button)
             if self._check_submit_success(
                     page, sina.COMMUNITY_SUCCESS_XPATH, timeout=5000):
                 log_message(f"{complaint_data['platform']}:社群帖子举报提交成功!")
@@ -2753,8 +2794,7 @@ class BrowserManager:
                 complaint_data.get('category') or '').strip()
             description_source = str(
                 complaint_data.get('reason') or '').strip()
-            category_source = "{} {}".format(
-                main_category, description_source).strip()
+            category_source = main_category or description_source
 
             log_message(f"步骤3: 选择新浪举报类型：{main_category}")
             if not self._select_reason(
@@ -2795,7 +2835,7 @@ class BrowserManager:
                     log_message(self.errMessage, True)
                     return False
                 log_message("步骤4: 点击新浪最终提交按钮")
-                final_button.click()
+                self._click_submit(final_button)
 
             if not DebugRun:
                 if self._check_submit_success(
@@ -2877,8 +2917,7 @@ class BrowserManager:
                 complaint_data.get('category') or '').strip()
             description_source = str(
                 complaint_data.get('reason') or '').strip()
-            category_source = "{} {}".format(
-                main_category, description_source).strip()
+            category_source = main_category or description_source
 
             log_message(f"步骤3: 选择一点资讯举报原因：{main_category}")
             if not self._select_reason(
@@ -2918,7 +2957,7 @@ class BrowserManager:
                     log_message(self.errMessage, True)
                     return False
                 log_message("步骤4: 点击一点资讯最终提交按钮")
-                final_button.click()
+                self._click_submit(final_button)
 
             if not DebugRun:
                 if self._check_submit_success(
@@ -3022,8 +3061,7 @@ class BrowserManager:
             main_category = str(complaint_data.get('category') or '').strip()
             description_source = str(
                 complaint_data.get('reason') or '').strip()
-            category_source = "{} {}".format(
-                main_category, description_source).strip()
+            category_source = main_category or description_source
 
             # 侵权和抄袭类别点击后会立即要求登录，并展开身份证、权属材料、
             # 联系方式及承诺协议等字段；现有投诉数据不足，点击前先转人工。
@@ -3099,7 +3137,7 @@ class BrowserManager:
                 log_message("步骤7: 已定位搜狐最终提交按钮（调试模式未点击）")
             else:
                 log_message("步骤7: 点击搜狐最终提交按钮")
-                final_button.click()
+                self._click_submit(final_button)
 
             if not DebugRun:
                 report_page.wait_for_timeout(800)
@@ -3133,19 +3171,43 @@ class BrowserManager:
     #endregion
     
     #region Flow Control Methods
+    def _click_submit(self, locator):
+        """Mark the attempt before the side effect; final clicks never have a fallback."""
+        if DebugRun:
+            return
+        self.flow_stage = "FINAL_SUBMIT"
+        locator.wait_for(state="visible", timeout=10000)
+        if locator.count() != 1 or not locator.is_enabled():
+            raise RuntimeError("最终提交按钮不唯一或不可用")
+        self.submission_attempted = True
+        locator.click()
+
+    def _record_selection_failure(self, label, options):
+        available = sanitize_html(" / ".join(option for option in options[:20] if option))[:800]
+        message = f"未找到匹配的{label}；页面可选项：{available or '无'}"
+        self._selection_failure = FlowResult(
+            FlowStatus.FAILED, ErrorCode.FORM_VALIDATION_FAILED,
+            step="SELECT_REASON", message=message)
+        self.submission_diagnostic = f"SELECT_REASON：{message}。未点击提交。"
+
     def _category_candidates(self, raw_text):
         """把数据库类别文本转成一组“待尝试的候选文本”：
         归一化主值优先，其后是拆分出的各多值分量（去重、去空）。
         """
         from category_matcher import normalize_category, split_categories
         candidates = []
+        raw_text = extract_intent(raw_text)
         norm = normalize_category(raw_text)
         if norm:
             candidates.append(norm)
         for c in split_categories(raw_text):
             if c and c not in candidates:
                 candidates.append(c)
-        return candidates
+        for alias in category_alias_candidates(raw_text):
+            if alias not in candidates:
+                candidates.append(alias)
+        return [candidate for candidate in candidates
+                if candidate not in _ACTION_WORDS and not contains_terminal_action(candidate)]
 
     def _enum_texts(self, scope, selector, cap=120):
         """枚举 selector 命中元素的可见文本，返回 (locator, [文本...])，索引对齐。
@@ -3161,16 +3223,18 @@ class BrowserManager:
         texts = []
         for i in range(n):
             try:
-                t = loc.nth(i).inner_text(timeout=1200).strip()
+                node = loc.nth(i)
+                t = (node.inner_text(timeout=1200).strip()
+                     if node.is_visible() and node.is_enabled() else "")
             except Exception:
                 t = ""
-            texts.append("" if t in _ACTION_WORDS else t)
+            texts.append("" if t in _ACTION_WORDS or contains_terminal_action(t) else t)
         return loc, texts
 
     def _select_reason(self, scope, raw_text, click_xpath_tpl=None,
                        options_selector=None, options_fallback=None,
                        click_relative=None, ready_timeout=10000,
-                       threshold=0.5, label="举报原因"):
+                       threshold=0.5, label="举报原因", exact_text=False):
         """把（可能被 AI 改写、会漂移的）数据库类别文本，动态归类到“平台当前真实
         存在的选项”并点击。这样即使库里今天写“不实信息”、明天写“虚假、不实信息”，
         也能就近归到平台真实类别。
@@ -3194,18 +3258,27 @@ class BrowserManager:
         """
         from category_matcher import best_match, semantic_alias_match
 
+        self.flow_stage = "SELECT_REASON"
+        self._selection_failure = None
+        self.submission_diagnostic = None
+        raw_text = extract_intent(raw_text)
+        options = []
+
         # 候选文本：归一化主值 + 拆分出的各多值分量（去重、去空）
         candidates = self._category_candidates(raw_text)
         if not candidates:
+            self._record_selection_failure(label, options)
             log_message(f"{label}为空，跳过选择：raw='{raw_text}'")
             return False
 
         # 等待选项区域渲染（优先用容器选择器，否则用首个候选的直连定位作就绪信号）
+        ready_template = "//*[normalize-space(text())='{text}']" if exact_text else click_xpath_tpl
         ready_probe = options_selector or (
-            click_xpath_tpl.format(text=candidates[0]) if click_xpath_tpl else None)
+            " | ".join(format_category_xpath(ready_template, candidate) for candidate in candidates)
+            if ready_template else None)
         if ready_probe:
             try:
-                scope.wait_for_selector(ready_probe, timeout=ready_timeout)
+                scope.locator(ready_probe).first.wait_for(state="visible", timeout=ready_timeout)
             except Exception:
                 pass  # 探针未命中也继续
 
@@ -3252,6 +3325,7 @@ class BrowserManager:
                         node = node.locator(click_relative)
                     try:
                         click_non_terminal_option(node)
+                        self.flow_stage = "PREPARE_FORM"
                         if matched_by == "milu语义":
                             log_message(f"{label}语义归类(milu)：库文本='{raw_text}' -> 平台真实='{best_opt}'")
                         elif matched_by == "本地语义":
@@ -3266,21 +3340,26 @@ class BrowserManager:
                     log_message(f"{label}枚举+语义均未命中，转文本直连。平台真实选项={real}")
 
         # 路径B：文本直连兜底
-        if click_xpath_tpl:
+        if click_xpath_tpl or exact_text:
             for cand in candidates:
-                xpath = click_xpath_tpl.format(text=cand)
                 try:
-                    if scope.locator(xpath).count() > 0:
-                        node = scope.locator(xpath).first
+                    matches = (scope.get_by_text(cand, exact=True) if exact_text else
+                               scope.locator(format_category_xpath(click_xpath_tpl, cand)))
+                    for index in range(min(matches.count(), 120)):
+                        node = matches.nth(index)
+                        if not node.is_visible() or not node.is_enabled():
+                            continue
                         if click_relative:
                             node = node.locator(click_relative)
                         click_non_terminal_option(node)
+                        self.flow_stage = "PREPARE_FORM"
                         log_message(f"{label}文本直连：库文本='{raw_text}' -> '{cand}'")
                         return True
                 except Exception:
                     continue
 
         log_message(f"{label}选择失败：库文本='{raw_text}'（候选={candidates}）", True)
+        self._record_selection_failure(label, options)
         return False
 
     def _upload_image(self, page, complaint_data, xpath):

@@ -1,4 +1,4 @@
-"""Synthetic page contracts for every enabled direct platform except XHS."""
+"""Synthetic page contracts for every enabled direct web platform."""
 
 from dataclasses import dataclass
 import json
@@ -32,6 +32,7 @@ class Case:
 
 
 CASES = (
+    Case("xiaohongshu", "web", "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"),
     Case("douyin", "video", "https://www.douyin.com/video/1234567890123456789"),
     Case("douyin", "note", "https://www.douyin.com/note/1234567890123456789"),
     Case("douyin", "jingxuan", "https://www.douyin.com/jingxuan?modal_id=1234567890123456789"),
@@ -78,7 +79,15 @@ def build_case(case, receipt=True):
         form.context = page.context
         page.popup = form
 
-    if case.platform == "douyin":
+    if case.platform == "xiaohongshu":
+        page.add('body', '普通正文')
+        page.add('.reds-icon.more')
+        page.add(text_key('下一步'), stage=2)
+        entry = text_key('举报')
+        options = '//div[contains(@class, "list-select-item-option")]'
+        description = "//textarea[@class='advice-input']"
+        final = text_key('提交')
+    elif case.platform == "douyin":
         page.add('[data-e2e="video-play-more"]')
         entry = text_key("举报")
         options = "xpath=//*[contains(text(),'举报原因')]/following::span"
