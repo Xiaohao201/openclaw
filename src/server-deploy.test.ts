@@ -105,7 +105,7 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     await writeFile(sandbox.logPath, "");
   });
 
-  it("prepares Python for source and built plugins before restarting the gateway", async () => {
+  it("verifies native assets for source and built plugins before restarting the gateway", async () => {
     const result = runDeploy(sandbox);
     expect(result.status, result.stderr).toBe(0);
     expect(await readCommands(sandbox)).toEqual([
@@ -113,11 +113,9 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
       "install",
       "build",
       "ui:build",
-      "python extensions\\leading-v2\\python\\setup_runtime.py",
-      "node extensions\\leading-v2\\stage-python.mjs dist\\extensions\\leading-v2",
-      "python extensions\\leading-v2\\python\\setup_runtime.py --runtime-dir dist\\extensions\\leading-v2\\python",
-      "node extensions\\leading-v2\\stage-python.mjs dist-runtime\\extensions\\leading-v2",
-      "python extensions\\leading-v2\\python\\setup_runtime.py --runtime-dir dist-runtime\\extensions\\leading-v2\\python",
+      "node extensions\\leading-v2\\check-runtime.mjs extensions\\leading-v2",
+      "node extensions\\leading-v2\\check-runtime.mjs dist\\extensions\\leading-v2",
+      "node extensions\\leading-v2\\check-runtime.mjs dist-runtime\\extensions\\leading-v2",
       "openclaw gateway restart",
     ]);
   });
@@ -129,7 +127,7 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     expect(await readCommands(sandbox)).toEqual(["pull origin v1", "install", "build"]);
   });
 
-  it.each(["node", "python"] as const)(
+  it.each(["node"] as const)(
     "does not restart the gateway after %s runtime preparation fails",
     async (command) => {
       const result = runDeploy(sandbox, command);
@@ -143,7 +141,7 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
   it("uses UTF-8 and invokes pnpm directly instead of a managed-service script", async () => {
     const launcher = await readFile(join(repoRoot, "deploy-server.cmd"), "utf8");
     expect(launcher).toMatch(/chcp\s+65001\s*>nul/iu);
-    expect(launcher).toContain('set "PYTHONUTF8=1"');
+    expect(launcher).not.toContain("python");
     expect(launcher).not.toContain("server-deploy.ps1");
     expect(launcher).toContain("call pnpm openclaw gateway restart");
     expect(launcher).not.toContain("playwright install chromium");

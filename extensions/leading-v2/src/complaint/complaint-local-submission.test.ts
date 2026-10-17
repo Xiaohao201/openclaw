@@ -27,7 +27,7 @@ vi.mock("./complaint-local.js", () => ({
 }));
 vi.mock("./complaint-task-record.js", () => ({ createComplaintTaskRecord: mocks.createRecord }));
 vi.mock("./complaint-result-record.js", () => ({ saveComplaintResult: mocks.saveResult }));
-vi.mock("./complaint-local-process.js", () => ({ checkLocalComplaintRuntime: mocks.checkRuntime }));
+vi.mock("./executor/router.js", () => ({ checkComplaintRuntime: mocks.checkRuntime }));
 vi.mock("./complaint-session-handoff.js", () => ({
   sessionBrowserHandoffs: () => ({ acquire: mocks.acquire }),
 }));
@@ -155,7 +155,7 @@ describe("recorded local complaint coordination", () => {
       taskId: 42,
       accepted: true,
     });
-    expect(mocks.acquire).not.toHaveBeenCalled();
+    expect(mocks.acquire).toHaveBeenCalledOnce();
     expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ items: separate }),
     );

@@ -105,10 +105,12 @@ vi.mock("../../../src/agents/tools/nodes-utils.js", async () => {
 });
 
 const gatewayMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(async () => ({
-    ok: true,
-    payload: { result: { ok: true, running: true } },
-  })),
+  callGatewayTool: vi.fn(
+    async (): Promise<{ ok: boolean; payload: { result: Record<string, unknown> } }> => ({
+      ok: true,
+      payload: { result: { ok: true, running: true } },
+    }),
+  ),
 }));
 vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 

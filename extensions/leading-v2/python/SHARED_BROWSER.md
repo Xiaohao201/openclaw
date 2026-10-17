@@ -1,5 +1,9 @@
 # Shared browser sessions
 
+> Historical Python implementation reference. Current deployment uses the native
+> TypeScript executor and login helper. Do not run the commands below to configure
+> the migrated plugin; see [Local reporting](../LOCAL_REPORTING.md).
+
 ## OpenClaw conversation workflow
 
 Both `complaint_browser` login setup and direct complaint submission borrow the

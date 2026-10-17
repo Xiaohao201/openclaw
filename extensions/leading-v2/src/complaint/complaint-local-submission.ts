@@ -2,11 +2,11 @@ import type { OpenClawPluginApi } from "../../api.js";
 import { resolveConfig } from "../client/http-client.js";
 import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
 import type { LocalComplaintItem, LocalConfig } from "./complaint-local-contract.js";
-import { checkLocalComplaintRuntime } from "./complaint-local-process.js";
 import { createLocalBatch, submitLocalBatch } from "./complaint-local.js";
 import { saveComplaintResult } from "./complaint-result-record.js";
 import { sessionBrowserHandoffs } from "./complaint-session-handoff.js";
 import { createComplaintTaskRecord, type ComplaintTaskRecord } from "./complaint-task-record.js";
+import { checkComplaintRuntime } from "./executor/router.js";
 
 export const KEEP_COMPLAINT_CHANNEL =
   "保留原平台渠道。未获用户明确指定，不得推荐或切换到12377或其他举报渠道；登录、浏览器交接或取证失败不构成更换渠道的理由。";
@@ -91,18 +91,16 @@ export async function submitRecordedLocalComplaint(params: {
       "举报任务记录未确认保存，未执行举报。请检查 backend.db 和批次记录；入库结果可能未知，不得自动重提。",
     );
   }
-  const unavailable = await checkLocalComplaintRuntime(config);
+  const unavailable = await checkComplaintRuntime(config, items);
   if (unavailable) {
     return stopped(unavailable.errorCode ?? "RUNTIME_MISSING", unavailable.message);
   }
   let browserLease;
   try {
-    if (items.some((item) => !item.report12377)) {
-      if (items.some((item) => item.report12377)) {
-        return stopped("MIXED_COMPLAINT_CHANNELS", "不同举报渠道不能混合在同一批次。");
-      }
-      browserLease = await sessionBrowserHandoffs(api).acquire(ctx);
+    if (items.some((item) => !item.report12377) && items.some((item) => item.report12377)) {
+      return stopped("MIXED_COMPLAINT_CHANNELS", "不同举报渠道不能混合在同一批次。");
     }
+    browserLease = await sessionBrowserHandoffs(api).acquire(ctx);
   } catch (error) {
     return stopped(
       "BROWSER_HANDOFF_REQUIRED",

@@ -6,6 +6,12 @@ import type { OpenClawConfig } from "../../api.js";
 import { ComplaintBatchStore } from "./complaint-batch-store.js";
 import { UserBrowserProfiles } from "./complaint-user-browser.js";
 
+const cdpUrl = (binding: { version: number; cdpUrl?: string }) => {
+  if (binding.version !== 1 || !binding.cdpUrl) {
+    throw new Error("Expected a managed CDP binding");
+  }
+  return binding.cdpUrl;
+};
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -48,7 +54,7 @@ describe("per-user managed browser", () => {
       version: 1,
       profileDir: join(f.state, "browser", first.profile, "user-data"),
     });
-    expect(first.binding.cdpUrl).not.toBe("http://127.0.0.1:19012");
+    expect(cdpUrl(first.binding)).not.toBe("http://127.0.0.1:19012");
     expect(JSON.parse(await readFile(f.bindingPath("alice"), "utf8"))).toEqual(first.binding);
     await expect(f.profiles.resolve("alice", "openclaw")).resolves.toEqual(first);
     expect(f.runtime.writeConfigFile).toHaveBeenCalledTimes(1);
@@ -64,7 +70,7 @@ describe("per-user managed browser", () => {
     expect(a).toEqual(again);
     expect(a.profile).not.toBe(b.profile);
     expect(a.binding.profileDir).not.toBe(b.binding.profileDir);
-    expect(a.binding.cdpUrl).not.toBe(b.binding.cdpUrl);
+    expect(cdpUrl(a.binding)).not.toBe(cdpUrl(b.binding));
     expect(Object.keys(f.runtime.loadConfig().browser?.profiles ?? {})).toHaveLength(2);
   });
 
@@ -77,7 +83,7 @@ describe("per-user managed browser", () => {
     const c = await restarted.resolve("carol");
     await expect(restarted.resolve("alice")).resolves.toEqual(a);
     await expect(restarted.resolve("bob")).resolves.toEqual(b);
-    expect([a.binding.cdpUrl, b.binding.cdpUrl]).not.toContain(c.binding.cdpUrl);
+    expect([cdpUrl(a.binding), cdpUrl(b.binding)]).not.toContain(cdpUrl(c.binding));
   });
 
   it("preserves an existing operator binding and selects its matching nondefault profile", async () => {
@@ -113,7 +119,7 @@ describe("per-user managed browser", () => {
     const f = await fixture();
     const a = await f.profiles.resolve("alice");
     f.setConfig({
-      browser: { profiles: { foreign: { cdpUrl: String(a.binding.cdpUrl), color: "#123456" } } },
+      browser: { profiles: { foreign: { cdpUrl: cdpUrl(a.binding), color: "#123456" } } },
     });
     await expect(f.profiles.resolve("alice")).rejects.toThrow("冲突");
   });
@@ -135,7 +141,7 @@ describe("per-user managed browser", () => {
         ...cfg.browser,
         profiles: {
           ...cfg.browser?.profiles,
-          aaa: { cdpUrl: String(a.binding.cdpUrl), color: "#123456" },
+          aaa: { cdpUrl: cdpUrl(a.binding), color: "#123456" },
         },
       },
     });

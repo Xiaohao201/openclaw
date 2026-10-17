@@ -9,19 +9,18 @@
       "complaintExecution": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Direct local Python browser reporting. Historical backend batches remain queryable.",
+        "description": "Native TypeScript reporting using the current OpenClaw browser. Historical backend batches remain queryable.",
         "properties": {
           "mode": { "type": "string", "enum": ["local", "backend"], "default": "local" },
           "python": {
             "type": "string",
             "minLength": 1,
-            "default": "python",
-            "description": "Python executable (not a shell command)."
+            "description": "Deprecated compatibility input; ignored by the native executor."
           },
           "runtimeDir": {
             "type": "string",
             "minLength": 1,
-            "description": "Optional absolute path to the plugin's bundled python directory."
+            "description": "Deprecated compatibility input; ignored by the native executor."
           },
           "timeoutMs": {
             "type": "integer",
@@ -29,7 +28,10 @@
             "maximum": 1800000,
             "default": 900000
           },
-          "headless": { "type": "boolean", "default": false },
+          "headless": {
+            "type": "boolean",
+            "description": "Deprecated compatibility input. Browser visibility is managed by OpenClaw."
+          },
           "phone": {
             "type": "object",
             "additionalProperties": false,

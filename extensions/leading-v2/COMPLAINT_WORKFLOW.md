@@ -1,10 +1,11 @@
 # Complaint documents and background reports
 
-New `complaint_submit` calls default to direct local Python execution. See
+New `complaint_submit` calls default to direct local TypeScript execution. See
 [Local reporting](LOCAL_REPORTING.md) for installation, per-user login, local
 category inputs, and result recovery. Local calls return `accepted=true` and
-`submitted=false` with a batch ID; they do not create a backend task. Query the
-batch to confirm actual platform submission. The backend task/classification
+`submitted=false` with a batch ID. A task record must be durably saved before
+local execution; this record is not a request to the backend report executor.
+Query the batch to confirm actual platform submission. The backend task/classification
 instructions below apply only to `complaintExecution.mode=backend` and historical
 backend batches. Local mode requires explicit links and per-link evidence rather
 than selecting the latest detection task.

@@ -53,6 +53,7 @@ describe("leading-v2 background polling", () => {
         logger,
         registerService,
         registerTool,
+        registerCli: vi.fn(),
         on: vi.fn(),
       } as unknown as OpenClawPluginApi;
 

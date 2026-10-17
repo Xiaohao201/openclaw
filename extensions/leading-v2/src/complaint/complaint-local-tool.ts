@@ -18,15 +18,15 @@ export function createLocalComplaintSubmitToolFactory(api: OpenClawPluginApi) {
       name: "complaint_submit",
       label: "本地举报",
       description:
-        "先写入 legal_complaint_task 并保存本地批次，再由本地 Python 浏览器执行举报；不投递后端队列，入库失败不执行。" +
+        "先写入 legal_complaint_task 并保存本地批次，再由本地举报执行器执行；不投递后端队列，入库失败不执行。" +
         "直接平台举报必须先在本对话用 browser 打开或查看目标标签页；执行器接续该标签页及其登录态，不另开浏览器。交接仅限当前用户已绑定的 host profile，禁止借用其他用户账号。" +
         "仅对用户已核定的目标及举报事由，在明确授权后传 confirmed=true；不得自行挑选对象并作出违规认定后自动举报。使用本轮研判 basisSource=AgentJudgment、subjectScope、judgment 和 links。" +
         "批量必须为每条链接提供独立 linkJudgments，不能把批次摘要用于每条链接。事由须基于对应链接的已核验证据。" +
         "linkJudgments 必须是对象数组，不能传 JSON 字符串。用户确认仅授权操作，不构成事实证据；" +
         "不得把未查到佐证写成已证伪，不得因用户要求全部举报而将此前正常评价改写为违法事实；无新增证据须保留原研判。视频、正文或通报读取失败须保留为证据缺口，不能补写确定的违规结论。" +
         "可用 complaint_taxonomy 查询本地支持平台；不需要后端 classifications 或 taxonomyVersionId。" +
-        "可选 categories 使用实际平台分类文字，否则浏览器按单条研判匹配页面选项。" +
-        "如用户明确选择12377匿名渠道，传 report12377；会打开官网供用户核对、验证码及手动最终提交，单条理由最多500字符。" +
+        "直接平台的 categories 使用核定的实际平台分类文字；无法唯一匹配时交由人工核查，不从长篇理由猜选分类。" +
+        "如用户明确选择12377匿名渠道，传 report12377；同样先用本对话 browser 打开页面以交接标签页，再进入官网供本人核对、验证码及手动最终提交，单条理由最多500字符。" +
         "登录或会话未准备好时用 complaint_browser 引导当前用户登录并保存，不能复用其他用户账号。" +
         "返回 accepted 仅表示本地接收，使用 complaint_task_status({batchId}) 查询平台结果。不要自动重提。" +
         KEEP_COMPLAINT_CHANNEL,

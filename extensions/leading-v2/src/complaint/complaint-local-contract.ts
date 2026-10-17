@@ -1,11 +1,10 @@
-import { statSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { OpenClawConfig } from "../../api.js";
 import { isUnavailableComplaintLink } from "./complaint-platform-policy.js";
 
-// Plugin-owned routing, shared with Python through the validated input payload.
+// Plugin-owned routing for the native executor.
 export const localPlatforms: Record<string, readonly string[]> = {
   baidu: ["baidu.com", "baijiahao.baidu.com"],
   bilibili: ["bilibili.com"],
@@ -213,14 +212,11 @@ export const complaintRecordingSchema = z.discriminatedUnion("state", [
 const configSchema = z
   .object({
     mode: z.enum(["local", "backend"]).default("local"),
-    python: z.string().min(1).default("python"),
-    runtimeDir: z
-      .string()
-      .min(1)
-      .refine(isAbsolute, "runtimeDir must be absolute")
-      .default(fileURLToPath(new URL("../../python/", import.meta.url))),
+    // Accepted temporarily for existing deployments; never used to execute code.
+    python: z.string().min(1).optional(),
+    runtimeDir: z.string().min(1).refine(isAbsolute, "runtimeDir must be absolute").optional(),
     timeoutMs: z.number().int().min(1000).max(1800000).default(900000),
-    headless: z.boolean().default(false),
+    headless: z.boolean().optional(),
     phone: z
       .object({
         adbPath: z.string().min(1).default("adb"),
@@ -237,27 +233,10 @@ export function resolveLocalConfig(
   hostConfig?: Pick<OpenClawConfig, "browser">,
 ) {
   const parsed = configSchema.parse(config.complaintExecution ?? {});
-  const block = config.complaintExecution as Record<string, unknown> | undefined;
-  if (rootDir && block?.runtimeDir === undefined) {
-    parsed.runtimeDir = join(rootDir, "python");
-  }
-  if (block?.python === undefined) {
-    // Deployment installs this environment next to the actual runtime assets.
-    const managedPython = join(
-      dirname(parsed.runtimeDir),
-      ".venv",
-      process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-    );
-    try {
-      if (statSync(managedPython).isFile()) {
-        parsed.python = managedPython;
-      }
-    } catch {
-      // Preserve the legacy PATH default for explicitly managed environments.
-    }
-  }
+  const { python: _python, runtimeDir: _runtimeDir, headless: _headless, ...native } = parsed;
   return {
-    ...parsed,
+    ...native,
+    assetsDir: join(rootDir ?? fileURLToPath(new URL("../../", import.meta.url)), "assets"),
     allowFakeIp: hostConfig?.browser?.ssrfPolicy?.allowRfc2544BenchmarkRange === true,
   };
 }

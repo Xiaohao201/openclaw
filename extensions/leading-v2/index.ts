@@ -22,6 +22,7 @@ import { stopLocalComplaints } from "./src/complaint/complaint-local.js";
 import { registerComplaintBrowserHandoff } from "./src/complaint/complaint-session-handoff.js";
 import { createComplaintTaskStatusToolFactory } from "./src/complaint/complaint-status-tool.js";
 import { createComplaintTaxonomyToolFactory } from "./src/complaint/complaint-taxonomy-tool.js";
+import { registerPhonePreflight } from "./src/complaint/phone/preflight-cli.js";
 import {
   createCrawlRefreshCreateToolFactory,
   createCrawlRefreshListToolFactory,
@@ -77,6 +78,7 @@ export default definePluginEntry({
     "confirmed SMTP email. Tools are scoped to rabbitmq-<userId> agents; per-uid keys are resolved " +
     "(and auto-provisioned) from the api_key table.",
   register(api: OpenClawPluginApi) {
+    registerPhonePreflight(api);
     registerComplaintBrowserHandoff(api);
     const config = resolveConfig(api.pluginConfig ?? {});
     // One shared resolver for the whole backend: each uid is minted/cached once.
