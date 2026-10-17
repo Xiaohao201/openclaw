@@ -32,18 +32,7 @@ export class SessionBrowserHandoffs {
   private selections = new Map<string, Selection>();
   private claims = new Map<string, string>();
   private busy = new Set<string>();
-  constructor(
-    private resolve: (ctx: Context, profile?: string) => Promise<Identity>,
-    private synchronizeLogin?: (identity: Identity, start: boolean) => Promise<void>,
-  ) {}
-
-  async refreshSharedLogin(ctx: Context) {
-    owner(ctx);
-    const identity = await this.resolve(ctx);
-    if (!this.busy.has(identity.profile)) {
-      await this.synchronizeLogin?.(identity, false);
-    }
-  }
+  constructor(private resolve: (ctx: Context, profile?: string) => Promise<Identity>) {}
 
   async before(ctx: Context, params: Record<string, unknown>) {
     const key = owner(ctx);
@@ -85,9 +74,6 @@ export class SessionBrowserHandoffs {
         throw new Error("此标签页属于另一个对话，不能交接或操作。");
       }
     }
-    if (!["status", "profiles", "stop", "close"].includes(String(params.action))) {
-      await this.synchronizeLogin?.(identity, true);
-    }
     return {
       ...params,
       profile: identity.profile,
@@ -128,7 +114,6 @@ export class SessionBrowserHandoffs {
       ctx,
       typeof params.profile === "string" ? params.profile : undefined,
     );
-    await this.synchronizeLogin?.(identity, false);
     const details = object(object(result)?.details);
     const proof = object(details?.sessionHandoff);
     const target = details?.targetId ?? params.targetId ?? object(params.request)?.targetId;
@@ -204,38 +189,15 @@ export function sessionBrowserHandoffs(api: OpenClawPluginApi) {
   let registry = registries.get(state);
   if (!registry) {
     const profiles = new UserBrowserProfiles(state, api.runtime.config);
-    registry = new SessionBrowserHandoffs(
-      async (ctx, requested) => {
-        const userId = extractUserId(ctx.agentId)!;
-        return profiles.resolve(userId, requested);
-      },
-      async (identity, start) => {
-        const { synchronizeSharedBrowserLogin, SharedLoginSourceUnavailable } =
-          await import("./complaint-shared-login.runtime.js");
-        try {
-          await synchronizeSharedBrowserLogin(api, identity, start);
-        } catch (error) {
-          // CDP/storage exceptions may contain credentials. Never return their text.
-          if (start) {
-            if (error instanceof SharedLoginSourceUnavailable) {
-              throw error;
-            }
-            rejectLoginSynchronization();
-          }
-          api.logger?.warn(
-            "[SHARED_BROWSER_LOGIN] Could not save shared login state; synchronization will retry on the next browser operation.",
-          );
-        }
-      },
-    );
+    // The browser plugin owns startup. Each user's profile owns its login state;
+    // opening or handing off a tab must not import another browser's credentials.
+    registry = new SessionBrowserHandoffs(async (ctx, requested) => {
+      const userId = extractUserId(ctx.agentId)!;
+      return profiles.resolve(userId, requested);
+    });
     registries.set(state, registry);
   }
   return registry;
-}
-
-// Deliberately omit the original CDP exception: it can contain cookie values.
-function rejectLoginSynchronization(): never {
-  throw new Error("共享平台登录态同步失败，请检查浏览器控制服务后重试。");
 }
 
 export function registerComplaintBrowserHandoff(api: OpenClawPluginApi) {
@@ -258,13 +220,6 @@ export function registerComplaintBrowserHandoff(api: OpenClawPluginApi) {
     }
     if (event.toolName === "browser") {
       await sessionBrowserHandoffs(api).observe(ctx, event.params, event.result, event.error);
-    } else if (
-      event.toolName === "complaint_browser" &&
-      !event.error &&
-      ["finish", "cancel"].includes(String(event.params.action)) &&
-      ["saved", "cancelled"].includes(String(object(object(event.result)?.details)?.state))
-    ) {
-      await sessionBrowserHandoffs(api).refreshSharedLogin(ctx);
     }
   });
 }

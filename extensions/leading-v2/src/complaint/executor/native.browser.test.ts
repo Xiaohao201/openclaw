@@ -36,6 +36,16 @@ it.runIf(Boolean(process.env.OPENCLAW_TEST_SHARED_LOGIN_CHROME))(
         route.fulfill({ contentType: "text/html; charset=utf-8", body: html }),
       );
       const page = context.pages()[0];
+      const accountCookie = {
+        name: "session",
+        value: "fixture-own-account",
+        domain: ".douyin.com",
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax" as const,
+      };
+      await context.addCookies([accountCookie]);
       const link = "https://www.douyin.com/video/123456789";
       await page.goto(link);
       const marker = randomUUID();
@@ -117,6 +127,9 @@ it.runIf(Boolean(process.env.OPENCLAW_TEST_SHARED_LOGIN_CHROME))(
         ).toBe(marker);
         const next = await acquireComplaintPage({ handoff, allowFakeIp: false });
         await next.release();
+        expect(await context.cookies("https://www.douyin.com")).toEqual([
+          expect.objectContaining(accountCookie),
+        ]);
       } finally {
         await login.stop();
       }
