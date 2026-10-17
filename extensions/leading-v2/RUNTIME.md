@@ -34,6 +34,12 @@ no manual binding or complaint confirmation is required just to open a URL. Omit
 `profile` (or use the default `openclaw` alias) to select the user's own profile.
 Existing administrator bindings continue to select their approved account.
 
+Managed profiles have independent login state. The default OpenClaw browser and
+everyday Chrome need not be running or share an account with them. Login directly
+in the user's browser; neither browser-tool hooks nor login completion copy
+cookies or site storage between profiles. Legacy shared-login pool files are
+ignored and existing per-user profile cookies are preserved.
+
 The per-user profile and CDP port reservations are persisted in
 `STATE_DIR/leading-v2-browser-profiles.json`. They are restored into the active
 browser configuration after a debug restart, preserving profile directories and
@@ -60,7 +66,7 @@ Use `complaint_browser` in a `rabbitmq-<userId>` chat:
    completed by the user in that tab.
 4. After the user confirms completion, `action=finish, confirmed=true` acknowledges
    the session. `action=cancel` ends setup. Both keep the original browser and tab
-   open. Login/logout changes belong to the shared profile immediately; cancellation
+   open. Login/logout changes belong to that user's profile immediately; cancellation
    does not undo them, and no cookies are copied to a separate session.
 5. Use the returned `browserTargetId` as `targetId` in `browser snapshot` to refresh
    the current conversation's page before further browser operations or reporting.

@@ -27,6 +27,10 @@ No native component launches Chrome, creates a replacement profile, adopts a tab
 by URL, or restarts a browser on a page timeout. The handoff marker and CDP target
 ID must both match. The profile lock is shared with the legacy Python executor.
 Disconnecting the native client preserves the original browser and target tab.
+Each user's profile owns its login state. Browser hooks only resolve the profile,
+validate conversation ownership and record page identity; they never start a
+default login-source browser or copy credentials between profiles. Login setup
+and reporting share the selected profile, not a deployment-wide account pool.
 
 ## Native runtime
 

@@ -10,11 +10,6 @@ import {
 import { resolveLocalConfig } from "./complaint-local-contract.js";
 import { sessionBrowserHandoffs } from "./complaint-session-handoff.js";
 
-vi.mock("./complaint-shared-login.runtime.js", () => ({
-  synchronizeSharedBrowserLogin: vi.fn(async () => {}),
-  SharedLoginSourceUnavailable: class extends Error {},
-}));
-
 const openLogin = vi.hoisted(() => vi.fn());
 vi.mock("./browser/login.runtime.js", () => ({ openComplaintLogin: openLogin }));
 let root: string;

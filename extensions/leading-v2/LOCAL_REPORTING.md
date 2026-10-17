@@ -33,6 +33,17 @@ partitioned by SHA-256 of that ID. Tool callers cannot choose another user's ID,
 profile directory or device. Open a platform page with the current conversation's
 `browser` tool, or refresh its existing page using `browser snapshot`.
 
+Each user's managed OpenClaw profile keeps its own platform login. Opening a page
+does not require the machine's default browser or everyday Chrome to be running
+or logged in. No cookies, local storage or IndexedDB are automatically imported
+from those browsers or other users. Log in directly in the user's OpenClaw browser;
+the login helper and reporter reuse that same profile and exact tab. Existing
+explicit administrator bindings remain supported.
+
+The retired `leading-v2-shared-login.json` pool is ignored, including missing or
+corrupt files. This change does not erase cookies already present in a user profile;
+check the displayed platform account and log out there if it is not the intended one.
+
 `complaint_browser(action=login, platform=weibo, confirmed=true)` uses that exact
 page after explicit login authorization. The user completes login and CAPTCHA.
 `screenshot` returns the current login image without retaining it in status.
