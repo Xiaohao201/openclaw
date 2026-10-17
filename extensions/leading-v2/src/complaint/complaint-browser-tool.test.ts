@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,8 @@ vi.mock("./complaint-shared-login.runtime.js", () => ({
   SharedLoginSourceUnavailable: class extends Error {},
 }));
 
+const openLogin = vi.hoisted(() => vi.fn());
+vi.mock("./browser/login.runtime.js", () => ({ openComplaintLogin: openLogin }));
 let root: string;
 let api: OpenClawPluginApi;
 const details = (r: unknown) => (r as { details: Record<string, unknown> }).details;
@@ -34,25 +36,17 @@ async function observePage(action: "open" | "snapshot" = "open") {
 }
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "complaint-browser-"));
-  await writeFile(
-    join(root, "browser_setup.py"),
-    [
-      "import json,sys,os",
-      "data=json.loads(sys.stdin.readline())",
-      "assert os.environ['OPENCLAW_COMPLAINT_ALLOW_FAKE_IP']=='1'",
-      "handoff=data['browserHandoff']",
-      "assert handoff['targetId']=='7'",
-      `assert handoff['marker']=='${marker}'`,
-      "with open(os.path.join(data['sessionDir'],'browser-binding.json'),encoding='utf-8') as file:",
-      " assert handoff['binding']==json.load(file)",
-      "print(json.dumps(dict(state='awaiting_login',message='fixture')),flush=True)",
-      "for line in sys.stdin:",
-      " action=json.loads(line)['action']",
-      " if action in ('finish','cancel'):",
-      "  print(json.dumps(dict(state='saved' if action=='finish' else 'cancelled',message='fixture')),flush=True)",
-      "  break",
-    ].join("\n"),
-  );
+  openLogin.mockReset();
+  openLogin.mockImplementation(async ({ handoff, allowFakeIp }) => {
+    expect(handoff.targetId).toBe("7");
+    expect(handoff.marker).toBe(marker);
+    expect(allowFakeIp).toBe(true);
+    return {
+      targetId: handoff.targetId,
+      release: vi.fn(async () => {}),
+      screenshot: vi.fn(async () => "fixture-image"),
+    };
+  });
   let config: OpenClawConfig = {
     browser: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } },
   };
@@ -76,6 +70,48 @@ afterEach(async () => {
 });
 
 describe("user-scoped complaint browser", () => {
+  it("reserves the login slot before connecting and never retains screenshot payloads", async () => {
+    await observePage();
+    const tool = createComplaintBrowserToolFactory(api)(firstContext)!;
+    let complete!: () => void;
+    const started = new Promise<void>((resolve) => {
+      openLogin.mockImplementationOnce(
+        () =>
+          new Promise((connected) => {
+            complete = () =>
+              connected({
+                targetId: "7",
+                release: async () => {},
+                screenshot: async () => "private-image",
+              });
+            resolve();
+          }),
+      );
+    });
+    const first = tool.execute("first", { action: "login", platform: "douyin", confirmed: true });
+    await started;
+    try {
+      expect(
+        details(
+          await tool.execute("second", { action: "login", platform: "douyin", confirmed: true }),
+        ),
+      ).toMatchObject({ state: "busy" });
+      expect(openLogin).toHaveBeenCalledOnce();
+    } finally {
+      complete();
+      await first;
+    }
+    const shot = await tool.execute("screenshot", { action: "screenshot" });
+    expect(shot.content).toContainEqual({
+      type: "image",
+      mimeType: "image/jpeg",
+      data: "private-image",
+    });
+    expect(JSON.stringify(details(shot))).not.toContain("private-image");
+    expect(JSON.stringify(await tool.execute("status", { action: "status" }))).not.toContain(
+      "private-image",
+    );
+  });
   it("inherits only the narrow explicit host flag", () => {
     expect(
       resolveLocalConfig({}, undefined, {
@@ -189,7 +225,7 @@ describe("user-scoped complaint browser", () => {
       const registry = await observePage();
       const tool = createComplaintBrowserToolFactory(api)(firstContext)!;
       if (action === "failure") {
-        await writeFile(join(root, "browser_setup.py"), "import sys\nsys.exit(1)\n");
+        openLogin.mockRejectedValueOnce(new Error("connection failed"));
       }
       const result = details(
         await tool.execute("login", { action: "login", platform: "weibo", confirmed: true }),
@@ -207,7 +243,7 @@ describe("user-scoped complaint browser", () => {
     }
   });
 
-  it("releases the browser when the Python executable cannot start", async () => {
+  it("does not require Python to start a login session", async () => {
     const registry = await observePage();
     api.pluginConfig = {
       complaintExecution: { runtimeDir: root, python: join(root, "missing-python") },
@@ -215,28 +251,24 @@ describe("user-scoped complaint browser", () => {
     const tool = createComplaintBrowserToolFactory(api)(firstContext)!;
     expect(
       details(await tool.execute("login", { action: "login", platform: "weibo", confirmed: true })),
-    ).toMatchObject({ state: "failed", browserTargetId: "7" });
+    ).toMatchObject({ state: "awaiting_login", browserTargetId: "7" });
+    await tool.execute("cancel", { action: "cancel" });
     await expect(registry.before(firstContext, { action: "status" })).resolves.toMatchObject({
       target: "host",
     });
   });
 
-  it("preserves the worker's specific dependency error in results and status", async () => {
+  it("redacts native connection errors in results and status", async () => {
     await observePage();
-    await writeFile(
-      join(root, "browser_setup.py"),
-      [
-        "import json,sys",
-        "json.loads(sys.stdin.readline())",
-        "print(json.dumps(dict(state='failed',message='Missing playwright in fixture Python',errorCode='RUNTIME_DEPENDENCY_MISSING')),flush=True)",
-      ].join("\n"),
-    );
+    openLogin.mockRejectedValueOnce(new Error("private cookie and URL"));
     const tool = createComplaintBrowserToolFactory(api)(firstContext)!;
-    expect(
-      details(await tool.execute("login", { action: "login", platform: "weibo", confirmed: true })),
-    ).toMatchObject({ state: "failed", errorCode: "RUNTIME_DEPENDENCY_MISSING" });
+    const result = details(
+      await tool.execute("login", { action: "login", platform: "weibo", confirmed: true }),
+    );
+    expect(result).toMatchObject({ state: "failed", errorCode: "BROWSER_LOGIN_FAILED" });
+    expect(JSON.stringify(result)).not.toContain("private cookie");
     expect(details(await tool.execute("status", { action: "status" })).session).toMatchObject({
-      errorCode: "RUNTIME_DEPENDENCY_MISSING",
+      errorCode: "BROWSER_LOGIN_FAILED",
     });
   });
 });

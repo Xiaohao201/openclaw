@@ -1,7 +1,8 @@
 import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
 import type { LocalComplaintItem, LocalConfig, LocalOutcome } from "./complaint-local-contract.js";
-import { runLocalComplaint, type RunLocalComplaint } from "./complaint-local-process.js";
 import type { BrowserHandoff } from "./complaint-session-handoff.js";
+import { runComplaint } from "./executor/router.js";
+import type { RunComplaint as RunLocalComplaint } from "./executor/types.js";
 
 // Discovery and service registration must share lifecycle ownership in one host process.
 const runtime = globalThis as typeof globalThis & {
@@ -71,7 +72,7 @@ export async function submitLocalBatch(params: {
     }
   };
   const controller = new AbortController();
-  const run = params.run ?? runLocalComplaint;
+  const run = params.run ?? runComplaint;
   const execute = async () => {
     for (const [index, entry] of batch.entries.entries()) {
       if (controller.signal.aborted) {
@@ -96,6 +97,10 @@ export async function submitLocalBatch(params: {
           signal: controller.signal,
           browserHandoff: params.browserLease?.handoff,
           diagnosticContext: { batchId: batch.batchId, taskId: entry.taskId },
+          progress: async (message) => {
+            entry.execution = { state: "running", message, offline: null };
+            await checkpoint();
+          },
         });
       } catch {
         outcome = {
@@ -144,7 +149,7 @@ export async function submitLocalBatch(params: {
     taskRefs: batch.entries.map(({ link, taskId }) => ({ link, taskId })),
     queuedLinks: items.map((item) => item.link),
     manualBrowserActionRequired: items.some((item) => Boolean(item.report12377)),
-    message: "举报批次已保存，将由本地 Python 执行；尚未确认提交到平台。",
+    message: "举报批次已保存，将由本地执行器执行；尚未确认提交到平台。",
     agentInstruction:
       "使用 complaint_task_status({batchId}) 查询逐链接结果。不要把本地接收视为平台提交成功，不得自动重提。",
   };

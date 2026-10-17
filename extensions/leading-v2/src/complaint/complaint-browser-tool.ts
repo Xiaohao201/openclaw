@@ -1,97 +1,35 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { z } from "zod";
 import { jsonResult, type OpenClawPluginApi } from "../../api.js";
 import { extractUserId } from "../client/agent-id.js";
+import { LoginHandoffRequired, LoginSession, type LoginResult } from "./browser/login-session.js";
 import { ComplaintBatchStore } from "./complaint-batch-store.js";
+import { safeErrorFields } from "./complaint-diagnostics.js";
 import { localPlatforms, resolveLocalConfig } from "./complaint-local-contract.js";
-import { complaintProcessEnv } from "./complaint-local-process.js";
 import { sessionBrowserHandoffs } from "./complaint-session-handoff.js";
 
-const resultSchema = z
-  .object({
-    state: z.enum(["awaiting_login", "saved", "cancelled", "expired", "busy", "failed"]),
-    message: z.string().max(2000),
-    screenshot: z.string().max(4_000_000).optional(),
-    errorCode: z.string().max(100).optional(),
-  })
-  .strict();
-type BrowserResult = z.infer<typeof resultSchema>;
-type Session = {
-  child: ChildProcessWithoutNullStreams;
-  platform: string;
-  latest: BrowserResult;
-  pending?: (result: BrowserResult) => void;
-  closed: boolean;
-  received: boolean;
-  sessionKey: string;
-  sessionId: string;
-  browserTargetId: string;
+const runtime = globalThis as typeof globalThis & {
+  __leadingNativeBrowserSetup?: Map<string, LoginSession>;
 };
-const runtime = globalThis as typeof globalThis & { __leadingBrowserSetup?: Map<string, Session> };
-const sessions = (runtime.__leadingBrowserSetup ??= new Map<string, Session>());
-const failure: BrowserResult = {
-  state: "failed",
-  message: "登录进程中断或返回无效结果，未执行举报。请重新检查会话。",
-};
+const sessions = (runtime.__leadingNativeBrowserSetup ??= new Map<string, LoginSession>());
 
-function sessionResult(session: Session, result: BrowserResult) {
+function sessionResult(session: LoginSession, result: LoginResult) {
   return {
     ...result,
-    browserTargetId: session.browserTargetId,
-    instruction: session.closed
-      ? "原 OpenClaw 浏览器和标签页保持打开。继续操作时先调用 browser snapshot，并传入 browserTargetId 作为 targetId，刷新当前对话页面；旧举报批次不会自动重提。"
-      : "正在复用当前对话的 OpenClaw 标签页；登录结束前不要并发操作或关闭该浏览器。",
+    ...(result.state === "failed" ? { success: false } : {}),
+    browserTargetId: session.targetId,
+    instruction: !session.targetId
+      ? "请先在当前对话用 browser 打开并查看平台标签页。"
+      : session.closed
+        ? "原 OpenClaw 浏览器和标签页保持打开。继续操作时先调用 browser snapshot，并传入 browserTargetId 作为 targetId，刷新当前对话页面；旧举报批次不会自动重提。"
+        : "正在复用当前对话的 OpenClaw 标签页；登录结束前不要并发操作或关闭该浏览器。",
   };
-}
-
-function waitForResponse(session: Session, send: () => void): Promise<BrowserResult> {
-  if (session.pending) {
-    return Promise.resolve({ state: "busy", message: "此用户的登录操作正在处理，请稍后查询。" });
-  }
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      resolve({ state: "busy", message: "浏览器仍在响应，请稍后查询状态；不要重复开启登录。" });
-    }, 45000);
-    session.pending = (result) => {
-      clearTimeout(timer);
-      session.pending = undefined;
-      resolve(result);
-    };
-    send();
-  });
-}
-
-function deliver(session: Session, result: BrowserResult) {
-  // Do not retain screenshots of login pages in process-global status history.
-  session.latest = {
-    state: result.state,
-    message: result.message,
-    ...(result.errorCode ? { errorCode: result.errorCode } : {}),
-  };
-  session.received = true;
-  // Terminal results are delivered after the worker releases the user's execution lock.
-  if (result.state === "awaiting_login") {
-    session.pending?.(result);
-  }
 }
 
 export async function stopComplaintBrowserSessions() {
-  await Promise.all(
-    [...sessions.values()]
-      .filter((s) => !s.closed)
-      .map(
-        (session) =>
-          new Promise<void>((resolve) => {
-            session.child.once("close", () => resolve());
-            session.child.stdin.end(JSON.stringify({ action: "cancel" }) + "\n");
-            const timer = setTimeout(() => session.child.kill(), 45000);
-            session.child.once("close", () => clearTimeout(timer));
-          }),
-      ),
-  );
+  await Promise.all([...sessions.values()].map((session) => session.stop()));
   sessions.clear();
 }
 
@@ -136,9 +74,11 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
         const directory = new ComplaintBatchStore(() =>
           api.runtime.state.resolveStateDir(),
         ).sessionDirectory(userId);
-        let session = sessions.get(directory);
+        const session = sessions.get(directory);
         const ownsSession =
-          session && session.sessionId === ctx.sessionId && session.sessionKey === ctx.sessionKey;
+          session &&
+          session.params.sessionId === ctx.sessionId &&
+          session.params.sessionKey === ctx.sessionKey;
         if (action === "status") {
           let binding: "unprepared" | "bound" | "invalid" = "unprepared";
           let bindingAllowsFakeIp = false;
@@ -166,7 +106,7 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
             session:
               session && ownsSession
                 ? {
-                    platform: session.platform,
+                    platform: session.params.platform,
                     active: !session.closed,
                     ...sessionResult(session, session.latest),
                   }
@@ -195,91 +135,61 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
               error: "当前用户已有登录流程，请在原对话中查询、完成或取消。",
             });
           }
-          let lease;
-          try {
-            lease = await sessionBrowserHandoffs(api).acquire(ctx);
-          } catch (error) {
+          if (!ctx.sessionKey || !ctx.sessionId) {
             return jsonResult({
               success: false,
               errorCode: "BROWSER_HANDOFF_REQUIRED",
-              error: error instanceof Error ? error.message : "当前 OpenClaw 浏览器无法交接。",
-              instruction:
-                "请先用当前对话的 browser open 打开平台页面，再调用 login；不另开浏览器或切换举报渠道。",
+              error: "当前对话缺少可信会话身份，请先用 browser 打开页面。",
             });
           }
-          let child: ChildProcessWithoutNullStreams;
-          try {
-            child = spawn(config.python, ["-u", join(config.runtimeDir, "browser_setup.py")], {
-              cwd: config.runtimeDir,
-              windowsHide: true,
-              shell: false,
-              stdio: ["pipe", "pipe", "pipe"],
-              env: complaintProcessEnv(config),
-            });
-          } catch {
-            lease.release();
-            return jsonResult(failure);
-          }
-          session = {
-            child,
+          const current = new LoginSession({
             platform,
-            closed: false,
-            received: false,
-            // acquire validates both fields against the trusted conversation identity.
-            sessionKey: ctx.sessionKey!,
-            sessionId: ctx.sessionId!,
-            browserTargetId: lease.handoff.targetId,
-            latest: { state: "busy", message: "正在连接当前对话的 OpenClaw 浏览器标签页。" },
-          };
-          sessions.set(directory, session);
-          const current = session;
-          let buffer = "";
-          child.stderr.resume();
-          child.stdout.setEncoding("utf8");
-          child.stdout.on("data", (chunk: string) => {
-            buffer += chunk;
-            if (buffer.length > 4_100_000) {
-              deliver(current, failure);
-              child.stdin.end();
-              return;
-            }
-            let newline: number;
-            while ((newline = buffer.indexOf("\n")) >= 0) {
-              const line = buffer.slice(0, newline);
-              buffer = buffer.slice(newline + 1);
-              try {
-                deliver(current, resultSchema.parse(JSON.parse(line)));
-              } catch {
-                deliver(current, failure);
-                child.stdin.end();
-              }
-            }
-          });
-          child.stdin.on("error", () => deliver(current, failure));
-          child.on("error", () => deliver(current, failure));
-          child.on("close", () => {
-            current.closed = true;
-            lease.release();
-            if (!current.received || current.latest.state === "awaiting_login") {
-              deliver(current, failure);
-            }
-            current.pending?.(current.latest);
-          });
-          return jsonResult(
-            sessionResult(
-              current,
-              await waitForResponse(current, () =>
-                child.stdin.write(
-                  JSON.stringify({
-                    platform,
-                    sessionDir: directory,
-                    browserHandoff: lease.handoff,
-                  }) + "\n",
-                ),
+            sessionKey: ctx.sessionKey,
+            sessionId: ctx.sessionId,
+            onError: (error, stage) =>
+              api.logger?.warn(
+                `[COMPLAINT_LOGIN] ${JSON.stringify({ stage, ...safeErrorFields(error) })}`,
               ),
-            ),
-          );
+            connect: async () => {
+              let lease;
+              try {
+                lease = await sessionBrowserHandoffs(api).acquire(ctx);
+              } catch {
+                throw new LoginHandoffRequired();
+              }
+              current.targetId = lease.handoff.targetId;
+              try {
+                const { openComplaintLogin } = await import("./browser/login.runtime.js");
+                const connection = await openComplaintLogin({
+                  platform,
+                  handoff: lease.handoff,
+                  allowFakeIp: config.allowFakeIp,
+                });
+                return {
+                  ...connection,
+                  release: async () => {
+                    try {
+                      await connection.release();
+                    } finally {
+                      lease.release();
+                    }
+                  },
+                };
+              } catch (error) {
+                lease.release();
+                throw error;
+              }
+            },
+          });
+          // Reserve before any asynchronous connection work to prevent two login starts.
+          sessions.set(directory, current);
+          const result = await current.start();
+          if (result.errorCode === "BROWSER_HANDOFF_REQUIRED") {
+            sessions.delete(directory);
+          }
+          return jsonResult(sessionResult(current, result));
         }
+
         if (!session || session.closed || !ownsSession) {
           return jsonResult({
             success: false,
@@ -287,9 +197,7 @@ export function createComplaintBrowserToolFactory(api: OpenClawPluginApi) {
           });
         }
         const current = session;
-        const result = await waitForResponse(current, () =>
-          current.child.stdin.write(JSON.stringify({ action }) + "\n"),
-        );
+        const result = await current.command(action);
         const { screenshot, ...details } = sessionResult(current, result);
         const response = jsonResult(details);
         if (screenshot) {

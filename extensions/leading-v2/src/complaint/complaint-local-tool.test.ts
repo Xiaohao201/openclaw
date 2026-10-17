@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,8 @@ let api: OpenClawPluginApi;
 const parse = (value: unknown) => (value as { details: Record<string, unknown> }).details;
 const resolver = new ApiKeyResolver({}, undefined);
 const { acquireBrowser } = vi.hoisted(() => ({ acquireBrowser: vi.fn() }));
+const nativeRun = vi.hoisted(() => vi.fn());
+vi.mock("./executor/native.runtime.js", () => ({ runNativeComplaint: nativeRun }));
 vi.mock("../client/db-client.js", () => ({ execute: vi.fn(), query: vi.fn() }));
 // Transport fixture: session ownership and stale-tab behavior are exercised in
 // complaint-session-handoff.test.ts; this suite checks batch/process plumbing.
@@ -36,17 +38,11 @@ beforeEach(async () => {
     release() {},
   });
   root = await mkdtemp(join(tmpdir(), "complaint-tool-"));
-  // Real child-process protocol with a deterministic test executor, no network/browser.
-  await writeFile(
-    join(root, "runner.py"),
-    [
-      "import json, sys",
-      "data = json.load(sys.stdin)",
-      "assert data['platform'] == 'weibo'",
-      "assert data['reason'].endswith('测试。')",
-      "print(json.dumps(dict(state='done', message='confirmed fixture', offline=None)))",
-    ].join("\n"),
-  );
+  nativeRun.mockReset().mockImplementation(async ({ item }) => {
+    expect(item.platform).toBe("weibo");
+    expect(item.reason).toMatch(/测试。$/);
+    return { state: "done", message: "confirmed fixture", offline: null };
+  });
   api = {
     pluginConfig: {
       complaintExecution: { runtimeDir: root },
@@ -72,8 +68,7 @@ afterEach(async () => {
 });
 
 describe("local tool integration", () => {
-  it("records a task and failure before returning a missing runtime", async () => {
-    await rm(join(root, "runner.py"));
+  it("records a task before native execution without Python runtime assets", async () => {
     const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
     const result = parse(
       await tool.execute("submit", {
@@ -85,13 +80,17 @@ describe("local tool integration", () => {
       }),
     );
     expect(result).toMatchObject({
-      success: false,
-      accepted: false,
+      success: true,
+      accepted: true,
       submitted: false,
-      errorCode: "RUNTIME_MISSING",
     });
     expect(result.batchId).toEqual(expect.any(String));
     expect(result.taskId).toBe(101);
+    await waitForLocalBatch(result.batchId as string);
+    expect(nativeRun).toHaveBeenCalledOnce();
+    expect(vi.mocked(executeDb).mock.invocationCallOrder[0]).toBeLessThan(
+      nativeRun.mock.invocationCallOrder[0],
+    );
     expect(executeDb).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining("INSERT INTO legal_complaint_task"),
@@ -100,9 +99,9 @@ describe("local tool integration", () => {
     const status = createComplaintTaskStatusToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
     expect(parse(await status.execute("list", {})).total).toBe(1);
     expect(parse(await status.execute("status", { batchId: result.batchId })).links).toEqual([
-      expect.objectContaining({ taskId: 101, state: "not_submitted" }),
+      expect.objectContaining({ taskId: 101, state: "done" }),
     ]);
-    expect(acquireBrowser).not.toHaveBeenCalled();
+    expect(acquireBrowser).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
   });
 

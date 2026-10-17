@@ -18,9 +18,9 @@ are missing.
 ## Network policy
 
 The host's explicit `browser.ssrfPolicy.allowRfc2544BenchmarkRange` setting is
-passed to all complaint Python processes through an administrator-owned environment
-variable. Isolated sessions, user-bound Chrome, login setup, and the anonymous 12377
-browser all honor it. Only `198.18.0.0/15` is additionally allowed. Loopback, private
+passed to the native TypeScript browser lease through host configuration.
+User-bound Chrome, login setup, report popups and the anonymous 12377
+flow all honor it. Only `198.18.0.0/15` is additionally allowed. Loopback, private
 LANs, link-local addresses, and credentials in URLs remain blocked. The broad
 `dangerouslyAllowPrivateNetwork` setting is deliberately not inherited. Agent tool
 arguments cannot enable this exception. An existing operator-approved binding's
@@ -75,12 +75,11 @@ Other conversations also cannot view or finish the borrowed login tab.
 
 Unbound users need no manual directory setup: ordinary `browser` calls prepare
 their OpenClaw profile, which login setup and reporting both reuse.
-To reuse an existing operator Chrome, the administrator must explicitly bind that
-user with `runner.py --bind-browser --existing-chrome --user-id USER_ID --state-dir
-STATE_DIR`. This is not exposed as an arbitrary machine-profile selector to chat
-users. Enable remote debugging in Chrome and approve its connection prompt. Do not
-bind unrelated users to the same account. See `python/SHARED_BROWSER.md` for the
-operator binding workflow. Network compatibility does not copy account credentials.
+Existing administrator-created Chrome bindings remain supported. They are not
+exposed as an arbitrary machine-profile selector to chat users. Enable remote
+debugging in Chrome and approve its connection prompt. Do not bind unrelated users
+to the same account. New conversations use OpenClaw's managed profile workflow.
+Network compatibility does not copy account credentials.
 
 12377 remains a separate anonymous flow; it needs no `complaint_browser` login,
 and the user still completes its CAPTCHA and final submission manually.
@@ -94,25 +93,15 @@ WeChat hosts must not fall through to the broader Tencent domain route. Historic
 batch status remains queryable. The separately authorized 12377 manual channel is
 not a direct platform reporting capability.
 
-The plugin requires its `python/` runtime alongside the built plugin. The optional
-`openclaw.build.runtimeAssets` array in `package.json` lists package-relative files
-copied by the bundled metadata build step. This additive build contract accepts
-only files inside the owning package and fails the build for missing files. Plugins
-without this field keep their existing behavior. Add new Python runtime modules to
-this list; do not include tests, bytecode caches, credentials, or browser profiles.
+All enabled platforms execute in TypeScript. The `openclaw.build.runtimeAssets`
+manifest stages only the Android server and its notices; no Python assets or
+virtual environment are needed. Legacy interpreter/runtime/headless settings are
+accepted and ignored for compatibility. See `LOCAL_REPORTING.md` for setup.
 
-Install dependencies from `python/requirements.txt` using the configured Python
-interpreter. Isolated login/report browsers and 12377 use bundled Chromium when
-available, falling back to installed Chrome with a new temporary profile if the
-browser package is missing or incomplete. This never attaches to the operator's
-default Chrome profile. At least one of those browser installations is required.
-The default runtime directory is `<plugin root>/python`. An explicit
-`complaintExecution.runtimeDir` overrides that directory and must be absolute.
-
-Before accepting a batch, the tool checks for `runner.py`. A missing runtime returns
-`accepted=false`, `submitted=false`, and `RUNTIME_MISSING` without saving a batch.
-This file check does not establish Python, browser, dependency, or login readiness;
-execution results must still be queried with `complaint_task_status`.
+Every browser path, including 12377, requires a current conversation handoff.
+There is no replacement browser or alternate engine after failure. Batches and
+audit rows are persisted before acquisition; failed acquisition retains the IDs.
+Execution results must still be queried with `complaint_task_status`.
 
 User authorization does not establish the factual basis of a report. Preserve
 per-link findings when a user requests a larger batch; do not replace uncertainty

@@ -1,0 +1,97 @@
+/** Independent HTML contracts derived from the legacy offline platform cases. */
+export const additionalWebFixtures = [
+  {
+    platform: "xiaohongshu",
+    link: "https://www.xiaohongshu.com/explore/0123456789abcdef01234567",
+    html: '<i class="reds-icon more">更多</i><button onclick="openForm()">举报</button>',
+    form: '<div class="list-select-item-option" onclick="select()">不实信息</div><textarea class="advice-input"></textarea><button onclick="submit()">提交</button>',
+    receipt: "提交成功",
+  },
+  {
+    platform: "bilibili",
+    link: "https://www.bilibili.com/opus/123",
+    html: '<i class="bili-dyn-more">更多</i><button onclick="openForm()">举报</button>',
+    form: '<span onclick="select()">不实信息</span><textarea class="bili-dyn-report__remark__field"></textarea><button onclick="submit()">确定</button>',
+    receipt: "提交成功",
+  },
+  {
+    platform: "zhihu",
+    link: "https://www.zhihu.com/question/123/answer/456",
+    html: '<div class="Popover ContentItem-action"><button>更多</button></div><button onclick="openForm()">举报</button>',
+    form: '<div onclick="select()">不实信息</div><textarea name="customReason"></textarea><button onclick="submit()">提交举报</button>',
+    receipt: "提交成功",
+  },
+  {
+    platform: "tencent",
+    link: "https://news.qq.com/rain/a/ABC123",
+    html: '<div id="qqcom-login" class="qqcon-islogin">fixture account</div><a class="report" onclick="openForm()">举报</a>',
+    form: '<section><div>请选择举报原因</div><div onclick="select()">不实信息</div></section><button onclick="submit()">提交</button>',
+    receipt: "举报成功",
+  },
+  {
+    platform: "yidianzixun",
+    link: "https://www.yidianzixun.com/article/ABC123",
+    html: '<script>window.yidian={docinfo:{is_login:true,doc:{docid:"ABC123"}}}</script><button class="article-report" onclick="openForm()">举报</button>',
+    form: '<ul class="report-article-form"><li onclick="select();this.className=\'actived-li\'">不实信息</li><button class="btn-submit" onclick="submit()">提交</button></ul>',
+    receipt: "举报成功！",
+  },
+  {
+    platform: "futu",
+    link: "https://q.futunn.com/feed/123",
+    html: '<script>window.__INITIAL_STATE__={detail:{feedCommon:{feedId:"123",accessPermission:{report:true}}}}</script><div class="sns-operate-more">更多</div><button data-rep-click-Report onclick="openForm()">举报</button>',
+    form: '<div class="report-dialog"><div class="option"><span class="sns-operate-items__item-title" onclick="select();this.parentElement.className=\'sns-operate-items__item-selected\'">不实信息</span></div></div><div class="sns-operate-input"><textarea></textarea></div><div class="moo-dialog__box--visible"><div class="moo-dialog__footer"><button class="moo-button" onclick="submit()">提交</button></div></div>',
+    receipt: "举报已提交",
+  },
+  {
+    platform: "netease",
+    link: "https://www.163.com/dy/article/ABC123.html",
+    report:
+      "https://www.163.com/special/0077jt/tipoff.html?url=https://www.163.com/dy/article/ABC123.html",
+    html: '<div id="js_N_navLoginAfter">fixture account</div><a class="post_jubao" href="REPORT">举报</a>',
+    form: '<div class="tag_code_list"><label onclick="select();this.firstChild.className=\'m_radio checked\'"><span class="m_radio"></span>不实信息</label></div><textarea maxlength="100"></textarea><button onclick="submit()">提交</button>',
+    receipt: "提交成功",
+  },
+  {
+    platform: "eastmoney",
+    link: "https://finance.eastmoney.com/a/123.html",
+    report: "https://help.eastmoney.com/report_center.html?id=123",
+    html: '<a class="jubao" href="REPORT">举报</a>',
+    form: '<div class="reportTypeList"><label class="typeText" onclick="select()"><input type="radio" name="report_art">不实信息</label></div><div class="reportDescription"><textarea class="desTextarea"></textarea></div><button id="confirmBtn" onclick="submit()">提交</button>',
+    receipt: "您的举报已提交，我们将尽快处理",
+  },
+  {
+    platform: "tiantianfund",
+    link: "https://fund.eastmoney.com/ba/news,of000001,123.html",
+    report:
+      "https://help.eastmoney.com/report_center.html?reportType=3&systype=1&replyid=0&gubaCode=000001&id=123",
+    html: '<a class="graylink" href="REPORT">举报</a>',
+    form: '<div class="reportTypeList"><label class="typeText" onclick="select()"><input type="radio" name="report_art">不实信息</label></div><div class="reportDescription"><textarea class="desTextarea"></textarea></div><button id="confirmBtn" onclick="submit()">提交</button>',
+    receipt: "您的举报已提交，我们将尽快处理",
+  },
+  {
+    platform: "sohu",
+    link: "https://www.sohu.com/a/123_456",
+    report:
+      "https://www.sohu.com/feedback?articleUrl=https://www.sohu.com/a/123_456&pageType=report",
+    html: '<a class="report-c" href="REPORT">举报</a>',
+    form: '<div class="report-content"><div class="question-item"><span class="reason-label" onclick="select();this.className+=\' radio-label active-radio\'">不实信息</span></div><textarea class="statement-input"></textarea></div><button class="button-submit can-submit" onclick="submit()">提交</button>',
+    receipt: "感谢反馈！已提交审核处理",
+  },
+  {
+    platform: "sina",
+    link: "https://news.sina.com.cn/c/doc-imtest123.shtml",
+    report: "https://news.sina.com.cn/blank/report_news.shtml?docId=mtest123",
+    html: "<article>fixture article</article>",
+    form: '<script>window.SINA_OUTLOGIN_LAYER={isLogin:()=>true}</script><form bbs-node-type="reportForm" onsubmit="return false"><div class="report-types-list"><label onclick="select()"><input type="radio" name="reportType">不实信息</label></div><button type="button" id="submit" bbs-node-type="submit" onclick="submit()">提交</button></form>',
+    receipt: "提交成功，我们会及时处理您的举报，谢谢！",
+  },
+  {
+    platform: "weibo",
+    link: "https://weibo.com/123/Abc123",
+    report: "https://service.account.weibo.com/complaint?rid=123",
+    popup: true,
+    html: '<i title="更多">更多</i><div role="button" onclick="window.open(\'REPORT\')"><div>投诉</div></div>',
+    form: '<h4>侵权投诉专区</h4><a onclick="select()">不实信息</a><textarea placeholder="请详细填写"></textarea><input name="chk" type="checkbox"><a onclick="submit()">提交</a>',
+    receipt: "提交成功",
+  },
+];

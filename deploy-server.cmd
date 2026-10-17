@@ -1,8 +1,6 @@
 @echo off
 setlocal
 chcp 65001 >nul
-set "PYTHONUTF8=1"
-set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
 
 echo [openclaw-deploy] Pulling origin/v1.
@@ -21,21 +19,17 @@ echo [openclaw-deploy] Building the Control UI.
 call pnpm ui:build
 if errorlevel 1 goto :failed
 
-echo [openclaw-deploy] Preparing the complaint Python runtime.
-call python extensions\leading-v2\python\setup_runtime.py
+echo [openclaw-deploy] Verifying native complaint assets.
+call node extensions\leading-v2\check-runtime.mjs extensions\leading-v2
 if errorlevel 1 goto :failed
 
 if exist "dist\extensions\leading-v2\openclaw.plugin.json" (
-  call node extensions\leading-v2\stage-python.mjs dist\extensions\leading-v2
-  if errorlevel 1 goto :failed
-  call python extensions\leading-v2\python\setup_runtime.py --runtime-dir dist\extensions\leading-v2\python
+  call node extensions\leading-v2\check-runtime.mjs dist\extensions\leading-v2
   if errorlevel 1 goto :failed
 )
 
 if exist "dist-runtime\extensions\leading-v2\openclaw.plugin.json" (
-  call node extensions\leading-v2\stage-python.mjs dist-runtime\extensions\leading-v2
-  if errorlevel 1 goto :failed
-  call python extensions\leading-v2\python\setup_runtime.py --runtime-dir dist-runtime\extensions\leading-v2\python
+  call node extensions\leading-v2\check-runtime.mjs dist-runtime\extensions\leading-v2
   if errorlevel 1 goto :failed
 )
 

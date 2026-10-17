@@ -9,13 +9,14 @@ describe("leading-v2 report skill exposure", () => {
       config: {},
       pluginConfig: { backend: { baseUrl: "https://example.test", siteId: "legal" } },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      registerCli: vi.fn(),
       registerTool(_tool: unknown, options?: { name?: string }) {
         if (options?.name) {
           registeredToolNames.push(options.name);
         }
       },
-        registerService: vi.fn(),
-        on: vi.fn(),
+      registerService: vi.fn(),
+      on: vi.fn(),
     } as unknown as OpenClawPluginApi;
 
     plugin.register(api);
