@@ -30,6 +30,22 @@ const request = (links = ["https://weibo.com/1/2"]) => ({
 });
 
 describe("direct local reporting", () => {
+  it("requires an explicit Douyin category instead of using the narrative as a category", () => {
+    const link = "https://www.douyin.com/video/123456789";
+    expect(() => parseLocalRequest(request([link]))).toThrow(/categories/);
+    expect(
+      parseLocalRequest({
+        ...request([link]),
+        categories: [{ link, category: "不实信息" }],
+      })[0],
+    ).toMatchObject({ category: "不实信息", reason });
+    expect(
+      parseLocalRequest({
+        ...request([link]),
+        report12377: { category: "rumor", websiteName: "fixture" },
+      })[0].platform,
+    ).toBe("report12377");
+  });
   it("persists the observed outcome before recording a screenshot and exposes the saved detail", async () => {
     const persistResult = vi.fn(async (batch: ComplaintBatch, index: number) => {
       expect((await store.get("1", batch.batchId))?.entries[index].execution?.state).toBe("done");
@@ -121,7 +137,10 @@ describe("direct local reporting", () => {
     const result = await submitLocalBatch({
       store,
       userId: "offline-platform-test",
-      items: parseLocalRequest(request([link])),
+      items: parseLocalRequest({
+        ...request([link]),
+        categories: [{ link, category: "不实信息" }],
+      }),
       config: resolveLocalConfig({}),
       run,
     });

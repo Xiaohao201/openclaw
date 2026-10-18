@@ -147,6 +147,9 @@ export function parseLocalRequest(input: unknown): LocalComplaintItem[] {
       throw new Error("12377匿名举报的网址及每条理由均不得超过500字符。");
     }
     const category = categories.get(link);
+    if (platform === "douyin" && !category) {
+      throw new Error("抖音直接举报须为每条链接提供 categories 分类文字，不能用研判理由代替分类。");
+    }
     return {
       link,
       platform,

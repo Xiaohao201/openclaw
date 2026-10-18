@@ -73,6 +73,7 @@ describe("complaint result recording", () => {
   });
   it("upserts one owned detail and records its uploaded receipt and actual submission state", async () => {
     await save();
+    expect(vi.mocked(execute).mock.calls[0][1]).toContain("LAST_INSERT_ID(legal_complaint.id)");
     expect(execute).toHaveBeenCalledWith(
       db,
       expect.stringContaining("INSERT INTO legal_complaint "),

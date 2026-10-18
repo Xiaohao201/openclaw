@@ -31,6 +31,30 @@ function fixture() {
 }
 
 describe("native complaint state machine", () => {
+  it("logs the failing prepare step without leaking the exception message", async () => {
+    const f = fixture();
+    const log = vi.fn();
+    f.driver.prepare.mockImplementation(async (onStep?: (step: "wait_report_form") => void) => {
+      onStep?.("wait_report_form");
+      throw Object.assign(new Error("private URL and credentials"), { name: "TimeoutError" });
+    });
+    await executeNativeComplaint({
+      acquire: f.acquire,
+      signal: f.controller.signal,
+      timeoutMs: 10000,
+      log,
+    });
+    expect(log).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        stage: "prepare",
+        step: "wait_report_form",
+        attempted: false,
+        errorType: "TimeoutError",
+      }),
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private");
+    expect(f.driver.submit).not.toHaveBeenCalled();
+  });
   it("does not acquire an already-expired execution", async () => {
     const f = fixture();
     expect(
@@ -42,6 +66,22 @@ describe("native complaint state machine", () => {
       }),
     ).toMatchObject({ state: "failed", errorCode: "EXECUTION_TIMEOUT" });
     expect(f.acquire).not.toHaveBeenCalled();
+  });
+  it("does not carry a prepare step into a submission failure", async () => {
+    const f = fixture();
+    const log = vi.fn();
+    f.driver.prepare.mockImplementation(async (onStep?: (step: "check_submit") => void) => {
+      onStep?.("check_submit");
+    });
+    f.driver.submit.mockRejectedValue(new Error("fixture"));
+    await executeNativeComplaint({
+      acquire: f.acquire,
+      signal: f.controller.signal,
+      timeoutMs: 10000,
+      log,
+    });
+    expect(log.mock.lastCall?.[0]).toMatchObject({ stage: "submit", attempted: true });
+    expect(log.mock.lastCall?.[0]).not.toHaveProperty("step");
   });
   it("stops before submission when the category requires operator review", async () => {
     const f = fixture();

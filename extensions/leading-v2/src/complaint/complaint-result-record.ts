@@ -86,7 +86,7 @@ export async function saveComplaintResult(params: {
       "INSERT INTO legal_complaint (slug, jobId, taskId, uid, groupId, platform, link, role, reason, date, updateDate, status) " +
         "SELECT ?, 0, ?, ?, 0, ?, ?, ?, ?, NOW(), NOW(), 'Stop' " +
         "FROM legal_complaint_task WHERE id = ? AND uid = ? AND slug = ? " +
-        "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
+        "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(legal_complaint.id)",
       [
         slug,
         taskId,
