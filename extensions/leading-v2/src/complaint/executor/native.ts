@@ -9,10 +9,18 @@ export type ExecutionStage =
   | "submit"
   | "verify"
   | "evidence";
+export type ComplaintPrepareStep =
+  | "wait_report_entry"
+  | "hover_more"
+  | "open_report"
+  | "wait_report_form"
+  | "select_category"
+  | "fill_description"
+  | "check_submit";
 export interface ComplaintDriver {
   navigate(): Promise<void>;
   checkLogin(): Promise<boolean>;
-  prepare(): Promise<void>;
+  prepare(onStep?: (step: ComplaintPrepareStep) => void): Promise<void>;
   submit(): Promise<void>;
   verify(): Promise<boolean>;
   screenshot(): Promise<NonNullable<LocalOutcome["screenshot"]>>;
@@ -43,9 +51,13 @@ export async function executeNativeComplaint(params: {
   let stage: ExecutionStage = "attach";
   let attempted = false;
   let confirmed = false;
+  let prepareStep: ComplaintPrepareStep | undefined;
   const deadline = Date.now() + params.timeoutMs;
   const checkpoint = (next: ExecutionStage) => {
     stage = next;
+    if (next !== "prepare") {
+      prepareStep = undefined;
+    }
     if (params.signal.aborted || Date.now() >= deadline) {
       throw new Error("Execution interrupted");
     }
@@ -66,7 +78,10 @@ export async function executeNativeComplaint(params: {
       };
     }
     checkpoint("prepare");
-    await driver.prepare();
+    await driver.prepare((step) => {
+      prepareStep = step;
+      params.log({ stage: "prepare", step });
+    });
     checkpoint("submit");
     attempted = true;
     await driver.submit();
@@ -89,7 +104,13 @@ export async function executeNativeComplaint(params: {
     }
     return result;
   } catch (error) {
-    params.log({ stage, attempted, confirmed, ...safeErrorFields(error) });
+    params.log({
+      stage,
+      ...(prepareStep ? { step: prepareStep } : {}),
+      attempted,
+      confirmed,
+      ...safeErrorFields(error),
+    });
     if (!attempted && error instanceof ComplaintNeedsOperator) {
       return {
         state: "manual_required",

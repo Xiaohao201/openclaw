@@ -96,15 +96,27 @@ export function createDouyinDriver(params: {
         !(await page.getByText("登录", { exact: true }).first().isVisible())
       );
     },
-    async prepare() {
+    async prepare(onStep) {
       checkTarget();
       await checkCaptcha();
+      onStep?.("wait_report_entry");
+      const more = page.locator('[data-e2e="video-play-more"]:visible').first();
+      // The avatar may render before the report entry; hidden menu copies are not a fallback.
+      await report()
+        .and(page.locator(":visible"))
+        .or(more)
+        .first()
+        .waitFor({ state: "visible", timeout });
       if (!(await report().isVisible())) {
-        await page.locator('[data-e2e="video-play-more"]').first().hover({ timeout });
+        onStep?.("hover_more");
+        await more.hover({ timeout });
       }
+      onStep?.("open_report");
       await report().click({ timeout });
+      onStep?.("wait_report_form");
       await page.getByText("举报原因", { exact: true }).waitFor({ state: "visible", timeout });
       await checkCaptcha();
+      onStep?.("select_category");
       const options = await page.locator("span:visible").allTextContents();
       selectedLabel = selectDouyinCategory(
         item.category,
@@ -120,6 +132,7 @@ export function createDouyinDriver(params: {
         .getByText(selectedLabel, { exact: true })
         .locator("xpath=preceding-sibling::div[1]")
         .click({ timeout });
+      onStep?.("fill_description");
       const description = page.locator('textarea[placeholder*="描述"]');
       if (await description.count()) {
         await description.fill(item.reason, { timeout });
@@ -133,6 +146,7 @@ export function createDouyinDriver(params: {
       }
       checkTarget();
       await checkCaptcha();
+      onStep?.("check_submit");
       if (!(await page.getByText("提交", { exact: true }).isEnabled())) {
         throw new ComplaintNeedsOperator(
           "CATEGORY_REQUIRED",
