@@ -170,14 +170,14 @@ Helpful page:
 From WSL2:
 
 ```bash
-openclaw browser open https://example.com --browser-profile remote
-openclaw browser tabs --browser-profile remote
+pnpm openclaw browser open https://example.com --browser-profile remote
+pnpm openclaw browser tabs --browser-profile remote
 ```
 
 Good result:
 
 - the tab opens in Windows Chrome
-- `openclaw browser tabs` returns the target
+- `pnpm openclaw browser tabs` returns the target
 - later actions (`snapshot`, `screenshot`, `navigate`) work from the same profile
 
 ## Common misleading errors
@@ -195,7 +195,7 @@ Treat each message as a layer-specific clue:
 - `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable`
   - the HTTP endpoint answered, but the DevTools WebSocket still could not be opened
 - stale viewport / dark-mode / locale / offline overrides after a remote session
-  - run `openclaw browser stop --browser-profile remote`
+  - run `pnpm openclaw browser stop --browser-profile remote`
   - this closes the active control session and releases Playwright/CDP emulation state without restarting the gateway or the external browser
 - `gateway timeout after 1500ms`
   - often still CDP reachability or a slow/unreachable remote endpoint

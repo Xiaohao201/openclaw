@@ -95,7 +95,8 @@ export async function browserStatus(
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
-    timeoutMs: 1500,
+    // Match CLI status requests: CDP probes and Chrome MCP attachment can exceed 1.5 seconds.
+    timeoutMs: 45_000,
   });
 }
 

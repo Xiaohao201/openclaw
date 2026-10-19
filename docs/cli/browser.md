@@ -1,19 +1,23 @@
 ---
-summary: "CLI reference for `openclaw browser` (lifecycle, profiles, tabs, actions, state, and debugging)"
+summary: "CLI reference for `pnpm openclaw browser` (lifecycle, profiles, tabs, actions, state, and debugging)"
 read_when:
-  - You use `openclaw browser` and want examples for common tasks
+  - You use `pnpm openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
   - You want to attach to your local signed-in Chrome via Chrome MCP
 title: "browser"
 ---
 
-# `openclaw browser`
+# `pnpm openclaw browser`
 
 Manage OpenClaw's browser control surface and run browser actions (lifecycle, profiles, tabs, snapshots, screenshots, navigation, input, state emulation, and debugging).
 
 Related:
 
 - Browser tool + API: [Browser tool](/tools/browser)
+
+Run the commands below from the OpenClaw repository root. The `pnpm openclaw` script uses this checkout.
+
+For server deployments, run `pnpm build` and start the browser before accepting user requests. The source launcher prepares plugin runtime artifacts on its first invocation and reuses them while inputs and outputs remain unchanged. Changes to source, dependencies, or generated artifacts can require preparation again. A `Preparing plugin runtime artifacts...` message identifies this phase, which runs before the browser request timeout starts.
 
 ## Common flags
 
@@ -27,10 +31,10 @@ Related:
 ## Quick start (local)
 
 ```bash
-openclaw browser profiles
-openclaw browser --browser-profile openclaw start
-openclaw browser --browser-profile openclaw open https://example.com
-openclaw browser --browser-profile openclaw snapshot
+pnpm openclaw browser profiles
+pnpm openclaw browser --browser-profile openclaw start
+pnpm openclaw browser --browser-profile openclaw open https://example.com
+pnpm openclaw browser --browser-profile openclaw snapshot
 ```
 
 ## Quick troubleshooting
@@ -40,9 +44,9 @@ If `start` fails with `not reachable after start`, troubleshoot CDP readiness fi
 Minimal sequence:
 
 ```bash
-openclaw browser --browser-profile openclaw start
-openclaw browser --browser-profile openclaw tabs
-openclaw browser --browser-profile openclaw open https://example.com
+pnpm openclaw browser --browser-profile openclaw start
+pnpm openclaw browser --browser-profile openclaw tabs
+pnpm openclaw browser --browser-profile openclaw open https://example.com
 ```
 
 Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-vs-navigation-ssrf-block)
@@ -50,23 +54,23 @@ Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-
 ## Lifecycle
 
 ```bash
-openclaw browser status
-openclaw browser start
-openclaw browser stop
-openclaw browser --browser-profile openclaw reset-profile
+pnpm openclaw browser status
+pnpm openclaw browser start
+pnpm openclaw browser stop
+pnpm openclaw browser --browser-profile openclaw reset-profile
 ```
 
 Notes:
 
-- For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
+- For `attachOnly` and remote CDP profiles, `pnpm openclaw browser stop` closes the
   active control session and clears temporary emulation overrides even when
   OpenClaw did not launch the browser process itself.
-- For local managed profiles, `openclaw browser stop` stops the spawned browser
+- For local managed profiles, `pnpm openclaw browser stop` stops the spawned browser
   process.
 
 ## If the command is missing
 
-If `openclaw browser` is an unknown command, check `plugins.allow` in
+If `pnpm openclaw browser` is an unknown command, check `plugins.allow` in
 `~/.openclaw/openclaw.json`.
 
 When `plugins.allow` is present, the bundled browser plugin must be listed
@@ -94,29 +98,29 @@ Profiles are named browser routing configs. In practice:
 - custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
-openclaw browser profiles
-openclaw browser create-profile --name work --color "#FF5A36"
-openclaw browser create-profile --name chrome-live --driver existing-session
-openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
-openclaw browser delete-profile --name work
+pnpm openclaw browser profiles
+pnpm openclaw browser create-profile --name work --color "#FF5A36"
+pnpm openclaw browser create-profile --name chrome-live --driver existing-session
+pnpm openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
+pnpm openclaw browser delete-profile --name work
 ```
 
 Use a specific profile:
 
 ```bash
-openclaw browser --browser-profile work tabs
+pnpm openclaw browser --browser-profile work tabs
 ```
 
 ## Tabs
 
 ```bash
-openclaw browser tabs
-openclaw browser tab new
-openclaw browser tab select 2
-openclaw browser tab close 2
-openclaw browser open https://docs.openclaw.ai
-openclaw browser focus <targetId>
-openclaw browser close <targetId>
+pnpm openclaw browser tabs
+pnpm openclaw browser tab new
+pnpm openclaw browser tab select 2
+pnpm openclaw browser tab close 2
+pnpm openclaw browser open https://docs.openclaw.ai
+pnpm openclaw browser focus <targetId>
+pnpm openclaw browser close <targetId>
 ```
 
 ## Snapshot / screenshot / actions
@@ -124,15 +128,15 @@ openclaw browser close <targetId>
 Snapshot:
 
 ```bash
-openclaw browser snapshot
+pnpm openclaw browser snapshot
 ```
 
 Screenshot:
 
 ```bash
-openclaw browser screenshot
-openclaw browser screenshot --full-page
-openclaw browser screenshot --ref e12
+pnpm openclaw browser screenshot
+pnpm openclaw browser screenshot --full-page
+pnpm openclaw browser screenshot --ref e12
 ```
 
 Notes:
@@ -145,26 +149,26 @@ Notes:
 Navigate/click/type (ref-based UI automation):
 
 ```bash
-openclaw browser navigate https://example.com
-openclaw browser click <ref>
-openclaw browser type <ref> "hello"
-openclaw browser press Enter
-openclaw browser hover <ref>
-openclaw browser scrollintoview <ref>
-openclaw browser drag <startRef> <endRef>
-openclaw browser select <ref> OptionA OptionB
-openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
-openclaw browser wait --text "Done"
-openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
+pnpm openclaw browser navigate https://example.com
+pnpm openclaw browser click <ref>
+pnpm openclaw browser type <ref> "hello"
+pnpm openclaw browser press Enter
+pnpm openclaw browser hover <ref>
+pnpm openclaw browser scrollintoview <ref>
+pnpm openclaw browser drag <startRef> <endRef>
+pnpm openclaw browser select <ref> OptionA OptionB
+pnpm openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
+pnpm openclaw browser wait --text "Done"
+pnpm openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
 ```
 
 File + dialog helpers:
 
 ```bash
-openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref <ref>
-openclaw browser waitfordownload
-openclaw browser download <ref> report.pdf
-openclaw browser dialog --accept
+pnpm openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref <ref>
+pnpm openclaw browser waitfordownload
+pnpm openclaw browser download <ref> report.pdf
+pnpm openclaw browser dialog --accept
 ```
 
 ## State and storage
@@ -172,40 +176,40 @@ openclaw browser dialog --accept
 Viewport + emulation:
 
 ```bash
-openclaw browser resize 1280 720
-openclaw browser set viewport 1280 720
-openclaw browser set offline on
-openclaw browser set media dark
-openclaw browser set timezone Europe/London
-openclaw browser set locale en-GB
-openclaw browser set geo 51.5074 -0.1278 --accuracy 25
-openclaw browser set device "iPhone 14"
-openclaw browser set headers '{"x-test":"1"}'
-openclaw browser set credentials myuser mypass
+pnpm openclaw browser resize 1280 720
+pnpm openclaw browser set viewport 1280 720
+pnpm openclaw browser set offline on
+pnpm openclaw browser set media dark
+pnpm openclaw browser set timezone Europe/London
+pnpm openclaw browser set locale en-GB
+pnpm openclaw browser set geo 51.5074 -0.1278 --accuracy 25
+pnpm openclaw browser set device "iPhone 14"
+pnpm openclaw browser set headers '{"x-test":"1"}'
+pnpm openclaw browser set credentials myuser mypass
 ```
 
 Cookies + storage:
 
 ```bash
-openclaw browser cookies
-openclaw browser cookies set session abc123 --url https://example.com
-openclaw browser cookies clear
-openclaw browser storage local get
-openclaw browser storage local set token abc123
-openclaw browser storage session clear
+pnpm openclaw browser cookies
+pnpm openclaw browser cookies set session abc123 --url https://example.com
+pnpm openclaw browser cookies clear
+pnpm openclaw browser storage local get
+pnpm openclaw browser storage local set token abc123
+pnpm openclaw browser storage session clear
 ```
 
 ## Debugging
 
 ```bash
-openclaw browser console --level error
-openclaw browser pdf
-openclaw browser responsebody "**/api"
-openclaw browser highlight <ref>
-openclaw browser errors --clear
-openclaw browser requests --filter api
-openclaw browser trace start
-openclaw browser trace stop --out trace.zip
+pnpm openclaw browser console --level error
+pnpm openclaw browser pdf
+pnpm openclaw browser responsebody "**/api"
+pnpm openclaw browser highlight <ref>
+pnpm openclaw browser errors --clear
+pnpm openclaw browser requests --filter api
+pnpm openclaw browser trace start
+pnpm openclaw browser trace stop --out trace.zip
 ```
 
 ## Existing Chrome via MCP
@@ -213,10 +217,10 @@ openclaw browser trace stop --out trace.zip
 Use the built-in `user` profile, or create your own `existing-session` profile:
 
 ```bash
-openclaw browser --browser-profile user tabs
-openclaw browser create-profile --name chrome-live --driver existing-session
-openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
-openclaw browser --browser-profile chrome-live tabs
+pnpm openclaw browser --browser-profile user tabs
+pnpm openclaw browser create-profile --name chrome-live --driver existing-session
+pnpm openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+pnpm openclaw browser --browser-profile chrome-live tabs
 ```
 
 This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.

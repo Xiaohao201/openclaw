@@ -9,6 +9,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { syncRuntimePostbuildCached } from "./runtime-postbuild-cache.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
@@ -321,7 +322,7 @@ const createRunNodeOutputTee = (deps) => {
       }
       await new Promise((resolve, reject) => {
         stream.once("error", reject);
-        stream.end(resolve);
+        stream.end((error) => (error ? reject(error) : resolve()));
       });
       if (streamError) {
         throw streamError;
@@ -440,9 +441,17 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
   return exitCode;
 };
 
-const syncRuntimeArtifacts = (deps) => {
+const syncRuntimeArtifacts = (deps, force = false) => {
   try {
-    deps.runRuntimePostBuild({ cwd: deps.cwd });
+    syncRuntimePostbuildCached({
+      cwd: deps.cwd,
+      env: deps.env,
+      force,
+      sync: () => {
+        logRunner("Preparing plugin runtime artifacts...", deps);
+        deps.runRuntimePostBuild({ cwd: deps.cwd });
+      },
+    });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -530,7 +539,7 @@ export async function runNodeMain(params = {}) {
     if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
       return await closeRunNodeOutputTee(deps, buildRes.exitCode);
     }
-    if (!syncRuntimeArtifacts(deps)) {
+    if (!syncRuntimeArtifacts(deps, true)) {
       return await closeRunNodeOutputTee(deps, 1);
     }
     writeBuildStamp(deps);

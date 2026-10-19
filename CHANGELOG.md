@@ -75,6 +75,11 @@ Docs: https://docs.openclaw.ai
 
 - RabbitMQ/Suheng intent routing: match the original user task separately from enterprise skill instructions and attachment/video evidence, preventing unrelated report, Word, and design guidance while retaining full execution context and logging per-rule reasons.
 
+- Browser/status: align the tool status timeout with the CLI so slow CDP probes and Chrome MCP attachment do not fail after 1.5 seconds.
+
+- Browser/command guidance: use `pnpm openclaw` in browser recovery hints, CLI examples, and browser docs so source deployments run the current checkout.
+- CLI/startup: reuse unchanged plugin runtime artifacts across source-checkout commands instead of recreating them on every invocation; invalidate the cache after input changes or missing outputs and surface output-log failures reliably.
+
 ## 2026.4.15
 
 ### Changes
