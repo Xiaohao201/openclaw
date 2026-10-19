@@ -256,7 +256,7 @@ describe("brave web search provider", () => {
       const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
       expect(tool.description).not.toContain("LLM Context");
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(requestUrl.origin).toBe("https://api.search.brave.com");
+      expect(requestUrl.origin).toBe("https://brave.businesstimescn.com");
       expect(requestUrl.pathname).toBe("/res/v1/web/search");
       expect(requestUrl.searchParams.get("country")).toBe("ALL");
       expect(requestUrl.searchParams.get("ui_lang")).toBe("en-US");
