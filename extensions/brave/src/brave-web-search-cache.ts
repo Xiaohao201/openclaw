@@ -50,23 +50,19 @@ export function resolveBraveSearchCacheDbConfig(
   const host =
     readNonEmptyString(raw.host) ??
     readNonEmptyString(env.WEBSEARCH_CACHE_MYSQL_HOST) ??
-    readNonEmptyString(env.WRITER_MYSQL_HOST) ??
-    readNonEmptyString(env.HISTORY_MYSQL_HOST);
+    readNonEmptyString(env.MYSQL_HOST);
   const user =
     readNonEmptyString(raw.user) ??
     readNonEmptyString(env.WEBSEARCH_CACHE_MYSQL_USER) ??
-    readNonEmptyString(env.WRITER_MYSQL_USER) ??
-    readNonEmptyString(env.HISTORY_MYSQL_USER);
+    readNonEmptyString(env.MYSQL_USER);
   const password =
     readNonEmptyString(raw.password) ??
     readNonEmptyString(env.WEBSEARCH_CACHE_MYSQL_PASSWORD) ??
-    readNonEmptyString(env.WRITER_MYSQL_PASSWORD) ??
-    readNonEmptyString(env.HISTORY_MYSQL_PASSWORD);
+    readNonEmptyString(env.MYSQL_PASSWORD);
   const database =
     readNonEmptyString(raw.database) ??
     readNonEmptyString(env.WEBSEARCH_CACHE_MYSQL_DATABASE) ??
-    readNonEmptyString(env.WRITER_MYSQL_DATABASE) ??
-    readNonEmptyString(env.HISTORY_MYSQL_DATABASE) ??
+    readNonEmptyString(env.MYSQL_DATABASE) ??
     "superworker";
   if (!host || !user || !password) {
     return undefined;
@@ -74,9 +70,7 @@ export function resolveBraveSearchCacheDbConfig(
 
   return {
     host,
-    port: resolvePort(
-      raw.port ?? env.WEBSEARCH_CACHE_MYSQL_PORT ?? env.WRITER_MYSQL_PORT ?? env.HISTORY_MYSQL_PORT,
-    ),
+    port: resolvePort(raw.port ?? env.WEBSEARCH_CACHE_MYSQL_PORT ?? env.MYSQL_PORT),
     user,
     password,
     database,

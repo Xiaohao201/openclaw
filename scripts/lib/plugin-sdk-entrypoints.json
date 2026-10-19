@@ -167,6 +167,7 @@
   "messaging-targets",
   "request-url",
   "runtime-store",
+  "mysql-pool",
   "json-store",
   "persistent-dedupe",
   "keyed-async-queue",

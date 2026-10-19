@@ -1,4 +1,5 @@
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import {
   retryHistoryDbOperation,
   retryHistoryMetadataWrite,
@@ -67,22 +68,12 @@ export class HistoryManager {
   }
 
   private createPool(config: HistoryDbConfig | WriterDbConfig): mysql.Pool {
-    return mysql.createPool({
+    return acquireMysqlPool({
       host: config.host,
       port: config.port,
       user: config.user,
       password: config.password,
       database: config.database,
-      connectionLimit: 3,
-      // mysql2 starts idle eviction only when maxIdle is below connectionLimit.
-      maxIdle: 2,
-      idleTimeout: 60_000,
-      enableKeepAlive: true,
-      keepAliveInitialDelay: 10_000,
-      connectTimeout: 10_000,
-      waitForConnections: true,
-      charset: "utf8mb4",
-      timezone: "+08:00",
     });
   }
 

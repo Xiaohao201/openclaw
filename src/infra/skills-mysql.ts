@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Skill } from "@mariozechner/pi-coding-agent";
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
 import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
 import { createSyntheticSourceInfo } from "../agents/skills/skill-contract.js";
 import type { SourceScope } from "../agents/skills/skill-contract.js";
@@ -15,6 +15,7 @@ import type {
 import { loadConfig } from "../config/config.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { writeFileWithinRoot } from "./fs-safe.js";
+import { acquireMysqlPool } from "./mysql-pool.js";
 import { getManagedResourcePaths, syncSkillResourceFiles } from "./skill-resource-files.js";
 import {
   readSkillResources,
@@ -107,45 +108,13 @@ function resolveConfig(): MySqlConfig {
   const mysqlCfg = pluginEntries?.["feed-search"]?.config as Record<string, unknown> | undefined;
   const env = process.env;
 
-  // The `skills` table is read+write: `skill_save` inserts/updates rows, so this
-  // connection MUST use a writable account. Prefer WRITER_MYSQL_* (e.g.
-  // btclaw_writer); the HISTORY_MYSQL_* creds are the read-only account, under
-  // which SELECT succeeds (listing works) while INSERT/UPDATE fail with "command
-  // denied to user" — i.e. skill_save silently fails. Fall back to HISTORY_* then
-  // the legacy FEED_MYSQL_* names, then the local default. Host/port/db share one
-  // `superworker` server across the reader and writer accounts.
+  // Skills need a writable account; use the unified deployment credentials.
   return {
-    host:
-      env.WRITER_MYSQL_HOST ??
-      (mysqlCfg?.host as string) ??
-      env.HISTORY_MYSQL_HOST ??
-      env.FEED_MYSQL_HOST ??
-      "127.0.0.1",
-    port: Number(
-      env.WRITER_MYSQL_PORT ??
-        mysqlCfg?.port ??
-        env.HISTORY_MYSQL_PORT ??
-        env.FEED_MYSQL_PORT ??
-        3306,
-    ),
-    user:
-      env.WRITER_MYSQL_USER ??
-      (mysqlCfg?.user as string) ??
-      env.HISTORY_MYSQL_USER ??
-      env.FEED_MYSQL_USER ??
-      "",
-    password:
-      env.WRITER_MYSQL_PASSWORD ??
-      (mysqlCfg?.password as string) ??
-      env.HISTORY_MYSQL_PASSWORD ??
-      env.FEED_MYSQL_PASSWORD ??
-      "",
-    database:
-      env.WRITER_MYSQL_DATABASE ??
-      (mysqlCfg?.database as string) ??
-      env.HISTORY_MYSQL_DATABASE ??
-      env.FEED_MYSQL_DATABASE ??
-      "superworker",
+    host: env.MYSQL_HOST ?? (mysqlCfg?.host as string) ?? "127.0.0.1",
+    port: Number(env.MYSQL_PORT ?? mysqlCfg?.port ?? 3306),
+    user: env.MYSQL_USER ?? (mysqlCfg?.user as string) ?? "",
+    password: env.MYSQL_PASSWORD ?? (mysqlCfg?.password as string) ?? "",
+    database: env.MYSQL_DATABASE ?? (mysqlCfg?.database as string) ?? "superworker",
   };
 }
 
@@ -155,18 +124,12 @@ function getPool(): mysql.Pool {
   }
 
   const config = resolveConfig();
-  pool = mysql.createPool({
+  pool = acquireMysqlPool({
     host: config.host,
     port: config.port,
     user: config.user,
     password: config.password,
     database: config.database,
-    connectionLimit: 3,
-    waitForConnections: true,
-    charset: "utf8mb4",
-    timezone: "+08:00",
-    // Fail fast instead of hanging the turn when the DB is unreachable.
-    connectTimeout: 5000,
   });
 
   return pool;

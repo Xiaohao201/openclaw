@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type {
   BraveSearchCacheDbConfig,
   BraveSearchCacheSqlValue,
@@ -21,17 +22,12 @@ function getPool(config: BraveSearchCacheDbConfig): mysql.Pool {
   if (existing) {
     return existing;
   }
-  const pool = mysql.createPool({
+  const pool = acquireMysqlPool({
     host: config.host,
     port: config.port,
     user: config.user,
     password: config.password,
     database: config.database,
-    connectionLimit: 3,
-    waitForConnections: true,
-    connectTimeout: 5000,
-    charset: "utf8mb4",
-    timezone: "+08:00",
   });
   pools.set(key, pool);
   return pool;
@@ -43,4 +39,10 @@ export async function executeBraveSearchCacheInsert(
   values: BraveSearchCacheSqlValue[],
 ): Promise<void> {
   await getPool(config).execute(sql, values);
+}
+
+export async function closeBraveSearchCachePools(): Promise<void> {
+  const handles = [...pools.values()];
+  pools.clear();
+  await Promise.all(handles.map((pool) => pool.end()));
 }

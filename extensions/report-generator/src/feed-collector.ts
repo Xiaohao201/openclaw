@@ -31,7 +31,7 @@ export class FeedCollector {
 
   private async getPool(): Promise<mysql.Pool> {
     if (!this.pool) {
-      this.pool = createHistoryPool(this.config, 3);
+      this.pool = createHistoryPool(this.config);
     }
     return this.pool;
   }

@@ -55,12 +55,11 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
         "ReportTask",
     },
     historyDb: {
-      host: (historyDb?.host as string) ?? process.env.HISTORY_MYSQL_HOST ?? "127.0.0.1",
-      port: Number(historyDb?.port ?? process.env.HISTORY_MYSQL_PORT ?? 3306),
-      user: (historyDb?.user as string) ?? process.env.HISTORY_MYSQL_USER ?? "",
-      password: (historyDb?.password as string) ?? process.env.HISTORY_MYSQL_PASSWORD ?? "",
-      database:
-        (historyDb?.database as string) ?? process.env.HISTORY_MYSQL_DATABASE ?? "superworker",
+      host: (historyDb?.host as string) ?? process.env.MYSQL_HOST ?? "127.0.0.1",
+      port: Number(historyDb?.port ?? process.env.MYSQL_PORT ?? 3306),
+      user: (historyDb?.user as string) ?? process.env.MYSQL_USER ?? "",
+      password: (historyDb?.password as string) ?? process.env.MYSQL_PASSWORD ?? "",
+      database: (historyDb?.database as string) ?? process.env.MYSQL_DATABASE ?? "superworker",
     },
     mercure: {
       hubUrl: (mercure?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "",
@@ -82,27 +81,17 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
  */
 function resolveWriterConfig(pluginConfig: Record<string, unknown>): WriterDbConfig | undefined {
   const writerDb = pluginConfig.writerDb as Record<string, unknown> | undefined;
-  const envUser = process.env.WRITER_MYSQL_USER;
-  const envPassword = process.env.WRITER_MYSQL_PASSWORD;
-  if (!writerDb && !envUser && !envPassword) {
+  const envUser = process.env.MYSQL_USER;
+  const envPassword = process.env.MYSQL_PASSWORD;
+  if (!writerDb) {
     return undefined;
   }
   return {
-    host:
-      (writerDb?.host as string) ??
-      process.env.WRITER_MYSQL_HOST ??
-      process.env.HISTORY_MYSQL_HOST ??
-      "127.0.0.1",
-    port: Number(
-      writerDb?.port ?? process.env.WRITER_MYSQL_PORT ?? process.env.HISTORY_MYSQL_PORT ?? 3306,
-    ),
+    host: (writerDb?.host as string) ?? process.env.MYSQL_HOST ?? "127.0.0.1",
+    port: Number(writerDb?.port ?? process.env.MYSQL_PORT ?? 3306),
     user: (writerDb?.user as string) ?? envUser ?? "",
     password: (writerDb?.password as string) ?? envPassword ?? "",
-    database:
-      (writerDb?.database as string) ??
-      process.env.WRITER_MYSQL_DATABASE ??
-      process.env.HISTORY_MYSQL_DATABASE ??
-      "superworker",
+    database: (writerDb?.database as string) ?? process.env.MYSQL_DATABASE ?? "superworker",
   };
 }
 

@@ -462,3 +462,36 @@ caller to repeat the external action that produced the artifact.
 - [SDK Overview](/plugins/sdk-overview) -- subpath reference
 - [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` options
 - [Plugin Internals](/plugins/architecture) -- capability model and registry
+
+## Shared MySQL pools
+
+`openclaw/plugin-sdk/mysql-pool` exposes the additive v1 `acquireMysqlPool(config)` contract.
+Pass `host`, `port`, `user`, `password`, and `database`. Equal configurations share one
+physical mysql2 pool within the same Node.js process, including across bundled plugins.
+Different credentials or databases, worker threads with separate JavaScript globals,
+and separate processes use independent pools.
+
+The returned handle supports mysql2 promise-pool operations. `query` and `execute`
+borrow and release connections automatically. Explicit `getConnection()` callers must
+release the connection in `finally`, especially when using transactions. Each owner
+must call its handle's `end()` during shutdown; this releases that owner's reference.
+The last owner drains pending operations and closes the physical pool. A closed handle
+cannot issue further queries. Change pool settings by restarting the service.
+
+| Environment variable         | Default                             | Meaning                                                                                  |
+| ---------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- |
+| `MYSQL_CONNECTION_LIMIT`     | `10`                                | Maximum physical connections per shared pool                                             |
+| `MYSQL_MIN_IDLE_CONNECTIONS` | `2` (capped by the default maximum) | Idle connections to maintain when capacity permits; `0` disables prewarming              |
+| `MYSQL_IDLE_TIMEOUT_MS`      | `60000`                             | Idle age before excess connections are reclaimed                                         |
+| `MYSQL_QUEUE_LIMIT`          | `100`                               | Maximum queued acquisitions; further requests fail instead of growing an unbounded queue |
+
+Values must be positive integers, except the idle minimum which may be zero. An
+explicit minimum above the maximum is rejected. Maintenance checks at most once per
+second (more often for shorter idle timeouts), preserves busy connections, and gives
+user queries priority over prewarming. Outages may prevent reaching the idle minimum;
+failed prewarming backs off for 10 seconds. The queue limit does not set a query timeout.
+
+For deployment credentials use `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`,
+`MYSQL_PASSWORD`, and `MYSQL_DATABASE`. The account must have the read/write permissions
+required by the enabled plugins. Connection limits do not replace MySQL server-wide
+`max_connections`, which also includes other applications and processes.

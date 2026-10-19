@@ -1,4 +1,5 @@
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type { PluginLogger } from "../api.js";
 import type { ReportPeriod } from "./report-period.js";
 import type { HistoryDbConfig } from "./types.js";
@@ -42,16 +43,12 @@ export class ReportTemplateLookup {
 
   private async getPool(): Promise<mysql.Pool> {
     if (!this.pool) {
-      this.pool = mysql.createPool({
+      this.pool = acquireMysqlPool({
         host: this.config.host,
         port: this.config.port,
         user: this.config.user,
         password: this.config.password,
         database: this.config.database,
-        connectionLimit: 2,
-        waitForConnections: true,
-        charset: "utf8mb4",
-        timezone: "+08:00",
       });
     }
     return this.pool;

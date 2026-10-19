@@ -1,4 +1,5 @@
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type { PluginLogger } from "../api.js";
 import type { HistoryDbConfig } from "./types.js";
 
@@ -12,23 +13,13 @@ import type { HistoryDbConfig } from "./types.js";
  *   2. withDbRetry / execWithRetry — retry idempotent queries through a short
  *      blip instead of failing the whole report task.
  */
-export function createHistoryPool(config: HistoryDbConfig, connectionLimit: number): mysql.Pool {
-  return mysql.createPool({
+export function createHistoryPool(config: HistoryDbConfig): mysql.Pool {
+  return acquireMysqlPool({
     host: config.host,
     port: config.port,
     user: config.user,
     password: config.password,
     database: config.database,
-    connectionLimit,
-    waitForConnections: true,
-    charset: "utf8mb4",
-    timezone: "+08:00",
-    // --- resilience to frequent MySQL restarts ---
-    enableKeepAlive: true, // keep sockets alive so dead ones surface fast
-    keepAliveInitialDelay: 10_000,
-    connectTimeout: 10_000,
-    maxIdle: connectionLimit, // evict idle connections...
-    idleTimeout: 60_000, // ...after 60s, so a post-restart stale conn is never reused
   });
 }
 

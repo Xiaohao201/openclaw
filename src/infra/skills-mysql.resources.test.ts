@@ -267,3 +267,11 @@ it("replaces attachments inside the parent update transaction and rolls back on 
   expect(db.commit).not.toHaveBeenCalled();
   expect(db.release).toHaveBeenCalledOnce();
 });
+
+// Pool policy and cross-owner lifecycle are covered by the shared pool tests.
+vi.mock("./mysql-pool.js", async () => {
+  const { default: mysql } = await import("mysql2/promise");
+  return {
+    acquireMysqlPool: (config: import("mysql2/promise").PoolOptions) => mysql.createPool(config),
+  };
+});

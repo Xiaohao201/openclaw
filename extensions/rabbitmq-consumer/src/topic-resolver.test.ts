@@ -425,3 +425,11 @@ describe("TopicResolver.getTopicIdsByUser", () => {
     expect(mockExecute).toHaveBeenCalledTimes(6);
   });
 });
+
+// Pool policy and cross-owner lifecycle are covered by the shared pool tests.
+vi.mock("openclaw/plugin-sdk/mysql-pool", async () => {
+  const { default: mysql } = await import("mysql2/promise");
+  return {
+    acquireMysqlPool: (config: import("mysql2/promise").PoolOptions) => mysql.createPool(config),
+  };
+});

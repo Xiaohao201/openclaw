@@ -200,6 +200,9 @@ importers:
       mpg123-decoder:
         specifier: ^1.0.3
         version: 1.0.3
+      mysql2:
+        specifier: ^3.22.0
+        version: 3.22.0(@types/node@25.6.0)
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
