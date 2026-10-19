@@ -619,6 +619,26 @@ describe("run-node script", () => {
     });
   });
 
+  it("reuses prepared runtime artifacts across unchanged CLI invocations", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: { [ROOT_SRC]: "export const value = 1;\n" },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync, spawnCalls } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      for (let index = 0; index < 2; index++) {
+        expect(await runStatusCommand({ tmp, spawn, spawnSync, runRuntimePostBuild })).toBe(0);
+      }
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
+      expect(spawnCalls).toEqual([statusCommandSpawn(), statusCommandSpawn()]);
+    });
+  });
+
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       const spawn = (cmd: string, args: string[] = []) => {

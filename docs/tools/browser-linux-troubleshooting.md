@@ -128,7 +128,7 @@ but there are no open tabs available to attach to.
 
 Fix options:
 
-1. **Use the managed browser:** `openclaw browser start --browser-profile openclaw`
+1. **Use the managed browser:** `pnpm openclaw browser start --browser-profile openclaw`
    (or set `browser.defaultProfile: "openclaw"`).
 2. **Use Chrome MCP:** make sure local Chrome is running with at least one open tab, then retry with `--browser-profile user`.
 

@@ -36,7 +36,7 @@ export function collectBrowserSecurityAuditFindings(ctx: OpenClawPluginSecurityA
       severity: "warn" as const,
       title: "Browser control config looks invalid",
       detail: String(err),
-      remediation: `Fix browser.cdpUrl in ${ctx.configPath} and re-run "${formatCliCommand("openclaw security audit --deep")}".`,
+      remediation: `Fix browser.cdpUrl in ${ctx.configPath} and re-run "${formatCliCommand("pnpm openclaw security audit --deep")}".`,
     });
     return findings;
   }

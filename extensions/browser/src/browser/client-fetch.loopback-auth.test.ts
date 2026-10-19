@@ -86,6 +86,7 @@ vi.mock("./routes/dispatcher.js", () => ({
 }));
 
 const { fetchBrowserJson } = await import("./client-fetch.js");
+const { browserStatus } = await import("./client.js");
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -152,6 +153,7 @@ describe("fetchBrowserJson loopback auth", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -215,9 +217,70 @@ describe("fetchBrowserJson loopback auth", () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Chrome CDP handshake timeout", "Do NOT retry the browser tool"],
-      omits: ["Can't reach the OpenClaw browser control service"],
+      contains: [
+        "Chrome CDP handshake timeout",
+        "Do NOT retry the browser tool",
+        "pnpm openclaw browser status",
+        "pnpm openclaw gateway restart",
+      ],
+      omits: ["Can't reach the OpenClaw browser control service", "OpenClaw.app menubar"],
     });
+  });
+
+  it("allows a local status probe to take longer than 1.5 seconds", async () => {
+    // Warm the lazy dispatcher before switching to a simulated clock.
+    await fetchBrowserJson("/");
+    vi.useFakeTimers();
+    mocks.dispatch.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve(okDispatchResponse()), 2000)),
+    );
+    const result = browserStatus(undefined, { profile: "openclaw" }).catch(
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await result).toEqual({ ok: true });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("allows a remote HTTP status probe to take longer than 1.5 seconds", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              init?.signal?.removeEventListener("abort", onAbort);
+              resolve(new Response(JSON.stringify({ running: true })));
+            }, 2000);
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(init?.signal?.reason);
+            };
+            init?.signal?.addEventListener("abort", onAbort, { once: true });
+          }),
+      ),
+    );
+    const result = browserStatus("http://127.0.0.1:18888").catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await result).toEqual({ running: true });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still bounds a stalled local status request to 45 seconds", async () => {
+    await fetchBrowserJson("/");
+    vi.useFakeTimers();
+    mocks.dispatch.mockImplementationOnce(() => new Promise(() => {}));
+    let settled = false;
+    const result = browserStatus().catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toBeInstanceOf(Error);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {

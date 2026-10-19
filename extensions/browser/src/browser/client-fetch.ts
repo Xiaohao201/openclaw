@@ -108,7 +108,7 @@ function isRateLimitStatus(status: number): boolean {
 function resolveBrowserFetchOperatorHint(url: string): string {
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
+    ? `From the project directory, check \`${formatCliCommand("pnpm openclaw browser status")}\`. Restart the OpenClaw gateway service if needed with \`${formatCliCommand("pnpm openclaw gateway restart")}\`.`
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
 }
 
