@@ -68,6 +68,28 @@ afterEach(async () => {
 });
 
 describe("local tool integration", () => {
+  it("explains the Douyin limit without recording a task or acquiring a browser", async () => {
+    const link = "https://www.douyin.com/video/123456789";
+    const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
+    const result = parse(
+      await tool.execute("submit", {
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Enterprise",
+        judgment: "测".repeat(350),
+        links: [link],
+        categories: [{ link, category: "不实信息" }],
+      }),
+    );
+    expect(result).toMatchObject({
+      success: false,
+      submitted: false,
+      error: expect.stringContaining("200"),
+    });
+    expect(executeDb).not.toHaveBeenCalled();
+    expect(acquireBrowser).not.toHaveBeenCalled();
+    expect(nativeRun).not.toHaveBeenCalled();
+  });
   it("records a task before native execution without Python runtime assets", async () => {
     const tool = createComplaintSubmitToolFactory(api, resolver)({ agentId: "rabbitmq-1" })!;
     const result = parse(

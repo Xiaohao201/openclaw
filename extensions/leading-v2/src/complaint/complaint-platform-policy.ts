@@ -1,3 +1,6 @@
+// The Douyin web form rejects over-limit input even without a maxlength attribute.
+export const DOUYIN_REASON_MAX_LENGTH = 200;
+
 // These platforms have no supported direct reporting workflow in this deployment.
 const unavailableDomains = ["10jqka.com.cn", "xueqiu.com", "weixin.qq.com", "weixin.com"];
 const unavailablePlatforms = new Set([

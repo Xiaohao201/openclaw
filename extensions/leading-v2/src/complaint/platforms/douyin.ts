@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Page } from "playwright-core";
+import { errors, type Page } from "playwright-core";
 import type { LocalComplaintItem } from "../complaint-local-contract.js";
-import { ComplaintNeedsOperator, type ComplaintDriver } from "../executor/native.js";
+import { DOUYIN_REASON_MAX_LENGTH } from "../complaint-platform-policy.js";
+import {
+  ComplaintNeedsOperator,
+  type ComplaintDriver,
+  type ComplaintVerification,
+} from "../executor/native.js";
 
 const normalize = (value: string) =>
   value.replace(/^\s*\d{1,3}[.、．)）:：]\s*/, "").replace(/[\s\p{P}]/gu, "");
@@ -64,6 +69,7 @@ export function createDouyinDriver(params: {
     }
   };
   const report = () => page.getByText("举报", { exact: true });
+  const receipt = () => page.getByText("提交成功", { exact: false }).and(page.locator(":visible"));
   return {
     async navigate() {
       const url = new URL(item.link);
@@ -98,6 +104,12 @@ export function createDouyinDriver(params: {
     },
     async prepare(onStep) {
       checkTarget();
+      if (item.reason.length > DOUYIN_REASON_MAX_LENGTH) {
+        throw new ComplaintNeedsOperator(
+          "REASON_TOO_LONG",
+          `抖音举报理由超过${DOUYIN_REASON_MAX_LENGTH}字符，未提交。请压缩已核定理由并重新核对，不能自动截断。`,
+        );
+      }
       await checkCaptcha();
       onStep?.("wait_report_entry");
       const more = page.locator('[data-e2e="video-play-more"]:visible').first();
@@ -133,16 +145,27 @@ export function createDouyinDriver(params: {
         .locator("xpath=preceding-sibling::div[1]")
         .click({ timeout });
       onStep?.("fill_description");
-      const description = page.locator('textarea[placeholder*="描述"]');
-      if (await description.count()) {
-        await description.fill(item.reason, { timeout });
-      } else {
-        const fallback = page.locator(
-          'xpath=//*[contains(text(),"举报描述")]/following::textarea[1]',
+      let description = page.locator('textarea[placeholder*="描述"]:visible');
+      if (!(await description.count())) {
+        description = page
+          .locator('xpath=//*[contains(text(),"举报描述")]/following::textarea[1]')
+          .and(page.locator(":visible"));
+      }
+      if ((await description.count()) !== 1) {
+        throw new ComplaintNeedsOperator(
+          "DESCRIPTION_WRITE_FAILED",
+          "未找到唯一可见的举报描述输入框，未提交，请人工核对页面。",
         );
-        if (await fallback.count()) {
-          await fallback.fill(item.reason, { timeout });
-        }
+      }
+      await description.fill(item.reason, { timeout });
+      // Controlled inputs can reject fill() without throwing; verify what the page retained.
+      await description.blur({ timeout });
+      onStep?.("verify_description");
+      if ((await description.inputValue({ timeout })) !== item.reason.replace(/\r\n?/g, "\n")) {
+        throw new ComplaintNeedsOperator(
+          "DESCRIPTION_WRITE_FAILED",
+          "页面实际保留的举报描述与核定理由不一致，未提交，请检查字数限制及表单状态。",
+        );
       }
       checkTarget();
       await checkCaptcha();
@@ -156,21 +179,74 @@ export function createDouyinDriver(params: {
     },
     async submit() {
       checkTarget();
-      if (await page.getByText("提交成功", { exact: false }).first().isVisible()) {
+      if (await receipt().first().isVisible()) {
         throw new Error("Receipt existed before submit");
       }
       await page.getByText("提交", { exact: true }).click({ timeout });
     },
-    async verify() {
+    async verify(): Promise<ComplaintVerification> {
+      const form = page.locator('[data-e2e="report-container"]:visible');
+      // Match validation feedback, not the static optional "请选择具体的类型" heading.
+      // Only normalized codes/messages leave the page; never log raw form or complaint text.
+      const feedback = [
+        {
+          locator: form.getByText(/^请(?:填写|输入|补充)(?:举报)?(?:描述|说明|理由|内容)[。！!]?$/),
+          validationError: "DESCRIPTION_REQUIRED",
+          message: "平台提示举报描述未填写。",
+        },
+        {
+          locator: form.getByText(
+            /^(?:举报)?(?:描述|说明|理由|内容)(?:最多|不得超过|不能超过)\s*\d+\s*(?:字|字符)[。！!]?$/,
+          ),
+          validationError: "DESCRIPTION_TOO_LONG",
+          message: "平台提示举报描述超出字数限制。",
+        },
+        {
+          locator: form.getByText(
+            /^请(?:选择|勾选)(?:具体的?|二级)?举报(?:类型|分类|原因)[。！!]?$/,
+          ),
+          validationError: "CATEGORY_REQUIRED",
+          message: "平台提示需要补选举报分类。",
+        },
+        {
+          locator: form.locator('[role="alert"], [aria-invalid="true"]'),
+          validationError: "OTHER",
+          message: "举报表单出现错误提示，请查看截图核对。",
+        },
+      ] as const;
+      const unconfirmed: ComplaintVerification = {
+        confirmed: false,
+        errorCode: "RECEIPT_UNCONFIRMED",
+        message: "已尝试提交但未观察到成功提示，请人工核对，勿自动重提。",
+      };
       try {
-        await page
-          .getByText("提交成功", { exact: false })
+        await feedback
+          .reduce(
+            (matches, entry) => matches.or(entry.locator.and(page.locator(":visible"))),
+            receipt(),
+          )
           .first()
           .waitFor({ state: "visible", timeout });
-        return true;
-      } catch {
-        return false;
+      } catch (error) {
+        if (error instanceof errors.TimeoutError) {
+          return unconfirmed;
+        }
+        throw error;
       }
+      if (await receipt().first().isVisible()) {
+        return { confirmed: true };
+      }
+      for (const entry of feedback) {
+        if (await entry.locator.and(page.locator(":visible")).first().isVisible()) {
+          return {
+            confirmed: false,
+            errorCode: "FORM_VALIDATION_FAILED",
+            validationError: entry.validationError,
+            message: `${entry.message}未确认提交成功，禁止自动重提。`,
+          };
+        }
+      }
+      return unconfirmed;
     },
     async screenshot() {
       const fileName = `${randomUUID().replaceAll("-", "")}.png`;

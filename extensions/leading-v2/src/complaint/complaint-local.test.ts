@@ -30,6 +30,43 @@ const request = (links = ["https://weibo.com/1/2"]) => ({
 });
 
 describe("direct local reporting", () => {
+  it.each([201, 350])("rejects a %s-character Douyin reason before execution", (length) => {
+    const link = "https://www.douyin.com/video/123456789";
+    expect(() =>
+      parseLocalRequest({
+        ...request([link]),
+        judgment: "测".repeat(length),
+        categories: [{ link, category: "不实信息" }],
+      }),
+    ).toThrow(/200/);
+  });
+  it("limits the effective Douyin reason without limiting other platforms or batch summaries", () => {
+    const links = ["https://www.douyin.com/video/123456789", "https://weibo.com/1/2"];
+    const input = {
+      ...request(links),
+      judgment: "摘要".repeat(300),
+      categories: [{ link: links[0], category: "不实信息" }],
+      linkJudgments: [
+        { link: links[0], judgment: "测".repeat(200) },
+        { link: links[1], judgment: "测".repeat(350) },
+      ],
+    };
+    expect(parseLocalRequest(input).map((item) => item.reason.length)).toEqual([200, 350]);
+    expect(() =>
+      parseLocalRequest({
+        ...input,
+        judgment: reason,
+        linkJudgments: input.linkJudgments.map((item) => ({ ...item, judgment: "测".repeat(201) })),
+      }),
+    ).toThrow(/200/);
+    expect(
+      parseLocalRequest({
+        ...request([links[0]]),
+        judgment: "测".repeat(350),
+        report12377: { category: "rumor", websiteName: "fixture" },
+      })[0].reason.length,
+    ).toBe(350);
+  });
   it("requires an explicit Douyin category instead of using the narrative as a category", () => {
     const link = "https://www.douyin.com/video/123456789";
     expect(() => parseLocalRequest(request([link]))).toThrow(/categories/);

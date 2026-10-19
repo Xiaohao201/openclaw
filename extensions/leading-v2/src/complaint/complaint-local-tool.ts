@@ -6,6 +6,7 @@ import {
   KEEP_COMPLAINT_CHANNEL,
   submitRecordedLocalComplaint,
 } from "./complaint-local-submission.js";
+import { DOUYIN_REASON_MAX_LENGTH } from "./complaint-platform-policy.js";
 
 export function createLocalComplaintSubmitToolFactory(api: OpenClawPluginApi) {
   const config = resolveLocalConfig(api.pluginConfig ?? {}, api.rootDir, api.config);
@@ -22,13 +23,16 @@ export function createLocalComplaintSubmitToolFactory(api: OpenClawPluginApi) {
         "直接平台举报必须先在本对话用 browser 打开或查看目标标签页；执行器接续该标签页及其登录态，不另开浏览器。交接仅限当前用户已绑定的 host profile，禁止借用其他用户账号。" +
         "仅对用户已核定的目标及举报事由，在明确授权后传 confirmed=true；不得自行挑选对象并作出违规认定后自动举报。使用本轮研判 basisSource=AgentJudgment、subjectScope、judgment 和 links。" +
         "批量必须为每条链接提供独立 linkJudgments，不能把批次摘要用于每条链接。事由须基于对应链接的已核验证据。" +
+        "举报理由、judgment、linkJudgments[].judgment 及实际提交的平台举报文本不得包含 openclaw 字符串（不区分大小写），不得加入工具名、模型名、内部执行过程或自动生成署名；仅保留已核验事实、证据和举报诉求。" +
+        "links 必须逐字复制用户本轮指定的原始链接，不得凭记忆改写视频 ID 或换成搜索结果、推荐视频；短链只能使用该原始短链真实解析出的目标。研判和举报前核对页面实际内容 ID，不一致则停止并回到原始目标，作废错误目标的结论。" +
         "linkJudgments 必须是对象数组，不能传 JSON 字符串。用户确认仅授权操作，不构成事实证据；" +
         "不得把未查到佐证写成已证伪，不得因用户要求全部举报而将此前正常评价改写为违法事实；无新增证据须保留原研判。视频、正文或通报读取失败须保留为证据缺口，不能补写确定的违规结论。" +
         "可用 complaint_taxonomy 查询本地支持平台；不需要后端 classifications 或 taxonomyVersionId。" +
         "直接平台的 categories 使用核定的实际平台分类文字；抖音直接举报必须为每条链接传 categories，不能省略或用研判理由代替。无法唯一匹配时交由人工核查，不从长篇理由猜选分类。" +
+        `抖音每条实际提交的举报理由最多${DOUYIN_REASON_MAX_LENGTH}字符；将已核验事实、证据和诉求压缩后核对，不得直接传入长篇研判全文，执行器不会自动截断。` +
         "如用户明确选择12377匿名渠道，传 report12377；同样先用本对话 browser 打开页面以交接标签页，再进入官网供本人核对、验证码及手动最终提交，单条理由最多500字符。" +
         "登录或会话未准备好时用 complaint_browser 引导当前用户登录并保存，不能复用其他用户账号。" +
-        "返回 accepted 仅表示本地接收，使用 complaint_task_status({batchId}) 查询平台结果。不要自动重提。" +
+        "返回 accepted 仅表示本地接收，使用 complaint_task_status({batchId}) 查询平台结果。返回 running/pending 时在本轮按合理间隔继续查询，直至最终状态、需人工处理或等待超时；仍在执行时明确说明未确认提交，不得只查一次就称已提交。只有 done 才能称观察到平台成功提示。不要自动重提。" +
         KEEP_COMPLAINT_CHANNEL,
       parameters: Type.Object(
         {
@@ -94,8 +98,7 @@ export function createLocalComplaintSubmitToolFactory(api: OpenClawPluginApi) {
           return jsonResult({
             success: false,
             submitted: false,
-            error:
-              "参数无效：需明确确认、AgentJudgment、主体范围及20至6000字事由；批量逐链接提供 linkJudgments，链接须受支持且不重复。抖音直接举报必须逐链接提供 categories 分类文字，不传后端 classifications。",
+            error: `参数无效：需明确确认、AgentJudgment、主体范围及20至6000字事由；批量逐链接提供 linkJudgments，链接须受支持且不重复。抖音直接举报必须逐链接提供 categories 分类文字，单条理由最多${DOUYIN_REASON_MAX_LENGTH}字符，超长请压缩后核对；不传后端 classifications。`,
           });
         }
         return jsonResult(await submitRecordedLocalComplaint({ api, ctx, userId, items, config }));
