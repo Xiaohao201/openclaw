@@ -16,13 +16,27 @@ export type ComplaintPrepareStep =
   | "wait_report_form"
   | "select_category"
   | "fill_description"
+  | "verify_description"
   | "check_submit";
+export type ComplaintVerification =
+  | { confirmed: true }
+  | { confirmed: false; errorCode: "RECEIPT_UNCONFIRMED"; message: string }
+  | {
+      confirmed: false;
+      errorCode: "FORM_VALIDATION_FAILED";
+      validationError:
+        | "DESCRIPTION_REQUIRED"
+        | "DESCRIPTION_TOO_LONG"
+        | "CATEGORY_REQUIRED"
+        | "OTHER";
+      message: string;
+    };
 export interface ComplaintDriver {
   navigate(): Promise<void>;
   checkLogin(): Promise<boolean>;
   prepare(onStep?: (step: ComplaintPrepareStep) => void): Promise<void>;
   submit(): Promise<void>;
-  verify(): Promise<boolean>;
+  verify(): Promise<boolean | ComplaintVerification>;
   screenshot(): Promise<NonNullable<LocalOutcome["screenshot"]>>;
   release(): Promise<void>;
 }
@@ -32,6 +46,8 @@ export class ComplaintNeedsOperator extends Error {
       | "CATEGORY_REQUIRED"
       | "CAPTCHA_REQUIRED"
       | "MATERIAL_REQUIRED"
+      | "REASON_TOO_LONG"
+      | "DESCRIPTION_WRITE_FAILED"
       | "TARGET_UNAVAILABLE"
       | "BROWSER_HANDOFF_REQUIRED",
     message: string,
@@ -86,15 +102,38 @@ export async function executeNativeComplaint(params: {
     attempted = true;
     await driver.submit();
     checkpoint("verify");
-    confirmed = await driver.verify();
-    const result: LocalOutcome = confirmed
+    const receipt = await driver.verify();
+    // Existing platform adapters may still return a boolean receipt.
+    const verification: ComplaintVerification =
+      typeof receipt === "boolean"
+        ? receipt
+          ? { confirmed: true }
+          : {
+              confirmed: false,
+              errorCode: "RECEIPT_UNCONFIRMED",
+              message: "已尝试提交但未观察到成功提示，请人工核对，勿自动重提。",
+            }
+        : receipt;
+    confirmed = verification.confirmed;
+    const result: LocalOutcome = verification.confirmed
       ? { state: "done", message: "已观察到平台提交成功提示；不代表已受理或处置。", offline: null }
       : {
           state: "unknown",
-          message: "已尝试提交但未观察到成功提示，请人工核对，勿自动重提。",
-          errorCode: "RECEIPT_UNCONFIRMED",
+          message: verification.message,
+          errorCode: verification.errorCode,
           offline: null,
         };
+    params.log({
+      stage: "verify",
+      event: "verification_result",
+      attempted,
+      confirmed,
+      state: result.state,
+      ...(!verification.confirmed ? { errorCode: verification.errorCode } : {}),
+      ...(!verification.confirmed && verification.errorCode === "FORM_VALIDATION_FAILED"
+        ? { validationError: verification.validationError }
+        : {}),
+    });
     try {
       checkpoint("evidence");
       result.screenshot = await driver.screenshot();

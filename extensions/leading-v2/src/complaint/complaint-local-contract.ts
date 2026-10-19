@@ -2,7 +2,10 @@ import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { OpenClawConfig } from "../../api.js";
-import { isUnavailableComplaintLink } from "./complaint-platform-policy.js";
+import {
+  DOUYIN_REASON_MAX_LENGTH,
+  isUnavailableComplaintLink,
+} from "./complaint-platform-policy.js";
 
 // Plugin-owned routing for the native executor.
 export const localPlatforms: Record<string, readonly string[]> = {
@@ -143,6 +146,11 @@ export function parseLocalRequest(input: unknown): LocalComplaintItem[] {
       throw new Error("包含本地执行器不支持的链接，请查询 complaint_taxonomy。");
     }
     const reason = judgments.get(link) ?? value.judgment;
+    if (platform === "douyin" && reason.length > DOUYIN_REASON_MAX_LENGTH) {
+      throw new Error(
+        `抖音单条举报理由不得超过${DOUYIN_REASON_MAX_LENGTH}字符，请压缩后重新核对。`,
+      );
+    }
     if (value.report12377 && (reason.length > 500 || link.length > 500)) {
       throw new Error("12377匿名举报的网址及每条理由均不得超过500字符。");
     }

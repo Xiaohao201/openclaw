@@ -31,6 +31,45 @@ function fixture() {
 }
 
 describe("native complaint state machine", () => {
+  it.each([
+    { confirmed: true },
+    {
+      confirmed: false,
+      errorCode: "FORM_VALIDATION_FAILED",
+      validationError: "DESCRIPTION_REQUIRED",
+      message: "平台提示举报描述未填写。",
+    },
+    { confirmed: false, errorCode: "RECEIPT_UNCONFIRMED", message: "未观察到成功提示。" },
+  ])("records the verification result: $confirmed / $errorCode", async (verification) => {
+    const f = fixture();
+    const log = vi.fn();
+    f.driver.verify.mockResolvedValue(verification);
+    const result = await executeNativeComplaint({
+      acquire: f.acquire,
+      signal: f.controller.signal,
+      timeoutMs: 10000,
+      log,
+    });
+    expect(result).toMatchObject({
+      state: verification.confirmed ? "done" : "unknown",
+      ...(!verification.confirmed
+        ? { errorCode: verification.errorCode, message: verification.message }
+        : {}),
+      screenshot: { fileName: "a".repeat(32) + ".png" },
+    });
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "verify",
+        event: "verification_result",
+        confirmed: verification.confirmed,
+        state: result.state,
+        ...(!verification.confirmed ? { errorCode: verification.errorCode } : {}),
+        ...(verification.validationError ? { validationError: verification.validationError } : {}),
+      }),
+    );
+    expect(f.driver.submit).toHaveBeenCalledOnce();
+    expect(f.driver.release).toHaveBeenCalledOnce();
+  });
   it("logs the failing prepare step without leaking the exception message", async () => {
     const f = fixture();
     const log = vi.fn();
@@ -83,18 +122,19 @@ describe("native complaint state machine", () => {
     expect(log.mock.lastCall?.[0]).toMatchObject({ stage: "submit", attempted: true });
     expect(log.mock.lastCall?.[0]).not.toHaveProperty("step");
   });
-  it("stops before submission when the category requires operator review", async () => {
-    const f = fixture();
-    f.driver.prepare.mockRejectedValue(
-      new ComplaintNeedsOperator("CATEGORY_REQUIRED", "fixture category"),
-    );
-    expect(await f.run()).toMatchObject({
-      state: "manual_required",
-      errorCode: "CATEGORY_REQUIRED",
-    });
-    expect(f.driver.submit).not.toHaveBeenCalled();
-    expect(f.driver.release).toHaveBeenCalledOnce();
-  });
+  it.each(["CATEGORY_REQUIRED", "REASON_TOO_LONG", "DESCRIPTION_WRITE_FAILED"] as const)(
+    "stops before submission on %s",
+    async (code) => {
+      const f = fixture();
+      f.driver.prepare.mockRejectedValue(new ComplaintNeedsOperator(code, "fixture validation"));
+      expect(await f.run()).toMatchObject({
+        state: "manual_required",
+        errorCode: code,
+      });
+      expect(f.driver.submit).not.toHaveBeenCalled();
+      expect(f.driver.release).toHaveBeenCalledOnce();
+    },
+  );
   it("requires a positive receipt, captures evidence, and releases once", async () => {
     const f = fixture();
     expect(await f.run()).toMatchObject({

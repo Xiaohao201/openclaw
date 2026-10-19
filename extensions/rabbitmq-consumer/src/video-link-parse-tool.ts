@@ -240,6 +240,7 @@ export function createVideoLinkParseTool(options: {
       "解析抖音、快手、小红书、视频号、B站、微博等平台的短视频分享链接，返回无水印视频直链、封面、标题、作者和图集。" +
       "视频号 weixin.qq.com/sph/ 短链会自动展开为可解析的 channels.weixin.qq.com 地址。" +
       "收到平台分享链接且需要读取视频时先调用本工具；当 web_fetch 失败、只返回页面外壳或没有取得视频媒体时，应自主调用本工具兜底，无需询问用户。" +
+      "url 必须逐字复制用户本轮提供的原始链接或分享文案，不得凭记忆重写、截短或替换视频 ID，也不得使用推荐视频或历史任务的链接代替。解析失败时仍须保留原始目标；发现浏览器跳转到其他内容 ID 时停止研判并重新核对原始链接。" +
       "如需理解视频口播、字幕或画面，再把返回的 video_url 交给 video_understand。",
     parameters: VideoLinkParseSchema,
     async execute(_toolCallId, rawParams) {
