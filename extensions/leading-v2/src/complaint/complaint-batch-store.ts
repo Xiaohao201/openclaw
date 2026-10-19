@@ -2,23 +2,18 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { complaintRecordingSchema, localOutcomeSchema } from "./complaint-local-contract.js";
 
 const batchIdSchema = z.string().uuid();
 const entrySchema = z.object({
   link: z.string().min(1),
   acceptance: z.enum(["not_attempted", "inflight", "accepted", "rejected", "unknown"]),
   taskId: z.number().int().positive().safe().nullable(),
-  execution: localOutcomeSchema.optional(),
-  recording: complaintRecordingSchema.optional(),
 });
 const batchSchema = z.object({
   version: z.literal(1),
   batchId: batchIdSchema,
   userId: z.string().min(1),
   createdAt: z.string(),
-  executor: z.literal("local").optional(),
-  persistenceError: z.enum(["TASK_RECORD_SYNC_FAILED", "RESULT_RECORD_SYNC_FAILED"]).optional(),
   entries: z.array(entrySchema).min(1).max(1000),
 });
 export type ComplaintBatch = z.infer<typeof batchSchema>;
@@ -26,14 +21,6 @@ export type ComplaintBatch = z.infer<typeof batchSchema>;
 /** A batch has one writer; independent calls use separate files, never a shared latest-task slot. */
 export class ComplaintBatchStore {
   constructor(private readonly stateDir: () => string) {}
-
-  sessionDirectory(userId: string) {
-    return join(
-      this.stateDir(),
-      "leading-v2-complaint-sessions",
-      createHash("sha256").update(userId).digest("hex"),
-    );
-  }
 
   private directory(userId: string) {
     return join(

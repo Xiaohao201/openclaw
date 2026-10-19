@@ -7,8 +7,6 @@ import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
 import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
-import { resolveLocalConfig } from "./complaint-local-contract.js";
-import { queryLocalBatch } from "./complaint-local.js";
 
 const DEFAULT_PAGE_SIZE = 5;
 const MAX_PAGE_SIZE = 20;
@@ -286,7 +284,6 @@ export function createComplaintTaskStatusToolFactory(
       name: "complaint_task_status",
       label: "查询举报任务状态",
       description:
-        "本地举报按 batchId 查询，无需后端 API Key；本地模式省略参数时列出保存的批次。历史后端任务仍可用 taskId 查询。" +
         "优先传 complaint_submit 返回的 batchId，按当前用户保存的精确任务 ID 一次汇总整批链接；忘记批次 ID 时用 listBatches=true 查本用户批次。" +
         "只读查询当前账号可见的一键举报任务。省略 taskId 时列出最近任务及真实进度；" +
         "传入 taskId 时返回每条链接的举报提交状态、失败原因和下架复检结果。" +
@@ -307,12 +304,12 @@ export function createComplaintTaskStatusToolFactory(
             error: "batchId、listBatches、taskId 只能选择一种查询方式。",
           });
         }
-        if (
-          rawParams.batchId !== undefined ||
-          rawParams.listBatches === true ||
-          (rawParams.taskId === undefined &&
-            resolveLocalConfig(api.pluginConfig ?? {}).mode === "local")
-        ) {
+        const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_task_status");
+        if ("error" in keyed) {
+          return keyed.error;
+        }
+
+        if (rawParams.batchId !== undefined || rawParams.listBatches === true) {
           const store = new ComplaintBatchStore(() => api.runtime.state.resolveStateDir());
           try {
             if (rawParams.batchId !== undefined) {
@@ -325,13 +322,6 @@ export function createComplaintTaskStatusToolFactory(
                   success: false,
                   error: "未找到当前用户的举报批次，请核对 batchId 或使用 listBatches 查询。",
                 });
-              }
-              if (batch.executor === "local") {
-                return jsonResult(queryLocalBatch(batch));
-              }
-              const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_task_status");
-              if ("error" in keyed) {
-                return keyed.error;
               }
               return jsonResult(await queryBatch(batch, config, keyed.apiKey));
             }
@@ -365,38 +355,6 @@ export function createComplaintTaskStatusToolFactory(
               error: "无法读取举报批次记录，请联系管理员检查存储；不要推断举报状态或重新提交。",
             });
           }
-        }
-
-        // Local audit tasks have no legacy queue/detail rows. Resolve their numeric IDs
-        // through the owning user's batch before falling back to historical backend tasks.
-        if (
-          rawParams.taskId !== undefined &&
-          resolveLocalConfig(api.pluginConfig ?? {}).mode === "local"
-        ) {
-          const taskId = Number(rawParams.taskId);
-          if (!Number.isSafeInteger(taskId) || taskId <= 0) {
-            return jsonResult({ success: false, error: "taskId 必须是大于 0 的整数。" });
-          }
-          try {
-            const store = new ComplaintBatchStore(() => api.runtime.state.resolveStateDir());
-            const batch = (await store.list(userId)).find(
-              (candidate) =>
-                candidate.executor === "local" &&
-                candidate.entries.some((entry) => entry.taskId === taskId),
-            );
-            if (batch) {
-              return jsonResult(queryLocalBatch(batch));
-            }
-          } catch {
-            return jsonResult({
-              success: false,
-              error: "无法读取本地任务记录，不得推断提交结果或重新提交。",
-            });
-          }
-        }
-        const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_task_status");
-        if ("error" in keyed) {
-          return keyed.error;
         }
 
         if (rawParams.taskId !== undefined) {

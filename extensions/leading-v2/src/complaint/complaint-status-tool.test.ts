@@ -31,10 +31,7 @@ vi.mock("../client/http-client.js", () => {
 const { createComplaintTaskStatusToolFactory } = await import("./complaint-status-tool.js");
 
 const fakeApi = {
-  pluginConfig: {
-    complaintExecution: { mode: "backend" },
-    backend: { baseUrl: "https://v2.businesstimescn.com" },
-  },
+  pluginConfig: { backend: { baseUrl: "https://v2.businesstimescn.com" } },
   logger: { info() {}, warn() {}, error() {}, debug() {} },
 } as unknown as OpenClawPluginApi;
 

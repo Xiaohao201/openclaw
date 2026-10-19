@@ -5,11 +5,6 @@ import { envelopeError } from "../client/envelope.js";
 import { getJson, resolveConfig } from "../client/http-client.js";
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
-import { localPlatforms, platformForLink, resolveLocalConfig } from "./complaint-local-contract.js";
-import {
-  isUnavailableComplaintLink,
-  isUnavailableComplaintPlatform,
-} from "./complaint-platform-policy.js";
 
 export function createComplaintTaxonomyToolFactory(
   api: OpenClawPluginApi,
@@ -49,17 +44,6 @@ export function createComplaintTaxonomyToolFactory(
           });
         }
         const links = params.links as string[] | undefined;
-        if (resolveLocalConfig(api.pluginConfig ?? {}).mode === "local") {
-          return jsonResult({
-            success: true,
-            executor: "local",
-            platforms: Object.keys(localPlatforms).toSorted(),
-            links: (links ?? []).map((link) => ({ link, platform: platformForLink(link) })),
-            unsupportedLinks: (links ?? []).filter((link) => !platformForLink(link)),
-            instruction:
-              "本地模式从浏览器实际选项匹配单条举报事由，无后端分类版本。可传 categories 平台分类文字，不传 classifications。支持平台不保证当前页面可执行；登录/验证可能需人工处理。原平台登录、浏览器或取证失败时不得推荐或切换举报渠道。12377不属于原平台目录，仅在用户明确指定时使用独立人工流程。unsupportedLinks 仅指原平台直接举报路径。",
-          });
-        }
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_taxonomy");
         if ("error" in keyed) {
           return keyed.error;
@@ -89,31 +73,9 @@ export function createComplaintTaxonomyToolFactory(
           }
           return jsonResult({
             success: true,
-            ...(!links?.length
-              ? {
-                  platforms: (result.platforms as unknown[]).filter(
-                    (entry) => !isUnavailableComplaintPlatform(entry),
-                  ),
-                }
-              : {}),
-            taxonomies: result.taxonomies.filter((entry: unknown) => {
-              if (isUnavailableComplaintPlatform(entry)) {
-                return false;
-              }
-              return !(
-                entry &&
-                typeof entry === "object" &&
-                "link" in entry &&
-                typeof entry.link === "string" &&
-                isUnavailableComplaintLink(entry.link)
-              );
-            }),
-            unsupportedLinks: [
-              ...new Set([
-                ...result.unsupportedLinks,
-                ...(links ?? []).filter(isUnavailableComplaintLink),
-              ]),
-            ],
+            ...(!links?.length ? { platforms: result.platforms } : {}),
+            taxonomies: result.taxonomies,
+            unsupportedLinks: result.unsupportedLinks,
           });
         } catch (error) {
           return failure(api, "complaint_taxonomy", userId, error);

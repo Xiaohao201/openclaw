@@ -8,9 +8,6 @@ import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
 import { ComplaintBatchStore } from "../complaint/complaint-batch-store.js";
 import { submitComplaintBatch } from "../complaint/complaint-batch-submit.js";
-import { resolveLocalConfig } from "../complaint/complaint-local-contract.js";
-import { createLocalComplaintSubmitToolFactory } from "../complaint/complaint-local-tool.js";
-import { isUnavailableComplaintLink } from "../complaint/complaint-platform-policy.js";
 import {
   DEFAULT_WORKSPACE,
   JOB_STATUS_LABELS,
@@ -447,9 +444,6 @@ export function createLetterFetchToolFactory(api: OpenClawPluginApi, resolver: A
 }
 
 export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolver: ApiKeyResolver) {
-  if (resolveLocalConfig(api.pluginConfig ?? {}).mode === "local") {
-    return createLocalComplaintSubmitToolFactory(api);
-  }
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
 
   return (ctx: { agentId?: string }) => {
@@ -504,15 +498,6 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           : [];
         const jobLink = asString(job?.link);
         const links = provided.length > 0 ? provided : jobLink ? [jobLink] : [];
-        const unsupportedLinks = links.filter(isUnavailableComplaintLink);
-        if (unsupportedLinks.length > 0) {
-          return jsonResult({
-            success: false,
-            submitted: false,
-            unsupportedLinks,
-            error: "同花顺、雪球和微信不支持直接举报，请从本批次移除这些链接。",
-          });
-        }
         if (links.length > 1000 || new Set(links).size !== links.length) {
           return jsonResult({
             success: false,

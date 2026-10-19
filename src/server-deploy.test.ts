@@ -25,11 +25,6 @@ async function createSandbox(): Promise<Sandbox> {
   await writeFile(logPath, "");
   const launcher = join(root, "deploy-server.cmd");
   await writeFile(launcher, await readFile(join(repoRoot, "deploy-server.cmd")));
-  for (const tree of ["dist", "dist-runtime"]) {
-    const plugin = join(root, tree, "extensions", "leading-v2");
-    await mkdir(plugin, { recursive: true });
-    await writeFile(join(plugin, "openclaw.plugin.json"), "{}");
-  }
   await writeFile(
     join(binDir, "git.cmd"),
     [
@@ -52,25 +47,10 @@ async function createSandbox(): Promise<Sandbox> {
       "",
     ].join("\r\n"),
   );
-  for (const command of ["node", "python"]) {
-    await writeFile(
-      join(binDir, `${command}.cmd`),
-      [
-        "@echo off",
-        `echo %CD%^|${command} %*>>"%DEPLOY_TEST_LOG%"`,
-        `if "%DEPLOY_TEST_FAIL_COMMAND%"=="${command}" exit /b 25`,
-        "exit /b 0",
-        "",
-      ].join("\r\n"),
-    );
-  }
   return { binDir, logPath, runDir, launcher };
 }
 
-function runDeploy(
-  sandbox: Sandbox,
-  failCommand?: "pull" | "install" | "build" | "ui" | "node" | "python",
-) {
+function runDeploy(sandbox: Sandbox, failCommand?: "pull" | "install" | "build" | "ui") {
   return spawnSync("cmd.exe", ["/d", "/c", sandbox.launcher], {
     cwd: sandbox.runDir,
     env: {
@@ -105,7 +85,7 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     await writeFile(sandbox.logPath, "");
   });
 
-  it("verifies native assets for source and built plugins before restarting the gateway", async () => {
+  it("builds the backend and UI before restarting the gateway", async () => {
     const result = runDeploy(sandbox);
     expect(result.status, result.stderr).toBe(0);
     expect(await readCommands(sandbox)).toEqual([
@@ -113,9 +93,6 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
       "install",
       "build",
       "ui:build",
-      "node extensions\\leading-v2\\check-runtime.mjs extensions\\leading-v2",
-      "node extensions\\leading-v2\\check-runtime.mjs dist\\extensions\\leading-v2",
-      "node extensions\\leading-v2\\check-runtime.mjs dist-runtime\\extensions\\leading-v2",
       "openclaw gateway restart",
     ]);
   });
@@ -127,21 +104,11 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
     expect(await readCommands(sandbox)).toEqual(["pull origin v1", "install", "build"]);
   });
 
-  it.each(["node"] as const)(
-    "does not restart the gateway after %s runtime preparation fails",
-    async (command) => {
-      const result = runDeploy(sandbox, command);
-      expect(result.status).toBe(25);
-      const commands = await readCommands(sandbox);
-      expect(commands.at(-1)).toMatch(new RegExp(`^${command} `));
-      expect(commands).not.toContain("openclaw gateway restart");
-    },
-  );
-
   it("uses UTF-8 and invokes pnpm directly instead of a managed-service script", async () => {
     const launcher = await readFile(join(repoRoot, "deploy-server.cmd"), "utf8");
     expect(launcher).toMatch(/chcp\s+65001\s*>nul/iu);
-    expect(launcher).not.toContain("python");
+    expect(launcher).not.toContain("setup_runtime.py");
+    expect(launcher).not.toContain("stage-python.mjs");
     expect(launcher).not.toContain("server-deploy.ps1");
     expect(launcher).toContain("call pnpm openclaw gateway restart");
     expect(launcher).not.toContain("playwright install chromium");

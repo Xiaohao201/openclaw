@@ -19,20 +19,6 @@ echo [openclaw-deploy] Building the Control UI.
 call pnpm ui:build
 if errorlevel 1 goto :failed
 
-echo [openclaw-deploy] Verifying native complaint assets.
-call node extensions\leading-v2\check-runtime.mjs extensions\leading-v2
-if errorlevel 1 goto :failed
-
-if exist "dist\extensions\leading-v2\openclaw.plugin.json" (
-  call node extensions\leading-v2\check-runtime.mjs dist\extensions\leading-v2
-  if errorlevel 1 goto :failed
-)
-
-if exist "dist-runtime\extensions\leading-v2\openclaw.plugin.json" (
-  call node extensions\leading-v2\check-runtime.mjs dist-runtime\extensions\leading-v2
-  if errorlevel 1 goto :failed
-)
-
 echo [openclaw-deploy] Restarting the Gateway.
 call pnpm openclaw gateway restart
 if errorlevel 1 goto :failed

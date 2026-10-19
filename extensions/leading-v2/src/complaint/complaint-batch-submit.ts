@@ -2,9 +2,6 @@ import { asString, envelopeError } from "../client/envelope.js";
 import { postForm, type FieldValue } from "../client/http-client.js";
 import type { BackendConfig } from "../client/types.js";
 import { ComplaintBatchStore, type ComplaintBatch } from "./complaint-batch-store.js";
-import type { LocalComplaintItem, LocalConfig } from "./complaint-local-contract.js";
-import { submitLocalBatch } from "./complaint-local.js";
-import type { BrowserHandoff } from "./complaint-session-handoff.js";
 
 export function batchReferences(batch: ComplaintBatch) {
   return {
@@ -14,25 +11,14 @@ export function batchReferences(batch: ComplaintBatch) {
 }
 
 /** Persist before and after each request so interruptions never imply safe automatic retries. */
-export async function submitComplaintBatch(
-  params:
-    | {
-        store: ComplaintBatchStore;
-        userId: string;
-        config: BackendConfig;
-        apiKey: string;
-        links: string[];
-        requests: Array<{ links: string[]; fields: Record<string, FieldValue> }>;
-      }
-    | {
-        store: ComplaintBatchStore;
-        userId: string;
-        local: { items: LocalComplaintItem[]; config: LocalConfig; browserLease?: { handoff: BrowserHandoff; release: () => void } };
-      },
-) {
-  if ("local" in params) {
-    return submitLocalBatch({ store: params.store, userId: params.userId, ...params.local });
-  }
+export async function submitComplaintBatch(params: {
+  store: ComplaintBatchStore;
+  userId: string;
+  config: BackendConfig;
+  apiKey: string;
+  links: string[];
+  requests: Array<{ links: string[]; fields: Record<string, FieldValue> }>;
+}) {
   let batch: ComplaintBatch;
   try {
     batch = await params.store.create(params.userId, params.links);

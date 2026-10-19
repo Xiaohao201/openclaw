@@ -14,15 +14,8 @@ import { closePool } from "./src/client/db-client.js";
 import { resolveConfig } from "./src/client/http-client.js";
 import { ApiKeyResolver } from "./src/client/key-resolver.js";
 import { RecentTaskStore } from "./src/client/recent-tasks.js";
-import {
-  createComplaintBrowserToolFactory,
-  stopComplaintBrowserSessions,
-} from "./src/complaint/complaint-browser-tool.js";
-import { stopLocalComplaints } from "./src/complaint/complaint-local.js";
-import { registerComplaintBrowserHandoff } from "./src/complaint/complaint-session-handoff.js";
 import { createComplaintTaskStatusToolFactory } from "./src/complaint/complaint-status-tool.js";
 import { createComplaintTaxonomyToolFactory } from "./src/complaint/complaint-taxonomy-tool.js";
-import { registerPhonePreflight } from "./src/complaint/phone/preflight-cli.js";
 import {
   createCrawlRefreshCreateToolFactory,
   createCrawlRefreshListToolFactory,
@@ -78,8 +71,6 @@ export default definePluginEntry({
     "confirmed SMTP email. Tools are scoped to rabbitmq-<userId> agents; per-uid keys are resolved " +
     "(and auto-provisioned) from the api_key table.",
   register(api: OpenClawPluginApi) {
-    registerPhonePreflight(api);
-    registerComplaintBrowserHandoff(api);
     const config = resolveConfig(api.pluginConfig ?? {});
     // One shared resolver for the whole backend: each uid is minted/cached once.
     const resolver = new ApiKeyResolver(config.apiKeys, config.db);
@@ -127,7 +118,6 @@ export default definePluginEntry({
       name: "complaint_taxonomy",
     });
     api.registerTool(createComplaintSubmitToolFactory(api, resolver), { name: "complaint_submit" });
-    api.registerTool(createComplaintBrowserToolFactory(api), { name: "complaint_browser" });
     api.registerTool(createComplaintTaskStatusToolFactory(api, resolver), {
       name: "complaint_task_status",
     });
@@ -336,8 +326,6 @@ export default definePluginEntry({
         }
       },
       async stop(ctx) {
-        await stopLocalComplaints();
-        await stopComplaintBrowserSessions();
         clearNotifyEnqueue();
         notifier?.stop();
         scheduler?.stop();

@@ -45,7 +45,7 @@ function params(count: number) {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "complaint-batch-"));
   api = {
-    pluginConfig: { complaintExecution: { mode: "backend" } },
+    pluginConfig: {},
     runtime: { state: { resolveStateDir: () => root } },
     logger: { info() {}, warn() {}, error() {}, debug() {} },
   } as unknown as OpenClawPluginApi;
