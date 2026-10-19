@@ -1,4 +1,5 @@
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import { withDbRetry } from "./db-retry.js";
 import type { MySqlConfig } from "./types.js";
 
@@ -6,22 +7,12 @@ let pool: mysql.Pool | null = null;
 
 function getPool(config: MySqlConfig): mysql.Pool {
   if (!pool) {
-    pool = mysql.createPool({
+    pool = acquireMysqlPool({
       host: config.host,
       port: config.port,
       user: config.user,
       password: config.password,
       database: config.database,
-      connectionLimit: 2,
-      waitForConnections: true,
-      charset: "utf8mb4",
-      timezone: "+08:00",
-      // --- resilience to frequent MySQL restarts ---
-      enableKeepAlive: true, // detect dead sockets early
-      keepAliveInitialDelay: 10_000,
-      connectTimeout: 10_000,
-      maxIdle: 2, // evict idle connections...
-      idleTimeout: 60_000, // ...so a post-restart stale conn is never reused
     });
   }
   return pool;

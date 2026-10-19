@@ -1,20 +1,17 @@
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type { MySqlConfig } from "./types.js";
 
 let pool: mysql.Pool | null = null;
 
 function getPool(config: MySqlConfig): mysql.Pool {
   if (!pool) {
-    pool = mysql.createPool({
+    pool = acquireMysqlPool({
       host: config.host,
       port: config.port,
       user: config.user,
       password: config.password,
       database: config.database,
-      connectionLimit: 2,
-      waitForConnections: true,
-      charset: "utf8mb4",
-      timezone: "+08:00",
     });
   }
   return pool;

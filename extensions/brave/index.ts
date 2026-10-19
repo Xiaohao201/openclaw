@@ -7,5 +7,14 @@ export default definePluginEntry({
   description: "Bundled Brave plugin",
   register(api) {
     api.registerWebSearchProvider(createBraveWebSearchProvider());
+    api.registerService({
+      id: "brave-search-cache",
+      start() {},
+      async stop() {
+        const { closeBraveSearchCachePools } =
+          await import("./src/brave-web-search-cache.runtime.js");
+        await closeBraveSearchCachePools();
+      },
+    });
   },
 });

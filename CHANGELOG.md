@@ -80,6 +80,8 @@ Docs: https://docs.openclaw.ai
 - Browser/command guidance: use `pnpm openclaw` in browser recovery hints, CLI examples, and browser docs so source deployments run the current checkout.
 - CLI/startup: reuse unchanged plugin runtime artifacts across source-checkout commands instead of recreating them on every invocation; invalidate the cache after input changes or missing outputs and surface output-log failures reliably.
 
+- MySQL: use unified deployment credentials and share connection pools across plugins, with configurable maximum connections, minimum idle connections, idle eviction, bounded waiting queues, and reference-counted shutdown.
+
 ## 2026.4.15
 
 ### Changes

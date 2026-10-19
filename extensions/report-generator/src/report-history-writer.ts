@@ -55,7 +55,7 @@ export class ReportHistoryWriter {
 
   private getPool(): mysql.Pool {
     if (!this.pool) {
-      this.pool = createHistoryPool(this.config, 2);
+      this.pool = createHistoryPool(this.config);
     }
     return this.pool;
   }

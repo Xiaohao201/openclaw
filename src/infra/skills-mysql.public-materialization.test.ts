@@ -61,3 +61,11 @@ it("materializes new public skills without a bundled folder and preserves prompt
     clock.mockRestore();
   }
 });
+
+// Pool policy and cross-owner lifecycle are covered by the shared pool tests.
+vi.mock("./mysql-pool.js", async () => {
+  const { default: mysql } = await import("mysql2/promise");
+  return {
+    acquireMysqlPool: (config: import("mysql2/promise").PoolOptions) => mysql.createPool(config),
+  };
+});

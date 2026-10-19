@@ -141,19 +141,10 @@ describe("HistoryManager.updateMetadata", () => {
     vi.clearAllMocks();
   });
 
-  it("recycles idle connections before reusing a stale socket", async () => {
+  it("acquires a shared pool for the configured database", async () => {
     mockExecute.mockResolvedValue([[], undefined]);
     await manager.updateMetadata(42, { steps: [] });
-    expect(mysql.createPool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connectionLimit: 3,
-        maxIdle: 2,
-        idleTimeout: 60_000,
-        enableKeepAlive: true,
-        keepAliveInitialDelay: 10_000,
-        connectTimeout: 10_000,
-      }),
-    );
+    expect(mysql.createPool).toHaveBeenCalledWith(DB_CONFIG);
   });
 
   it("updates only supplied JSON fields in one atomic statement with bound values", async () => {
@@ -604,4 +595,12 @@ describe("HistoryManager test-table isolation", () => {
       expect(mockExecute).not.toHaveBeenCalled();
     },
   );
+});
+
+// Pool policy and cross-owner lifecycle are covered by the shared pool tests.
+vi.mock("openclaw/plugin-sdk/mysql-pool", async () => {
+  const { default: mysql } = await import("mysql2/promise");
+  return {
+    acquireMysqlPool: (config: import("mysql2/promise").PoolOptions) => mysql.createPool(config),
+  };
 });

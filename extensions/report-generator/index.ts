@@ -27,12 +27,11 @@ function resolveConfig(pluginConfig: Record<string, unknown>): ReportGeneratorCo
 
   return {
     historyDb: {
-      host: (historyDb?.host as string) ?? process.env.HISTORY_MYSQL_HOST ?? "127.0.0.1",
-      port: Number(historyDb?.port ?? process.env.HISTORY_MYSQL_PORT ?? 3306),
-      user: (historyDb?.user as string) ?? process.env.HISTORY_MYSQL_USER ?? "",
-      password: (historyDb?.password as string) ?? process.env.HISTORY_MYSQL_PASSWORD ?? "",
-      database:
-        (historyDb?.database as string) ?? process.env.HISTORY_MYSQL_DATABASE ?? "superworker",
+      host: (historyDb?.host as string) ?? process.env.MYSQL_HOST ?? "127.0.0.1",
+      port: Number(historyDb?.port ?? process.env.MYSQL_PORT ?? 3306),
+      user: (historyDb?.user as string) ?? process.env.MYSQL_USER ?? "",
+      password: (historyDb?.password as string) ?? process.env.MYSQL_PASSWORD ?? "",
+      database: (historyDb?.database as string) ?? process.env.MYSQL_DATABASE ?? "superworker",
     },
     mercure: {
       hubUrl: (mercure?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "",
@@ -408,7 +407,7 @@ export default definePluginEntry({
                   );
                   logger.info("[REPORT_GENERATOR] Subscriber email sent");
                 }
-              } catch (emailError) {
+              } catch {
                 logger.error("[REPORT_GENERATOR] Email delivery failed");
                 // Don't fail the task if email fails - report was already generated
               }

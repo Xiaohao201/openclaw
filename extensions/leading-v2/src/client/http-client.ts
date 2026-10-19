@@ -30,14 +30,13 @@ export function resolveConfig(pluginConfig: Record<string, unknown>): BackendCon
 
   const dbBlock = block?.db as Record<string, unknown> | undefined;
   const db: MySqlConfig | undefined =
-    dbBlock || process.env.WRITER_MYSQL_HOST
+    dbBlock || process.env.MYSQL_HOST
       ? {
-          host: (dbBlock?.host as string) ?? process.env.WRITER_MYSQL_HOST ?? "127.0.0.1",
-          port: Number(dbBlock?.port ?? process.env.WRITER_MYSQL_PORT ?? 3306),
-          user: (dbBlock?.user as string) ?? process.env.WRITER_MYSQL_USER ?? "",
-          password: (dbBlock?.password as string) ?? process.env.WRITER_MYSQL_PASSWORD ?? "",
-          database:
-            (dbBlock?.database as string) ?? process.env.WRITER_MYSQL_DATABASE ?? "superworker",
+          host: (dbBlock?.host as string) ?? process.env.MYSQL_HOST ?? "127.0.0.1",
+          port: Number(dbBlock?.port ?? process.env.MYSQL_PORT ?? 3306),
+          user: (dbBlock?.user as string) ?? process.env.MYSQL_USER ?? "",
+          password: (dbBlock?.password as string) ?? process.env.MYSQL_PASSWORD ?? "",
+          database: (dbBlock?.database as string) ?? process.env.MYSQL_DATABASE ?? "superworker",
         }
       : undefined;
 

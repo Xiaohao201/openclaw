@@ -1,4 +1,5 @@
-import mysql from "mysql2/promise";
+import type mysql from "mysql2/promise";
+import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type { MySqlConfig } from "./types.js";
 
 let pool: mysql.Pool | null = null;
@@ -11,30 +12,26 @@ export function resolveConfig(pluginConfig: Record<string, unknown>): MySqlConfi
   const mysqlCfg = pluginConfig.mysql as Record<string, unknown> | undefined;
 
   return {
-    host: (mysqlCfg?.host as string) ?? process.env.FEED_MYSQL_HOST ?? "127.0.0.1",
-    port: Number(mysqlCfg?.port ?? process.env.FEED_MYSQL_PORT ?? 3306),
-    user: (mysqlCfg?.user as string) ?? process.env.FEED_MYSQL_USER ?? "",
-    password: (mysqlCfg?.password as string) ?? process.env.FEED_MYSQL_PASSWORD ?? "",
-    database: (mysqlCfg?.database as string) ?? process.env.FEED_MYSQL_DATABASE ?? "superworker",
+    host: (mysqlCfg?.host as string) ?? process.env.MYSQL_HOST ?? "127.0.0.1",
+    port: Number(mysqlCfg?.port ?? process.env.MYSQL_PORT ?? 3306),
+    user: (mysqlCfg?.user as string) ?? process.env.MYSQL_USER ?? "",
+    password: (mysqlCfg?.password as string) ?? process.env.MYSQL_PASSWORD ?? "",
+    database: (mysqlCfg?.database as string) ?? process.env.MYSQL_DATABASE ?? "superworker",
   };
 }
 
-/** Get or create the MySQL connection pool (read-only, connectionLimit=3). */
+/** Get or create the MySQL connection pool (read-only, configurable connection limit). */
 export function getPool(config: MySqlConfig): mysql.Pool {
   if (pool) {
     return pool;
   }
 
-  pool = mysql.createPool({
+  pool = acquireMysqlPool({
     host: config.host,
     port: config.port,
     user: config.user,
     password: config.password,
     database: config.database,
-    connectionLimit: 3,
-    waitForConnections: true,
-    charset: "utf8mb4",
-    timezone: "+08:00",
   });
 
   return pool;

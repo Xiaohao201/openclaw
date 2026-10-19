@@ -52,3 +52,11 @@ it("retains custom skill renaming and checks ownership", async () => {
     .mockResolvedValueOnce([[{ ...row, user_id: 999, category: null, name: "中文" }]]);
   expect((await updateSkill(312, { name: "中文" }, 999))?.name).toBe("中文");
 });
+
+// Pool policy and cross-owner lifecycle are covered by the shared pool tests.
+vi.mock("./mysql-pool.js", async () => {
+  const { default: mysql } = await import("mysql2/promise");
+  return {
+    acquireMysqlPool: (config: import("mysql2/promise").PoolOptions) => mysql.createPool(config),
+  };
+});

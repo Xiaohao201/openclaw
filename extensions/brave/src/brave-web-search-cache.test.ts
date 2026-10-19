@@ -41,11 +41,11 @@ describe("Brave web-search MySQL cache", () => {
       resolveBraveSearchCacheDbConfig(
         {},
         {
-          HISTORY_MYSQL_HOST: "history-db",
-          HISTORY_MYSQL_PORT: "3308",
-          HISTORY_MYSQL_USER: "history-user",
-          HISTORY_MYSQL_PASSWORD: "history-password",
-          HISTORY_MYSQL_DATABASE: "history-db-name",
+          MYSQL_HOST: "history-db",
+          MYSQL_PORT: "3308",
+          MYSQL_USER: "history-user",
+          MYSQL_PASSWORD: "history-password",
+          MYSQL_DATABASE: "history-db-name",
         },
       ),
     ).toEqual({
@@ -63,9 +63,9 @@ describe("Brave web-search MySQL cache", () => {
       resolveBraveSearchCacheDbConfig(
         { cacheDb: { enabled: false } },
         {
-          HISTORY_MYSQL_HOST: "history-db",
-          HISTORY_MYSQL_USER: "history-user",
-          HISTORY_MYSQL_PASSWORD: "history-password",
+          MYSQL_HOST: "history-db",
+          MYSQL_USER: "history-user",
+          MYSQL_PASSWORD: "history-password",
         },
       ),
     ).toBeUndefined();
