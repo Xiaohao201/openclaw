@@ -37,6 +37,8 @@ export type SubagentWaitParams = {
 
 export type SubagentWaitResult = {
   status: "ok" | "error" | "timeout";
+  /** Present for a terminal run, including a run that ended by timeout. */
+  endedAt?: number;
   error?: string;
 };
 

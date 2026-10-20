@@ -85,6 +85,7 @@ function createRuntimeMock(options: {
   onWaitArgs?: (args: { runId: string; timeoutMs: number }) => void;
   /** Override the run outcome to exercise the timeout/error exit paths. */
   waitStatus?: "ok" | "timeout" | "error";
+  waitEndedAt?: number;
   /** Sequence multiple wait windows without treating an elapsed window as a run failure. */
   waitStatuses?: Array<"ok" | "timeout" | "error">;
 }): PluginRuntime {
@@ -110,6 +111,7 @@ function createRuntimeMock(options: {
         await options.onWait?.(listener);
         return {
           status: options.waitStatuses?.[waitIndex++] ?? options.waitStatus ?? ("ok" as const),
+          ...(options.waitEndedAt !== undefined ? { endedAt: options.waitEndedAt } : {}),
         };
       },
       getSessionMessages: async () => ({ messages: options.sessionMessages ?? [] }),
@@ -322,6 +324,7 @@ describe("processChatMessage", () => {
         })
         .mockReturnValue(true);
       let waits = 0;
+      const waitTimes: number[] = [];
       let release: () => void = () => {};
       const terminal = new Promise<void>((resolve) => {
         release = resolve;
@@ -334,6 +337,7 @@ describe("processChatMessage", () => {
         onWaitArgs: ({ timeoutMs }) => expect(timeoutMs).toBeLessThanOrEqual(2_000),
         onWait: async () => {
           waits++;
+          waitTimes.push(Date.now());
           if (waits === 1) {
             controller.abort();
           } else {
@@ -358,7 +362,8 @@ describe("processChatMessage", () => {
         { abortSignal: controller.signal, abortRun },
       );
       try {
-        await vi.waitFor(() => expect(waits).toBe(2));
+        await vi.waitFor(() => expect(waits).toBe(2), { timeout: 4_000 });
+        expect(waitTimes[1] - waitTimes[0]).toBeGreaterThanOrEqual(1_900);
         expect(abortRun).toHaveBeenCalledTimes(2);
         expect(updateResponse).not.toHaveBeenCalled();
         expect(
@@ -379,6 +384,48 @@ describe("processChatMessage", () => {
       expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("Cancellation confirmed"));
     },
   );
+
+  it("confirms cancellation for a cached terminal timeout instead of retrying a finished run", async () => {
+    const controller = new AbortController();
+    const abortRun = vi.fn(() => false);
+    let waits = 0;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      waitStatus: "timeout",
+      waitEndedAt: 1234,
+      onWait: () => {
+        waits++;
+        if (waits > 1) {
+          throw new Error("terminal timeout was polled again");
+        }
+        controller.abort();
+      },
+    });
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { abortSignal: controller.signal, abortRun },
+    );
+    expect(waits).toBe(1);
+    expect(updateMetadata).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ cancellationStatus: "cancelled" }),
+      expect.anything(),
+    );
+  });
 
   it("persists cancellation without starting an already cancelled turn", async () => {
     const controller = new AbortController();

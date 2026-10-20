@@ -1377,6 +1377,7 @@ export async function processChatMessage(
       // confirmation is observed promptly, without abandoning the running task.
       const waitWindowMs = options?.abortSignal ? Math.min(turnTimeoutMs, 2_000) : turnTimeoutMs;
       while (true) {
+        const pollStartedAt = Date.now();
         if (options?.abortSignal?.aborted) {
           await abortActiveRun();
         }
@@ -1385,7 +1386,11 @@ export async function processChatMessage(
           runId: runResult.runId,
           timeoutMs: waitWindowMs,
         });
-        runSettled = waitResult.status !== "timeout";
+        // Gateway caches terminal timeouts too. Only a timeout without endedAt
+        // means the run is still pending; retrying a terminal timeout spins forever.
+        runSettled =
+          waitResult.status !== "timeout" ||
+          (typeof waitResult.endedAt === "number" && Number.isFinite(waitResult.endedAt));
         if (options?.abortSignal?.aborted && runSettled) {
           const pendingAbort = abortActiveRun();
           if (pendingAbort) {
@@ -1405,13 +1410,21 @@ export async function processChatMessage(
           logger.info(`[CHAT_PIPELINE] Cancelled: historyId=${chatMsg.historyId}`);
           return stopped;
         }
-        if (waitResult.status !== "timeout") {
+        if (runSettled) {
           break;
         }
         // Drain this attempt before the next polling window so an earlier
         // failure cannot occupy the guard and suppress the next real retry.
         if (options?.abortSignal?.aborted && abortRunPromise) {
           await abortRunPromise;
+        }
+        // Never rely on the RPC to sleep: cached/early timeout responses may
+        // return immediately. Yield to the event loop before another attempt.
+        if (options?.abortSignal) {
+          const remainingMs = Math.max(0, waitWindowMs - (Date.now() - pollStartedAt));
+          if (remainingMs > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, remainingMs));
+          }
         }
         elapsedWaitMs += waitWindowMs;
         if (elapsedWaitMs % turnTimeoutMs < waitWindowMs) {
@@ -1422,7 +1435,7 @@ export async function processChatMessage(
         }
       }
 
-      if (waitResult.status === "error") {
+      if (waitResult.status === "error" || waitResult.status === "timeout") {
         logger.error(`[CHAT_PIPELINE] Subagent error: ${waitResult.error}`);
         const notification = notifyFailure("本次任务执行失败，请稍后重试。");
         // Persist the timeline with unfinished steps marked failed, so the

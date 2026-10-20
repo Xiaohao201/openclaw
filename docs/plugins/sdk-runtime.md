@@ -106,6 +106,8 @@ const { runId } = await api.runtime.subagent.run({
 
 // Wait for completion
 const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs: 30000 });
+// A timeout with endedAt is a finished run that timed out, not an unfinished wait.
+const finished = result.status !== "timeout" || result.endedAt !== undefined;
 
 // Read session messages
 const { messages } = await api.runtime.subagent.getSessionMessages({
