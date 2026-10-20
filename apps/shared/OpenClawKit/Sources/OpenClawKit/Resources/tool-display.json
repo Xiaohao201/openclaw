@@ -709,6 +709,14 @@
         "name"
       ]
     },
+    "skill_resource_get": {
+      "emoji": "📋",
+      "title": "Read skill attachment",
+      "detailKeys": [
+        "name",
+        "path"
+      ]
+    },
     "skill_list": {
       "emoji": "📋",
       "title": "List skills",

@@ -471,6 +471,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Read skill",
       detailKeys: ["name"],
     },
+    skill_resource_get: {
+      emoji: "📋",
+      title: "Read skill attachment",
+      detailKeys: ["name", "path"],
+    },
     skill_list: {
       emoji: "📋",
       title: "List skills",

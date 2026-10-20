@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 - Phone Reader: add a `phone_read` plugin tool for reading inaccessible web links through an authorized Android phone, with Xiaohongshu note routing, configurable app routes, device locking, bounded reads, and explicit current-screen limitations.
 - Phone Reader: capture bounded screenshots and numbered image galleries for the image tool, with responsive cropping, page verification, duplicate detection, and explicit partial results.
+- Agents/skills: add `skill_resource_get` for on-demand local attachment reads with database fallback, scoped to enabled owned or public skills, and extend skill materialization waiting to twelve seconds with per-stage timing logs.
 
 ### Fixes
 

@@ -286,6 +286,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "skill_resource_get",
+    label: "skill_resource_get",
+    description: "Read one skill attachment locally, with database fallback",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "skill_list",
     label: "skill_list",
     description: "List saved skills",

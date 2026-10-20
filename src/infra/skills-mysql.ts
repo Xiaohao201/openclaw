@@ -14,8 +14,12 @@ import type {
 } from "../agents/skills/types.js";
 import { loadConfig } from "../config/config.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
-import { writeFileWithinRoot } from "./fs-safe.js";
+import { readFileWithinRoot, writeFileWithinRoot } from "./fs-safe.js";
 import { acquireMysqlPool } from "./mysql-pool.js";
+import {
+  observeSkillMaterialization,
+  type SkillMaterializeTiming,
+} from "./skill-materialize-timing.js";
 import { getManagedResourcePaths, syncSkillResourceFiles } from "./skill-resource-files.js";
 import {
   readSkillResources,
@@ -25,7 +29,13 @@ import {
   type SkillResourceWrite,
   withSkillTransaction,
 } from "./skill-resource-store.js";
-import { resourceIndex, type SkillResource } from "./skill-resources.js";
+import {
+  MAX_SKILL_RESOURCE_BYTES,
+  resourceIndex,
+  validateResourcePath,
+  validateSkillResources,
+  type SkillResource,
+} from "./skill-resources.js";
 import { resolveStorageSkillSlug, withStorageSkillIdentity } from "./skill-storage-identity.js";
 import { getSkillsDbCachedUserId, setSkillsDbCache } from "./skills-db-cache.js";
 
@@ -329,6 +339,73 @@ export async function getSkillResourcesForUser(
   return (await readSkillResources(getPool(), [row.id])).get(row.id) ?? [];
 }
 
+/** Read one formal attachment using the same enabled/public visibility as materialization. */
+export async function getSkillResourceForUser(
+  name: string,
+  resourcePath: string,
+  userId: number,
+  workspaceDir?: string,
+): Promise<SkillResource | null> {
+  const safePath = validateResourcePath(resourcePath);
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
+    throw new Error("Invalid skill user");
+  }
+  const placeholders = PUBLIC_SKILL_NAMES.map(() => "?").join(", ");
+  // Select the winning skill first: a missing public attachment must not fall back
+  // to a different, private skill with the same slug.
+  const [rows] = await getPool().execute<mysql.RowDataPacket[]>(
+    `SELECT resource.path, resource.media_type, ${workspaceDir ? "visible.user_id, visible.category, visible.slug" : "resource.content"}
+       FROM skill_resources AS resource
+       JOIN (
+         SELECT id, user_id, category, COALESCE(slug, name) AS slug FROM skills
+          WHERE COALESCE(slug, name) = ? AND is_enable = 1
+            AND (user_id = ? OR (user_id = ? AND (category = 'builtin' OR COALESCE(slug, name) IN (${placeholders}))))
+          ORDER BY (user_id = ?) DESC LIMIT 1
+       ) AS visible ON visible.id = resource.skill_id
+      WHERE resource.path = ? LIMIT 1`,
+    [name, userId, PUBLIC_SKILL_OWNER_ID, ...PUBLIC_SKILL_NAMES, PUBLIC_SKILL_OWNER_ID, safePath],
+  );
+  if (!rows[0]) {
+    return null;
+  }
+  if (workspaceDir) {
+    const row = rows[0];
+    const isPublic =
+      row.user_id === PUBLIC_SKILL_OWNER_ID &&
+      (row.category === "builtin" ||
+        PUBLIC_SKILL_NAMES.includes(row.slug as (typeof PUBLIC_SKILL_NAMES)[number]));
+    try {
+      // Keep the workspace as the security boundary, including all directory segments.
+      const local = await readFileWithinRoot({
+        rootDir: workspaceDir,
+        relativePath: path.join(
+          isPublic ? ".openclaw-public-skills" : "skills",
+          sanitizeSkillSegment(row.slug),
+          safePath,
+        ),
+        maxBytes: MAX_SKILL_RESOURCE_BYTES,
+      });
+      return validateSkillResources([
+        {
+          path: safePath,
+          mediaType: row.media_type,
+          content: new TextDecoder("utf-8", { fatal: true }).decode(local.buffer),
+        },
+      ])[0];
+    } catch {
+      // Missing, unsafe, or invalid local copies fall back to the authorized DB read.
+      return getSkillResourceForUser(name, safePath, userId);
+    }
+  }
+  return validateSkillResources([
+    {
+      path: rows[0].path,
+      mediaType: rows[0].media_type,
+      content: rows[0].content,
+    },
+  ])[0];
+}
+
 /**
  * Look up a single skill by its (user_id, name) pair. Used by the agent-facing
  * save tool to upsert: update an existing same-named skill instead of inserting
@@ -596,8 +673,6 @@ let materializedAt = 0;
 // re-block — the turn path on every message.
 let lastFailureAt = 0;
 const FAILURE_COOLDOWN_MS = 60_000;
-// Hard ceiling on how long skill materialization may add to a turn.
-const MATERIALIZE_TIMEOUT_MS = 8_000;
 
 /**
  * Force the next `materializeSkillsForUser` call to re-fetch from the DB instead
@@ -610,22 +685,6 @@ export function invalidateSkillsMaterializeCache(): void {
   materializedKey = null;
   materializedAt = 0;
   cacheLoadTime = 0;
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
 }
 
 /**
@@ -674,10 +733,8 @@ export async function materializeSkillsForUser(
   }
 
   try {
-    return await withTimeout(
-      doMaterializeSkills(workspaceDir, numericUserId, key),
-      MATERIALIZE_TIMEOUT_MS,
-      "skills materialize",
+    return await observeSkillMaterialization(numericUserId, (timing) =>
+      doMaterializeSkills(workspaceDir, numericUserId, key, timing),
     );
   } catch (err) {
     lastFailureAt = Date.now();
@@ -689,86 +746,101 @@ async function doMaterializeSkills(
   workspaceDir: string,
   numericUserId: number,
   key: string,
+  timing: SkillMaterializeTiming,
 ): Promise<SkillEntry[]> {
   const p = getPool();
-  const skillRows = await fetchVisibleSkillRows(p, numericUserId);
-  const scriptsBySkill = await fetchSkillScripts(skillRows.map((r) => r.id));
-  const resourcesBySkill = await readSkillResources(
-    p,
-    skillRows.map((r) => r.id),
+  const skillRows = await timing.stage("skills_query", () =>
+    fetchVisibleSkillRows(p, numericUserId),
+  );
+  const scriptsBySkill = await timing.stage("scripts_query", () =>
+    fetchSkillScripts(skillRows.map((r) => r.id)),
+  );
+  const resourcesBySkill = await timing.stage("resources_query", () =>
+    readSkillResources(
+      p,
+      skillRows.map((r) => r.id),
+    ),
   );
 
-  const skillsRoot = path.join(workspaceDir, "skills");
-  const publicSkillsRoot = path.join(workspaceDir, ".openclaw-public-skills");
-  const bundledSkillsDir = resolveBundledSkillsDir();
-  const entries: SkillEntry[] = [];
-  for (const row of skillRows) {
-    const safeName = sanitizeSkillSegment(rowSlug(row));
-    if (!safeName) {
-      continue;
-    }
-    const isPublicSkill = isPublicSkillRow(row);
-    const baseDir = path.join(isPublicSkill ? publicSkillsRoot : skillsRoot, safeName);
-    if (bundledSkillsDir && isPublicSkill && publicSkillNames.has(rowSlug(row))) {
-      await fs.cp(path.join(bundledSkillsDir, rowSlug(row)), baseDir, {
-        recursive: true,
-        force: true,
-      });
-    }
-    await fs.mkdir(baseDir, { recursive: true });
-    if ((await fs.lstat(baseDir)).isSymbolicLink()) {
-      throw new Error("Skill directory cannot be a symlink");
-    }
-    const skillMdPath = path.join(baseDir, "SKILL.md");
-    const resources = resourcesBySkill.get(row.id) ?? [];
-    const managedPaths = new Set(
-      (await getManagedResourcePaths(baseDir)).map((file) => file.toLowerCase()),
-    );
-    const legacyScripts = (scriptsBySkill.get(row.id) ?? []).filter(
-      (script) => !managedPaths.has(sanitizeSkillSegment(script.script_name).toLowerCase()),
-    );
-    const attachmentIndex = resourceIndex(
-      resources,
-      row.references,
-      legacyScripts.map((script) => sanitizeSkillSegment(script.script_name)),
-    );
+  return timing.stage("write_files", async () => {
+    const skillsRoot = path.join(workspaceDir, "skills");
+    const publicSkillsRoot = path.join(workspaceDir, ".openclaw-public-skills");
+    const bundledSkillsDir = resolveBundledSkillsDir();
+    const entries: SkillEntry[] = [];
+    for (const row of skillRows) {
+      const safeName = sanitizeSkillSegment(rowSlug(row));
+      if (!safeName) {
+        continue;
+      }
+      const isPublicSkill = isPublicSkillRow(row);
+      const baseDir = path.join(isPublicSkill ? publicSkillsRoot : skillsRoot, safeName);
+      if (bundledSkillsDir && isPublicSkill && publicSkillNames.has(rowSlug(row))) {
+        await fs.cp(path.join(bundledSkillsDir, rowSlug(row)), baseDir, {
+          recursive: true,
+          force: true,
+        });
+      }
+      await fs.mkdir(baseDir, { recursive: true });
+      if ((await fs.lstat(baseDir)).isSymbolicLink()) {
+        throw new Error("Skill directory cannot be a symlink");
+      }
+      const skillMdPath = path.join(baseDir, "SKILL.md");
+      const resources = resourcesBySkill.get(row.id) ?? [];
+      const managedPaths = new Set(
+        (await getManagedResourcePaths(baseDir)).map((file) => file.toLowerCase()),
+      );
+      const legacyScripts = (scriptsBySkill.get(row.id) ?? []).filter(
+        (script) => !managedPaths.has(sanitizeSkillSegment(script.script_name).toLowerCase()),
+      );
+      const attachmentIndex = resourceIndex(
+        resources,
+        row.references,
+        legacyScripts.map((script) => sanitizeSkillSegment(script.script_name)),
+      );
 
-    for (const script of legacyScripts) {
-      const safeScript = sanitizeSkillSegment(script.script_name);
-      if (
-        !safeScript ||
-        ["skill.md", ".openclaw-resource-files.json"].includes(safeScript.toLowerCase())
-      ) {
-        continue;
-      }
-      if (resources.some((resource) => resource.path.toLowerCase() === safeScript.toLowerCase())) {
-        continue;
-      }
-      const scriptPath = path.join(baseDir, safeScript);
-      await fs.writeFile(scriptPath, script.script_content ?? "", "utf8");
-      if (process.platform !== "win32") {
-        try {
-          await fs.chmod(scriptPath, 0o755);
-        } catch {
-          // best-effort executable bit; non-fatal on filesystems that reject chmod
+      for (const script of legacyScripts) {
+        const safeScript = sanitizeSkillSegment(script.script_name);
+        if (
+          !safeScript ||
+          ["skill.md", ".openclaw-resource-files.json"].includes(safeScript.toLowerCase())
+        ) {
+          continue;
+        }
+        if (
+          resources.some((resource) => resource.path.toLowerCase() === safeScript.toLowerCase())
+        ) {
+          continue;
+        }
+        const scriptPath = path.join(baseDir, safeScript);
+        await fs.writeFile(scriptPath, script.script_content ?? "", "utf8");
+        if (process.platform !== "win32") {
+          try {
+            await fs.chmod(scriptPath, 0o755);
+          } catch {
+            // best-effort executable bit; non-fatal on filesystems that reject chmod
+          }
         }
       }
+      await syncSkillResourceFiles(baseDir, resources);
+      await writeFileWithinRoot({
+        rootDir: baseDir,
+        relativePath: "SKILL.md",
+        data: withStorageSkillIdentity(
+          (row.content ?? "") + attachmentIndex,
+          rowSlug(row),
+          row.name,
+        ),
+      });
+
+      entries.push(rowToSkillEntry(row, { filePath: skillMdPath, baseDir }));
     }
-    await syncSkillResourceFiles(baseDir, resources);
-    await writeFileWithinRoot({
-      rootDir: baseDir,
-      relativePath: "SKILL.md",
-      data: withStorageSkillIdentity((row.content ?? "") + attachmentIndex, rowSlug(row), row.name),
-    });
 
-    entries.push(rowToSkillEntry(row, { filePath: skillMdPath, baseDir }));
-  }
-
-  cachedEntries = entries;
-  setSkillsDbCache(entries, numericUserId);
-  cacheLoadTime = Date.now();
-  materializedKey = key;
-  materializedAt = Date.now();
-  lastFailureAt = 0;
-  return entries;
+    cachedEntries = entries;
+    setSkillsDbCache(entries, numericUserId);
+    cacheLoadTime = Date.now();
+    materializedKey = key;
+    materializedAt = Date.now();
+    lastFailureAt = 0;
+    return entries;
+  });
 }
