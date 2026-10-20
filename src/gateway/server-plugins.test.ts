@@ -277,6 +277,32 @@ afterEach(() => {
 });
 
 describe("loadGatewayPlugins", () => {
+  test.each(["ok", "error", "timeout"])(
+    "preserves terminal endedAt for plugin wait status %s",
+    async (status) => {
+      const runtime = await createSubagentRuntime(serverPluginsModule);
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("terminal-wait"));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        opts.respond(true, { status, endedAt: 1234 });
+      });
+      expect(await runtime.waitForRun({ runId: "finished", timeoutMs: 2000 })).toEqual({
+        status,
+        endedAt: 1234,
+      });
+    },
+  );
+
+  test("does not invent endedAt for an unfinished wait timeout", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("pending-wait"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, { status: "timeout" });
+    });
+    expect(await runtime.waitForRun({ runId: "running", timeoutMs: 2000 })).toEqual({
+      status: "timeout",
+    });
+  });
+
   test("logs plugin errors with details", async () => {
     const diagnostics: PluginDiagnostic[] = [
       {

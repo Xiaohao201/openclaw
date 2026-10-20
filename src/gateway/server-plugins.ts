@@ -362,19 +362,22 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
+      const payload = await dispatchGatewayMethod<{
+        status?: string;
+        error?: string;
+        endedAt?: number;
+      }>("agent.wait", {
+        runId: params.runId,
+        ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
+      });
       const status = payload?.status;
       if (status !== "ok" && status !== "error" && status !== "timeout") {
         throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
       }
       return {
         status,
+        ...(typeof payload?.endedAt === "number" &&
+          Number.isFinite(payload.endedAt) && { endedAt: payload.endedAt }),
         ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
       };
     },
