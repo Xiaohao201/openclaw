@@ -35,6 +35,7 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import {
   createSkillGetTool,
   createSkillListTool,
+  createSkillResourceGetTool,
   createSkillSaveTool,
 } from "./tools/skill-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
@@ -262,6 +263,11 @@ export function createOpenClawTools(
       workspaceDir,
       agentId: sessionAgentId,
       config: resolvedConfig,
+    }),
+    createSkillResourceGetTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentId: sessionAgentId,
+      workspaceDir,
     }),
     createSkillListTool({
       agentSessionKey: options?.agentSessionKey,

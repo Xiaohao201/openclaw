@@ -11,6 +11,7 @@ vi.mock("../../infra/skills-mysql.js", async (importActual) => {
     ...actual,
     getSkillByName: vi.fn(),
     getSkillResourcesForUser: vi.fn(),
+    getSkillResourceForUser: vi.fn(),
     createSkill: vi.fn(),
     updateSkill: vi.fn(),
     listSkills: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock("../../infra/skills-mysql.js", async (importActual) => {
 
 const { bumpSkillsSnapshotVersion } = await import("../skills/refresh-state.js");
 const skillsMysql = await import("../../infra/skills-mysql.js");
-const { createSkillSaveTool, createSkillGetTool, createSkillListTool } =
+const { createSkillSaveTool, createSkillGetTool, createSkillListTool, createSkillResourceGetTool } =
   await import("./skill-tool.js");
 
 const getSkillByName = vi.mocked(skillsMysql.getSkillByName);
@@ -343,5 +344,80 @@ describe("skill_list", () => {
     await expect(
       createSkillListTool({ agentSessionKey: SESSION_KEY }).execute?.("id", {}),
     ).rejects.toThrow(/Could not list skills/);
+  });
+});
+
+describe("skill_resource_get", () => {
+  const readResource = vi.mocked(skillsMysql.getSkillResourceForUser);
+  const args = { name: "flow", path: "references/guide.md" };
+
+  it("reads one attachment without local files and ignores a forged user id", async () => {
+    readResource.mockResolvedValue({
+      path: args.path,
+      mediaType: "text/markdown",
+      content: "指南",
+    });
+    const result = await createSkillResourceGetTool({ agentSessionKey: SESSION_KEY }).execute?.(
+      "id",
+      { ...args, userId: 126 },
+    );
+    expect(readResource).toHaveBeenCalledWith("flow", args.path, 1749, undefined);
+    expect(parse(result)).toMatchObject({
+      ok: true,
+      found: true,
+      name: "flow",
+      path: args.path,
+      content: "指南",
+      bytes: 6,
+    });
+    expect(materializeSkillsForUser).not.toHaveBeenCalled();
+  });
+
+  it("passes the trusted workspace through for local-first reads", async () => {
+    readResource.mockResolvedValue(null);
+    await createSkillResourceGetTool({
+      agentSessionKey: SESSION_KEY,
+      workspaceDir: "/trusted/workspace",
+    }).execute?.("id", { ...args, workspaceDir: "/forged/workspace" });
+    expect(readResource).toHaveBeenCalledWith("flow", args.path, 1749, "/trusted/workspace");
+  });
+
+  it("reports unavailable skills and attachments without revealing another owner", async () => {
+    readResource.mockResolvedValue(null);
+    const result = await createSkillResourceGetTool({ agentSessionKey: SESSION_KEY }).execute?.(
+      "id",
+      args,
+    );
+    expect(parse(result)).toMatchObject({ ok: true, found: false, ...args });
+  });
+
+  it.each([
+    "../secret.md",
+    "/etc/passwd",
+    "C:\\secret.md",
+    "references/../secret.md",
+    "https://example.com/a.md",
+  ])("rejects unsafe paths before querying: %s", async (path) => {
+    await expect(
+      createSkillResourceGetTool({ agentSessionKey: SESSION_KEY }).execute?.("id", {
+        ...args,
+        path,
+      }),
+    ).rejects.toThrow();
+    expect(readResource).not.toHaveBeenCalled();
+  });
+
+  it("requires a trusted user identity", async () => {
+    await expect(createSkillResourceGetTool().execute?.("id", args)).rejects.toThrow(
+      /per-user agent session/,
+    );
+    expect(readResource).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes database errors", async () => {
+    readResource.mockRejectedValue(new Error("private database host"));
+    await expect(
+      createSkillResourceGetTool({ agentSessionKey: SESSION_KEY }).execute?.("id", args),
+    ).rejects.toThrow("Could not read the skill attachment right now. Please try again.");
   });
 });
