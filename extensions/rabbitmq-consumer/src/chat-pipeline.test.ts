@@ -308,6 +308,108 @@ describe("processChatMessage", () => {
     expect(terminalEvents().map((event) => event.type)).toEqual(["done"]);
   });
 
+  it.each(["false", "throw"])(
+    "retries a %s abort and confirms cancellation only after the run settles",
+    async (failure) => {
+      const controller = new AbortController();
+      const abortRun = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          if (failure === "throw") {
+            throw new Error("abort unavailable");
+          }
+          return false;
+        })
+        .mockReturnValue(true);
+      let waits = 0;
+      let release: () => void = () => {};
+      const terminal = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        waitStatuses: ["timeout", "ok"],
+        onWaitArgs: ({ timeoutMs }) => expect(timeoutMs).toBeLessThanOrEqual(2_000),
+        onWait: async () => {
+          waits++;
+          if (waits === 1) {
+            controller.abort();
+          } else {
+            await terminal;
+          }
+        },
+      });
+      const result = processChatMessage(
+        createChatMessage(),
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { abortSignal: controller.signal, abortRun },
+      );
+      try {
+        await vi.waitFor(() => expect(waits).toBe(2));
+        expect(abortRun).toHaveBeenCalledTimes(2);
+        expect(updateResponse).not.toHaveBeenCalled();
+        expect(
+          updateMetadata.mock.calls.some(([, patch]) => patch.cancellationStatus === "cancelled"),
+        ).toBe(false);
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("Cancellation attempt failed"),
+        );
+      } finally {
+        release();
+      }
+      await result;
+      expect(updateMetadata).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ cancellationStatus: "cancelled" }),
+        expect.anything(),
+      );
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("Cancellation confirmed"));
+    },
+  );
+
+  it("persists cancellation without starting an already cancelled turn", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const onRun = vi.fn();
+    const runtime = createRuntimeMock({ workspaceDir, onRun });
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { abortSignal: controller.signal, abortRun: vi.fn() },
+    );
+    expect(onRun).not.toHaveBeenCalled();
+    expect(updateMetadata).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ cancellationStatus: "cancelled" }),
+      expect.anything(),
+    );
+  });
+
   it.each([false, true])(
     "uses upload evidence for live and persisted links (cancelled=%s)",
     async (cancelled) => {

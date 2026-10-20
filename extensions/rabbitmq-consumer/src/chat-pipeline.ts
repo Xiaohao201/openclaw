@@ -532,6 +532,21 @@ export async function processChatMessage(
     `historyId=${chatMsg.historyId} userId=${JSON.stringify(chatMsg.userId)} stage=${stage} ${describeHistoryDbError(error)}`;
   const saveResponse = (response: string) =>
     historyManager.updateResponse(chatMsg.historyId, response, historyDbContext);
+  const confirmCancellation = async (runId?: string) => {
+    // This marker is authoritative: a partial response or accepted abort is not.
+    await historyManager.updateMetadata(
+      chatMsg.historyId,
+      {
+        cancelRequested: true,
+        cancellationStatus: "cancelled",
+        cancelledAt: new Date().toISOString(),
+      },
+      historyDbContext,
+    );
+    logger.info(
+      `[CHAT_PIPELINE] Cancellation confirmed: historyId=${chatMsg.historyId}, runId=${runId ?? "not-started"}`,
+    );
+  };
   let failureNotification: Promise<void> | undefined;
   const notifyFailure = (message: string) =>
     (failureNotification ??= notifyChatFailure({
@@ -845,6 +860,7 @@ export async function processChatMessage(
       const stopped = "输出已暂停。";
       stage = "updateResponse";
       await saveResponse(stopped);
+      await confirmCancellation();
       stage = "notifyFrontend";
       await mercure.pushDone(mercureTopic, chatMsg.historyId);
       return stopped;
@@ -1039,16 +1055,37 @@ export async function processChatMessage(
     // isolating us from concurrent runs (report subagent, heartbeat, another
     // user's chat) whose runId and sessionKey both differ.
     let currentRunId: string | null = null;
-    let abortRunPromise: Promise<unknown> | null = null;
+    let abortRunPromise: Promise<void> | null = null;
+    let abortAttempt = 0;
+    let runSettled = false;
     const abortActiveRun = () => {
-      if (!currentRunId || abortRunPromise || !options?.abortRun) {
+      if (!currentRunId || runSettled || abortRunPromise) {
         return abortRunPromise;
       }
-      abortRunPromise = Promise.resolve(options.abortRun(sessionKey)).catch((error) => {
-        logger.warn(
-          `[CHAT_PIPELINE] Failed to abort subagent run ${currentRunId}: ${String(error)}`,
-        );
-      });
+      const attempt = ++abortAttempt;
+      // Invoke in a promise so synchronous exceptions are handled too. Release
+      // the in-flight guard after every attempt: false/throw must be retryable.
+      abortRunPromise = Promise.resolve()
+        .then(async () => {
+          const accepted = await options?.abortRun?.(sessionKey);
+          if (accepted !== true) {
+            logger.warn(
+              `[CHAT_PIPELINE] Cancellation attempt failed: historyId=${chatMsg.historyId}, runId=${currentRunId}, attempt=${attempt}, reason=not-accepted; will retry`,
+            );
+            return;
+          }
+          logger.info(
+            `[CHAT_PIPELINE] Cancellation accepted: historyId=${chatMsg.historyId}, runId=${currentRunId}, attempt=${attempt}; awaiting run settlement`,
+          );
+        })
+        .catch((error) => {
+          logger.warn(
+            `[CHAT_PIPELINE] Cancellation attempt failed: historyId=${chatMsg.historyId}, runId=${currentRunId}, attempt=${attempt}, error=${String(error)}; will retry`,
+          );
+        })
+        .finally(() => {
+          abortRunPromise = null;
+        });
       return abortRunPromise;
     };
     options?.abortSignal?.addEventListener("abort", abortActiveRun, { once: true });
@@ -1303,6 +1340,15 @@ export async function processChatMessage(
         }
       }
 
+      // Cancellation can arrive during attachment/history preparation.
+      if (options?.abortSignal?.aborted) {
+        const stopped = "输出已暂停。";
+        await saveResponse(stopped);
+        await persistTimeline("completed");
+        await confirmCancellation();
+        await streamPusherCtx.streamPusher.finish();
+        return stopped;
+      }
       stage = "agent.run";
       const runResult = await runtime.subagent.run({
         sessionKey,
@@ -1327,13 +1373,20 @@ export async function processChatMessage(
       // model continues calling tools in the background.
       let waitResult: Awaited<ReturnType<PluginRuntime["subagent"]["waitForRun"]>>;
       let elapsedWaitMs = 0;
+      // Keep cancellable waits bounded so failed aborts are retried and terminal
+      // confirmation is observed promptly, without abandoning the running task.
+      const waitWindowMs = options?.abortSignal ? Math.min(turnTimeoutMs, 2_000) : turnTimeoutMs;
       while (true) {
+        if (options?.abortSignal?.aborted) {
+          await abortActiveRun();
+        }
         stage = "agent.wait";
         waitResult = await runtime.subagent.waitForRun({
           runId: runResult.runId,
-          timeoutMs: turnTimeoutMs,
+          timeoutMs: waitWindowMs,
         });
-        if (options?.abortSignal?.aborted) {
+        runSettled = waitResult.status !== "timeout";
+        if (options?.abortSignal?.aborted && runSettled) {
           const pendingAbort = abortActiveRun();
           if (pendingAbort) {
             await pendingAbort;
@@ -1345,6 +1398,7 @@ export async function processChatMessage(
           await saveResponse(stopped);
           stage = "finalize";
           await persistTimeline("completed");
+          await confirmCancellation(runResult.runId);
           await persistUsage();
           stage = "notifyFrontend";
           await streamPusherCtx.streamPusher.finish();
@@ -1354,11 +1408,18 @@ export async function processChatMessage(
         if (waitResult.status !== "timeout") {
           break;
         }
-        elapsedWaitMs += turnTimeoutMs;
-        logger.info(
-          `[CHAT_PIPELINE] Subagent still running after ${Math.round(elapsedWaitMs / 1000)}s; ` +
-            `continuing to wait for runId=${runResult.runId}, historyId=${chatMsg.historyId}`,
-        );
+        // Drain this attempt before the next polling window so an earlier
+        // failure cannot occupy the guard and suppress the next real retry.
+        if (options?.abortSignal?.aborted && abortRunPromise) {
+          await abortRunPromise;
+        }
+        elapsedWaitMs += waitWindowMs;
+        if (elapsedWaitMs % turnTimeoutMs < waitWindowMs) {
+          logger.info(
+            `[CHAT_PIPELINE] Subagent still running after ${Math.round(elapsedWaitMs / 1000)}s; ` +
+              `continuing to wait for runId=${runResult.runId}, historyId=${chatMsg.historyId}`,
+          );
+        }
       }
 
       if (waitResult.status === "error") {
@@ -1500,6 +1561,9 @@ export async function processChatMessage(
       stage = "notifyFrontend";
       if (citations.length > 0) {
         await streamPusherCtx.streamPusher.pushCitations(citations);
+      }
+      if (options?.abortSignal?.aborted) {
+        await confirmCancellation(runResult.runId);
       }
       await streamPusherCtx.streamPusher.finish();
 
