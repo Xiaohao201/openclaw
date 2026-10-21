@@ -85,6 +85,8 @@ Docs: https://docs.openclaw.ai
 
 - MySQL: use unified deployment credentials and share connection pools across plugins, with configurable maximum connections, minimum idle connections, idle eviction, bounded waiting queues, and reference-counted shutdown.
 
+- Gateway/plugin config: preserve startup reload rules across scoped runtime plugin loads so dynamic group-map edits do not unexpectedly restart the gateway.
+
 ## 2026.4.15
 
 ### Changes

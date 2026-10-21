@@ -1,5 +1,5 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 
 export type ChannelKind = ChannelId;
 
@@ -106,10 +106,12 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
-let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedRegistry: ReturnType<typeof getActivePluginChannelRegistry> | null = null;
 
 function listReloadRules(): ReloadRule[] {
-  const registry = getActivePluginRegistry();
+  // Gateway startup pins the full registry for channel/control-plane consumers.
+  // Scoped runtime loads may replace the active registry and omit reload rules.
+  const registry = getActivePluginChannelRegistry();
   if (registry !== cachedRegistry) {
     cachedReloadRules = null;
     cachedRegistry = registry;

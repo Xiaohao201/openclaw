@@ -7,7 +7,11 @@ import {
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
@@ -142,6 +146,7 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
 
@@ -189,6 +194,33 @@ describe("buildGatewayReloadPlan", () => {
     expect(buildGatewayReloadPlan(["plugins.entries.example-tool.enabled"]).restartGateway).toBe(
       true,
     );
+  });
+
+  it("preserves gateway reload registrations after a scoped runtime registry load", () => {
+    const startupRegistry = createTestRegistry([]);
+    startupRegistry.reloads = [
+      {
+        pluginId: "example-tool",
+        pluginName: "Example Tool",
+        source: "test",
+        registration: { noopPrefixes: ["plugins.entries.example-tool.config.groups"] },
+      },
+    ];
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    const changedPath = "plugins.entries.example-tool.config.groups.Removed group";
+    expect(buildGatewayReloadPlan([changedPath]).restartGateway).toBe(false);
+
+    // Provider/channel lookups can replace the active registry with a partial load.
+    setActivePluginRegistry(createTestRegistry([]));
+    const plan = buildGatewayReloadPlan([changedPath]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toEqual([changedPath]);
+
+    // A new gateway startup must replace the old rules, including cached ones.
+    const nextStartup = createTestRegistry([]);
+    pinActivePluginChannelRegistry(nextStartup);
+    expect(buildGatewayReloadPlan([changedPath]).restartGateway).toBe(true);
   });
 
   it("restarts providers when provider config prefixes change", () => {
