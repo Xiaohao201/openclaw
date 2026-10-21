@@ -1,6 +1,7 @@
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,8 +30,8 @@ function setup(groups: Record<string, string> = { Alpha: "a" }) {
     registerReload,
     runtime: { config: { loadConfig } },
   } as unknown as OpenClawPluginApi);
-  const create = () =>
-    (registerTool.mock.calls[0][0] as OpenClawPluginToolFactory)({}) as AnyAgentTool;
+  const create = (context: OpenClawPluginToolContext = {}) =>
+    (registerTool.mock.calls[0][0] as OpenClawPluginToolFactory)(context) as AnyAgentTool;
   const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ errcode: 0 }));
   vi.stubGlobal("fetch", fetcher);
   return {
@@ -53,6 +54,48 @@ function args(tool: AnyAgentTool, groupName = "Alpha") {
   return { groupName, confirmed: true, content: "notice", destinationVersion: versions[groupName] };
 }
 describe("dynamic group configuration", () => {
+  it("uses the current turn runtime config when the plugin runtime still holds an older snapshot", () => {
+    const h = setup();
+    const config = (groups: Record<string, string>) => ({
+      plugins: {
+        entries: { "wechat-group-push": { config: { endpoint: "http://127.0.0.1/send", groups } } },
+      },
+    });
+    const tool = h.create({
+      config: config({ Alpha: "a" }),
+      runtimeConfig: config({ Alpha: "a", Beta: "b" }),
+    });
+    expect(tool.description).toContain("Beta");
+    expect(tool.parameters).toMatchObject({
+      properties: { groupName: { enum: ["Alpha", "Beta"] } },
+    });
+    expect(args(tool, "Beta").destinationVersion).toBeTruthy();
+    const next = h.create({ runtimeConfig: config({ Beta: "b" }) });
+    expect(next.parameters).toMatchObject({ properties: { groupName: { enum: ["Beta"] } } });
+  });
+
+  it("uses supplied tool context config when no runtime snapshot is available", () => {
+    const h = setup();
+    const tool = h.create({
+      config: {
+        plugins: {
+          entries: {
+            "wechat-group-push": {
+              config: { endpoint: "http://127.0.0.1/send", groups: { Beta: "b" } },
+            },
+          },
+        },
+      },
+    });
+    expect(tool.parameters).toMatchObject({ properties: { groupName: { enum: ["Beta"] } } });
+  });
+
+  it("does not fall back to stale destinations if the current snapshot removes or disables the plugin", () => {
+    const h = setup();
+    expect(() => h.create({ runtimeConfig: {} })).toThrow();
+    expect(() => h.create({ runtimeConfig: { plugins: { enabled: false } } })).toThrow();
+  });
+
   it("declares only groups as dynamically read and sends to a newly added group", async () => {
     const h = setup();
     const before = h.create();
