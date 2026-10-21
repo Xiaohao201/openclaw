@@ -87,6 +87,8 @@ Docs: https://docs.openclaw.ai
 
 - Gateway/plugin config: preserve startup reload rules across scoped runtime plugin loads so dynamic group-map edits do not unexpectedly restart the gateway.
 
+- WeChat Group Push: build each turn's destination list from the host's current configuration so newly added groups appear even when a cached plugin runtime retains an older snapshot.
+
 ## 2026.4.15
 
 ### Changes

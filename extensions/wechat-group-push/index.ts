@@ -20,8 +20,12 @@ export default definePluginEntry({
     configSchema.parse(api.pluginConfig);
     api.registerReload({ noopPrefixes: ["plugins.entries.wechat-group-push.config.groups"] });
     api.registerTool(
-      () => {
-        const config = configSchema.parse(resolveCurrentConfig(api.runtime.config.loadConfig()));
+      (ctx) => {
+        // The host supplies the current turn snapshot. A cached plugin runtime can
+        // retain a different module's pinned config after a gateway hot reload.
+        const config = configSchema.parse(
+          resolveCurrentConfig(ctx.runtimeConfig ?? ctx.config ?? api.runtime.config.loadConfig()),
+        );
         const names = Object.keys(config.groups).toSorted();
         const versions = Object.fromEntries(
           names.map((name) => [
