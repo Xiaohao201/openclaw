@@ -34,6 +34,8 @@ Docs: https://docs.openclaw.ai
 - Phone Reader: capture bounded screenshots and numbered image galleries for the image tool, with responsive cropping, page verification, duplicate detection, and explicit partial results.
 - Agents/skills: add `skill_resource_get` for on-demand local attachment reads with database fallback, scoped to enabled owned or public skills, and extend skill materialization waiting to twelve seconds with per-stage timing logs.
 
+- WeChat Group Push: apply group-map edits without restarting the gateway, refresh tool destinations each turn, and reject removed or changed destinations before sending.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

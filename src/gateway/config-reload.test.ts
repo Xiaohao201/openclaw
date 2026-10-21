@@ -165,6 +165,32 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadHooks).toBe(true);
   });
 
+  it("honors plugin dynamic-read prefixes without restarting unrelated work", () => {
+    const dynamicRegistry = createTestRegistry([]);
+    dynamicRegistry.reloads = [
+      {
+        pluginId: "example-tool",
+        pluginName: "Example Tool",
+        source: "test",
+        registration: { noopPrefixes: ["plugins.entries.example-tool.config.groups"] },
+      },
+    ];
+    setActivePluginRegistry(dynamicRegistry);
+    const path = "plugins.entries.example-tool.config.groups.New group";
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toEqual([path]);
+    expect(plan.restartChannels.size).toBe(0);
+    expect(plan.restartCron).toBe(false);
+    expect(plan.restartHeartbeat).toBe(false);
+    expect(
+      buildGatewayReloadPlan(["plugins.entries.example-tool.config.endpoint"]).restartGateway,
+    ).toBe(true);
+    expect(buildGatewayReloadPlan(["plugins.entries.example-tool.enabled"]).restartGateway).toBe(
+      true,
+    );
+  });
+
   it("restarts providers when provider config prefixes change", () => {
     const changedPaths = ["web.enabled", "channels.telegram.botToken"];
     const plan = buildGatewayReloadPlan(changedPaths);

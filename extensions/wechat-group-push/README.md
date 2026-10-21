@@ -1,7 +1,7 @@
 # WeChat Group Push
 
 Registers `wechat_group_push` to send text through a configured warning service.
-The tool requires `groupName`, `confirmed: true`, and `content`. There is no
+The tool requires `groupName`, `destinationVersion`, `confirmed: true`, and `content`. There is no
 default destination. Before each send, the agent must repeat the target group
 name and wait for user confirmation, even when the initial request names a group.
 The tool rejects missing confirmation and names outside the configured map. This is an outbound tool, not an inbound WeChat channel.
@@ -37,6 +37,19 @@ Messages are limited to 2048 UTF-8 bytes and preserved verbatim.
 Enable the plugin and restart the gateway. If your tool policy restricts plugin
 tools, include `wechat_group_push` in `tools.alsoAllow`. In a source checkout with
 an older built runtime, add this plugin's directory to `plugins.load.paths`.
+
+With the default `gateway.reload.mode=hybrid` (or `hot`), edits under
+`plugins.entries.wechat-group-push.config.groups` take effect without restarting
+the gateway. The next tool creation reads the current group list; already-running
+model requests keep their original tool schema. Other plugin settings retain their
+normal restart behavior. Deploying this plugin update requires one initial restart.
+
+Each send reads and validates the config file again. Missing, invalid, disabled,
+or removed destinations stop the send. The agent must preserve the internal
+`destinationVersion` from when it asks for confirmation; a changed endpoint or
+group ID invalidates that version and requires fresh confirmation. The version
+does not independently prove user consent. Changes after a request has already
+been dispatched cannot recall that message.
 
 Run `pnpm test extensions/wechat-group-push` for mock-only verification. Tests do
 not send real group messages. Keep live endpoints and chat IDs in local config,
