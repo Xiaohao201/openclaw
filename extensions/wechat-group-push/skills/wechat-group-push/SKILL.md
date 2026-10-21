@@ -12,7 +12,12 @@ There is no default group. The tool description lists the configured group names
 2. Before every send, repeat the exact target group name and ask the user to confirm
    it. This also applies when the initial request already names a group. Wait for
    the user's reply before calling the tool. If the target changes, confirm again.
-3. Only after that confirmation, pass the exact `groupName`, `confirmed: true`, and
+3. When asking for confirmation, record that group's internal `destinationVersion`
+   from the tool schema. Keep that version across turns; do not show it to the user.
+   If the version changes, ask for fresh confirmation before sending. Never silently
+   replace the recorded version with the current one.
+4. Only after that confirmation, pass the exact `groupName`, `destinationVersion`,
+   `confirmed: true`, and
    complete `content` to `wechat_group_push`. Do not pass a chat ID. Confirmation
    applies only to that send, never to later pushes.
 
