@@ -1577,6 +1577,14 @@ export async function processChatMessage(
       }
       if (options?.abortSignal?.aborted) {
         await confirmCancellation(runResult.runId);
+      } else {
+        // Persist a terminal outcome before done: a late Stop can arrive after
+        // this consumer unregisters the turn and will never receive an abort ack.
+        await historyManager.updateMetadata(
+          chatMsg.historyId,
+          { completionStatus: "completed", completedAt: new Date().toISOString() },
+          historyDbContext,
+        );
       }
       await streamPusherCtx.streamPusher.finish();
 
