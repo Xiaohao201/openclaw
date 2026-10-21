@@ -200,6 +200,25 @@ describe("processChatMessage", () => {
     },
   );
 
+  it("persists normal completion before publishing done for a late stop request", async () => {
+    const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      sessionMessages: [{ role: "assistant", content: "final answer" }],
+    });
+    let sawCompletion = false;
+    updateMetadata.mockImplementation(async (_id, patch) => {
+      if (patch.completionStatus === "completed") {
+        expect(updateResponse).toHaveBeenCalledWith(1, "final answer", expect.anything());
+        expect(terminalEvents().some((event) => event.type === "done")).toBe(false);
+        sawCompletion = true;
+      }
+    });
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+    expect(sawCompletion).toBe(true);
+    expect(terminalEvents().some((event) => event.type === "done")).toBe(true);
+  });
   it("ends the frontend turn before failed timeline persistence settles and never downgrades a full response", async () => {
     const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
     updateResponse.mockRejectedValue(
@@ -1051,10 +1070,9 @@ describe("processChatMessage", () => {
       },
     });
     await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
-    const [, metadata] = updateMetadata.mock.calls.at(-1) as unknown as [
-      number,
-      { steps: Array<{ status: string }> },
-    ];
+    const [, metadata] = updateMetadata.mock.calls
+      .filter(([, patch]) => Array.isArray(patch.steps))
+      .at(-1) as unknown as [number, { steps: Array<{ status: string }> }];
     expect(metadata.steps.every((step) => step.status !== "running")).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Persisting running steps failed"),
@@ -1112,7 +1130,9 @@ describe("processChatMessage", () => {
     expect(vi.mocked(logger.warn).mock.calls.flat().join(" ")).not.toContain(
       "private connection details",
     );
-    const last = updateMetadata.mock.calls.at(-1)?.[1].steps as Array<{ status: string }>;
+    const last = updateMetadata.mock.calls
+      .filter(([, patch]) => Array.isArray(patch.steps))
+      .at(-1)?.[1].steps as Array<{ status: string }>;
     expect(last.every((step) => step.status !== "running")).toBe(true);
   });
 
@@ -1149,10 +1169,9 @@ describe("processChatMessage", () => {
     await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
 
     expect(updateMetadata).toHaveBeenCalled();
-    const [historyId, metadata] = updateMetadata.mock.calls.at(-1) as unknown as [
-      number,
-      { steps: Array<{ label: string; status: string }> },
-    ];
+    const [historyId, metadata] = updateMetadata.mock.calls
+      .filter(([, patch]) => Array.isArray(patch.steps))
+      .at(-1) as unknown as [number, { steps: Array<{ label: string; status: string }> }];
     expect(historyId).toBe(1);
     const steps = metadata.steps;
     // The unfinished tool step is present in the saved timeline…
