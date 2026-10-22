@@ -899,6 +899,132 @@ describe("infringe_profile_save", () => {
 });
 
 describe("complaint taxonomy discovery", () => {
+  it.each(["local", "backend"])(
+    "queries explicit 12377 catalogs independently of direct platform restrictions in %s mode",
+    async (mode) => {
+      const { createComplaintTaxonomyToolFactory } =
+        await import("../complaint/complaint-taxonomy-tool.js");
+      const api = {
+        ...fakeApi,
+        pluginConfig: { ...fakeApi.pluginConfig, complaintExecution: { mode } },
+      } as unknown as OpenClawPluginApi;
+      const selected = createComplaintTaxonomyToolFactory(
+        api,
+        resolver,
+      )({ agentId: "rabbitmq-1749" })!;
+      const links = ["https://xueqiu.com/1"];
+      const taxonomies = [
+        {
+          link: links[0],
+          platform: "Report12377",
+          categories: [{ code: "rumor", label: "谣言类" }],
+        },
+      ];
+      mockGetJson.mockResolvedValue({
+        code: "success",
+        destination: "Report12377",
+        taxonomies,
+        unsupportedLinks: [],
+      });
+      expect(
+        parse(await selected.execute("explicit", { links, destination: "Report12377" })),
+      ).toMatchObject({
+        success: true,
+        destination: "Report12377",
+        taxonomies,
+        unsupportedLinks: [],
+      });
+      expect(mockGetJson).toHaveBeenCalledTimes(1);
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("queries the selected destination and refuses an old backend's content-platform catalog", async () => {
+    const links = ["https://weibo.com/1/example"];
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: [{ link: links[0], platform: "Weibo" }],
+      unsupportedLinks: [],
+    });
+    expect(
+      parse(await (await tool()).execute("old", { links, destination: "Report12377" })).success,
+    ).toBe(false);
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      destination: "Report12377",
+      taxonomies: [
+        {
+          link: links[0],
+          platform: "Report12377",
+          categories: [{ code: "rumor", label: "谣言类", children: [] }],
+        },
+      ],
+      unsupportedLinks: [],
+    });
+    const result = parse(
+      await (await tool()).execute("channel", { links, destination: "Report12377" }),
+    );
+    expect(result.success).toBe(true);
+    expect(result.destination).toBe("Report12377");
+    expect(mockGetJson).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "/legal/fetch-complaint-taxonomy",
+      { links, destination: "Report12377" },
+      "sk_test1749",
+    );
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown destinations before contacting the backend", async () => {
+    expect(parse(await (await tool()).execute("invalid", { destination: "unknown" })).success).toBe(
+      false,
+    );
+    expect(mockGetJson).not.toHaveBeenCalled();
+  });
+
+  it("returns the 12377 catalog without links and preserves an empty unpublished catalog", async () => {
+    for (const platforms of [[{ platform: "Report12377" }], []]) {
+      mockGetJson.mockResolvedValue({
+        code: "success",
+        destination: "Report12377",
+        platforms,
+        taxonomies: [],
+        unsupportedLinks: [],
+      });
+      const result = parse(await (await tool()).execute("catalog", { destination: "Report12377" }));
+      expect(result).toMatchObject({
+        success: true,
+        destination: "Report12377",
+        platforms,
+        taxonomies: [],
+      });
+      expect(mockGetJson).toHaveBeenLastCalledWith(
+        expect.anything(),
+        "/legal/fetch-complaint-taxonomy",
+        { destination: "Report12377" },
+        "sk_test1749",
+      );
+    }
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it.each([null, { platform: "Weibo" }])(
+    "rejects mismatched entries even when the destination is echoed",
+    async (entry) => {
+      mockGetJson.mockResolvedValue({
+        code: "success",
+        destination: "Report12377",
+        platforms: [],
+        taxonomies: [entry],
+        unsupportedLinks: [],
+      });
+      expect(
+        parse(await (await tool()).execute("wrong", { destination: "Report12377" })).success,
+      ).toBe(false);
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+
   async function tool() {
     const { createComplaintTaxonomyToolFactory } =
       await import("../complaint/complaint-taxonomy-tool.js");
