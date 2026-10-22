@@ -40,10 +40,25 @@ the parameter must not be presented as a 12377 catalog.
 Deploy the backend taxonomy endpoint and apply its
 `doc/infringement/2026-10-22-report12377-complaint-taxonomy.sql` migration first.
 The catalog follows the existing executor's seven anonymous categories, not all
-official categories. This is read-only discovery: do not pass these selections
-to the content-platform `complaint_submit` flow. It does not enable a 12377
-submission tool, change the worker's preview/real-submission configuration, or
-confirm that a report has been submitted.
+official categories. To submit, call `complaint_submit` with
+`destination: "Report12377"`, `basisSource: "AgentJudgment"`, the confirmed
+judgment, and the original content URLs. Keep the destination on every retry;
+never pass these classifications to the default content-platform flow.
+Omitting the destination preserves the existing content-platform behavior.
+
+Deploy the matching `/legal/save-complaint-job` backend before the plugin.
+It validates against the destination catalog, stores `platform=Report12377`,
+and creates the `legal_report_12377` payload in the same transaction as the
+task and detail, before publishing the detail ID to `ComplaintsReport`.
+The existing `2026-09-28-report-12377-worker.sql` migration and a configured
+12377 worker are prerequisites; taxonomy rows alone are insufficient.
+
+This destination uses the existing anonymous worker. Each link's judgment and
+URL must fit 500 UTF-16 code units; the website name is the original URL's host
+and must fit 40. Overlong inputs are rejected, never silently truncated.
+For batches, provide a separate `linkJudgments` entry for each URL.
+The operator still handles captcha and final submission. This change does not
+alter the worker's preview/real-submission settings or establish official receipt.
 
 `complaint_submit` returning `success=true`, `submitted=true`, or `submittedLinks`
 confirms only that the report service accepted the task. Tell the user:

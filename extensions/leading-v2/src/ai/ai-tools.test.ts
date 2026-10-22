@@ -530,6 +530,109 @@ describe("complaint_submit", () => {
     });
   });
 
+  it("keeps Report12377 as the destination through discovery and submission", async () => {
+    const link = "https://www.toutiao.com/video/123";
+    const params = {
+      basisSource: "AgentJudgment",
+      confirmed: true,
+      subjectScope: "Institution",
+      judgment: "根据用户提供的证据核对该视频的具体表述，请平台进一步核查处理。",
+      destination: "Report12377",
+      links: [link],
+    };
+    const taxonomy = {
+      link,
+      platform: "Report12377",
+      taxonomyVersionId: 34,
+      categories: [{ code: "rumor", label: "谣言类", children: [] }],
+    };
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      destination: "Report12377",
+      taxonomies: [taxonomy],
+    });
+    expect(parse(await tool().execute("discover-12377", params))).toMatchObject({
+      classificationRequired: true,
+      destination: "Report12377",
+      taxonomies: [taxonomy],
+    });
+    expect(mockGetJson).toHaveBeenCalledWith(
+      expect.anything(),
+      "/legal/fetch-complaint-taxonomy",
+      { links: [link], destination: "Report12377" },
+      "sk_test1749",
+    );
+    expect(mockPostForm).not.toHaveBeenCalled();
+    mockPostForm.mockResolvedValue({ code: "success", taskId: 42 });
+    expect(
+      parse(
+        await tool().execute("submit-12377", {
+          ...params,
+          classifications: [{ link, taxonomyVersionId: 34, categoryCode: "rumor" }],
+        }),
+      ),
+    ).toMatchObject({ success: true, taskRefs: [{ link, taskId: 42, acceptance: "accepted" }] });
+    expect(mockPostForm).toHaveBeenCalledWith(
+      expect.anything(),
+      "/legal/save-complaint-job",
+      expect.objectContaining({ destination: "Report12377", links: JSON.stringify([link]) }),
+      "sk_test1749",
+    );
+  });
+
+  it("does not use a content-platform catalog when the backend ignores the destination", async () => {
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: [
+        { link: "https://www.toutiao.com/video/123", platform: "Toutiao", taxonomyVersionId: 1 },
+      ],
+    });
+    const result = parse(
+      await tool().execute("old-backend", {
+        destination: "Report12377",
+        basisSource: "AgentJudgment",
+        confirmed: true,
+        subjectScope: "Institution",
+        judgment: "根据用户提供的证据核对该视频的具体表述，请平台进一步核查处理。",
+        links: ["https://www.toutiao.com/video/123"],
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.classificationRequired).not.toBe(true);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid destinations and legacy 12377 calls before backend requests", async () => {
+    for (const destination of ["12377", "unknown", [], null, "Report12377"]) {
+      expect(parse(await tool().execute("invalid-destination", { destination })).success).toBe(
+        false,
+      );
+    }
+    expect(mockPostForm).not.toHaveBeenCalled();
+    expect(mockGetJson).not.toHaveBeenCalled();
+  });
+
+  it("rejects overlong 12377 reasons before creating any batch tasks", async () => {
+    const link = "https://www.toutiao.com/video/123";
+    for (const judgment of ["字".repeat(501), "😀".repeat(251)]) {
+      const result = parse(
+        await tool().execute("long-12377", {
+          destination: "Report12377",
+          basisSource: "AgentJudgment",
+          confirmed: true,
+          subjectScope: "Institution",
+          judgment,
+          links: [link],
+          classifications: [{ link, taxonomyVersionId: 34, categoryCode: "rumor" }],
+        }),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("500");
+    }
+    expect(mockPostForm).not.toHaveBeenCalled();
+    expect(mockGetJson).not.toHaveBeenCalled();
+  });
+
   it("fails closed when a direct report link has no published selectable taxonomy", async () => {
     const link = "https://weibo.com/1/missing";
     mockGetJson.mockResolvedValue({ code: "success", taxonomies: [], unsupportedLinks: [link] });

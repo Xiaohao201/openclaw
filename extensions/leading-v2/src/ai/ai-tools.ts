@@ -130,6 +130,12 @@ function resolveDirectJudgment(
 const ComplaintSubmitSchema = Type.Object(
   {
     ...DirectJudgmentProperties,
+    destination: Type.Optional(
+      Type.Union([Type.Literal("ContentPlatform"), Type.Literal("Report12377")], {
+        description:
+          "举报接收渠道，默认内容所在平台。向12377举报须显式传Report12377并使用直接研判；原链接保持不变。",
+      }),
+    ),
     linkJudgments: Type.Optional(
       Type.Array(
         Type.Object(
@@ -456,6 +462,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
       label: "一键举报",
       description:
         "一键举报：可直接使用夙衡本轮研判，或兼容复用最近一次内容检测任务。" +
+        "向12377举报必须传destination=Report12377，查询和重试提交均保留该参数；使用12377目录，不能改投原平台。12377走匿名流程，每条事由最多500个UTF-16字符，网站名称使用原链接域名；验证码和最终提交由操作员完成。" +
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
         "批量举报必须提供 linkJudgments，为每条链接独立撰写事由；工具逐链接创建任务，不会把整批摘要填入每条举报。" +
         "仅根据对应链接的真实证据和用户理由撰写，不得将未核实、AI标注或缺少来源直接认定为虚假事实。" +
@@ -467,6 +474,19 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         "用户询问进度或需要确认平台提交结果时，调用 complaint_task_status，优先传本次返回的 batchId 一次查询整批逐链接状态；不要高频轮询。",
       parameters: ComplaintSubmitSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const destination = rawParams.destination ?? "ContentPlatform";
+        if (
+          rawParams.destination === null ||
+          (destination !== "ContentPlatform" && destination !== "Report12377")
+        ) {
+          return jsonResult({ success: false, error: "举报接收渠道无效。" });
+        }
+        if (destination === "Report12377" && rawParams.basisSource !== "AgentJudgment") {
+          return jsonResult({
+            success: false,
+            error: "向12377举报须使用AgentJudgment并提供明确的举报依据。",
+          });
+        }
         const keyed = await resolveKeyOrError(api, resolver, userId, "complaint_submit");
         if ("error" in keyed) {
           return keyed.error;
@@ -555,6 +575,17 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           }
         }
 
+        if (destination === "Report12377" && direct.code === "valid") {
+          const reasons =
+            linkJudgments.size > 0 ? [...linkJudgments.values()] : [direct.basis.judgment];
+          if (reasons.some((reason) => reason.length > 500)) {
+            return jsonResult({
+              success: false,
+              error: "12377每条举报事由最多500个UTF-16字符，请精简对应事由后重试；不会自动截断。",
+            });
+          }
+        }
+
         const classifications = Array.isArray(rawParams.classifications)
           ? rawParams.classifications.filter((item): item is Record<string, unknown> =>
               Boolean(item && typeof item === "object"),
@@ -571,7 +602,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
               taxonomyResponse = await getJson(
                 config,
                 "/legal/fetch-complaint-taxonomy",
-                { links: missingLinks },
+                { links: missingLinks, ...(destination === "Report12377" ? { destination } : {}) },
                 keyed.apiKey,
               );
             } catch (error) {
@@ -591,6 +622,21 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
               });
             }
             const taxonomies = taxonomyResponse.taxonomies;
+            if (
+              destination === "Report12377" &&
+              (taxonomyResponse.destination !== destination ||
+                taxonomies.some(
+                  (item) =>
+                    !item ||
+                    typeof item !== "object" ||
+                    (item as Record<string, unknown>).platform !== destination,
+                ))
+            ) {
+              return jsonResult({
+                success: false,
+                error: "后端未确认12377分类目录，请升级后端；不能改用原平台分类。",
+              });
+            }
             const catalogLinks = new Set(
               taxonomies
                 .map((item) =>
@@ -615,6 +661,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
             return jsonResult({
               success: false,
               classificationRequired: true,
+              ...(destination === "Report12377" ? { destination } : {}),
               retryable: true,
               missingLinks,
               taxonomies,
@@ -641,6 +688,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           id: jobId,
           links: JSON.stringify(links),
           role,
+          ...(destination === "Report12377" ? { destination } : {}),
         };
         if (direct.code === "valid") {
           fields.basisSource = direct.basis.source;
