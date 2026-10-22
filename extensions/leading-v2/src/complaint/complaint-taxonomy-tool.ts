@@ -25,7 +25,7 @@ export function createComplaintTaxonomyToolFactory(
       name: "complaint_taxonomy",
       label: "查询举报平台和分类",
       description:
-        "只读查询当前举报分类目录，不提交任务。用户问支持哪些平台时不传 links；核对具体链接时传 links。向中央网信办12377举报时传 destination=Report12377，links 仍为被举报内容原网址；不传 destination 时查询内容所在平台。12377目录仅代表已接入的匿名类别，不得将其分类传入原平台 complaint_submit，也不表示已接通12377提交工具。必须查询后再回答，不得根据旧名单拒绝平台。platforms 表示目录可用，具体链接以 taxonomies 和 unsupportedLinks 为准；接口失败或旧版缺少 platforms 不代表不支持。目录可用不保证举报执行、涉企投诉或下架成功。",
+        "只读查询当前举报分类目录，不提交任务。用户问支持哪些平台时不传 links；核对具体链接时传 links。向中央网信办12377举报时传 destination=Report12377，links 仍为被举报内容原网址；不传 destination 时查询内容所在平台。12377目录仅代表已接入的匿名类别；使用该目录提交时，complaint_submit 必须同样传 destination=Report12377，不得改投原平台。必须查询后再回答，不得根据旧名单拒绝平台。platforms 表示目录可用，具体链接以 taxonomies 和 unsupportedLinks 为准；接口失败或旧版缺少 platforms 不代表不支持。目录可用不保证举报执行、涉企投诉或下架成功。",
       parameters: Type.Object(
         {
           destination: Type.Optional(
