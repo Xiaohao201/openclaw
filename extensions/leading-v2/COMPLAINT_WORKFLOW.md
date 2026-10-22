@@ -29,6 +29,22 @@ submissions retain their existing backend behavior.
 
 ## Report submission status
 
+### 12377 taxonomy discovery
+
+Use `complaint_taxonomy({ destination: "Report12377", links: [...] })` to query
+12377 categories for the original content URLs. Omit `links` to retrieve that
+destination's catalog. The default destination remains the content platform.
+The backend must echo `destination: "Report12377"`; a legacy response that ignores
+the parameter must not be presented as a 12377 catalog.
+
+Deploy the backend taxonomy endpoint and apply its
+`doc/infringement/2026-10-22-report12377-complaint-taxonomy.sql` migration first.
+The catalog follows the existing executor's seven anonymous categories, not all
+official categories. This is read-only discovery: do not pass these selections
+to the content-platform `complaint_submit` flow. It does not enable a 12377
+submission tool, change the worker's preview/real-submission configuration, or
+confirm that a report has been submitted.
+
 `complaint_submit` returning `success=true`, `submitted=true`, or `submittedLinks`
 confirms only that the report service accepted the task. Tell the user:
 “举报任务已提交至举报服务，是否已提交到目标平台尚待状态查询确认。”
