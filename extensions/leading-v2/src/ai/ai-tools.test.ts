@@ -291,6 +291,29 @@ describe("job_stop", () => {
 });
 
 describe("complaint_submit", () => {
+  it("does not apply direct-platform restrictions to backend Report12377 submissions", async () => {
+    const link = "https://xueqiu.com/1";
+    mockPostForm.mockResolvedValue({ code: "success", taskId: 42 });
+    expect(
+      parse(
+        await tool().execute("12377-independent", {
+          destination: "Report12377",
+          basisSource: "AgentJudgment",
+          confirmed: true,
+          subjectScope: "Institution",
+          judgment: "依据原始内容与已核验证据形成的单条举报事由，请平台审核。",
+          links: [link],
+          classifications: [{ link, taxonomyVersionId: 34, categoryCode: "rumor" }],
+        }),
+      ),
+    ).toMatchObject({ success: true });
+    expect(mockPostForm).toHaveBeenCalledWith(
+      expect.anything(),
+      "/legal/save-complaint-job",
+      expect.objectContaining({ destination: "Report12377" }),
+      "sk_test1749",
+    );
+  });
   it.each(["https://www.10jqka.com.cn/1", "https://xueqiu.com/1", "https://mp.weixin.qq.com/s/1"])(
     "rejects unavailable platforms before backend submission: %s",
     async (link) => {

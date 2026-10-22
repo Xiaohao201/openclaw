@@ -524,7 +524,8 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           : [];
         const jobLink = asString(job?.link);
         const links = provided.length > 0 ? provided : jobLink ? [jobLink] : [];
-        const unsupportedLinks = links.filter(isUnavailableComplaintLink);
+        const unsupportedLinks =
+          destination === "Report12377" ? [] : links.filter(isUnavailableComplaintLink);
         if (unsupportedLinks.length > 0) {
           return jsonResult({
             success: false,
