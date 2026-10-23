@@ -15,7 +15,7 @@ Example local configuration (replace placeholders):
       "wechat-group-push": {
         "enabled": true,
         "config": {
-          "endpoint": "http://127.0.0.1:5002/warning_info",
+          "endpoint": "https://your-aliyun-domain.example/warning_info",
           "groups": {
             "Example business group": "example-chat-id",
             "Another business group": "another-example-chat-id"
@@ -59,3 +59,18 @@ Legacy `chatId` + `groupName` configuration remains readable, but still requires
 explicit group selection and confirmation. Do not mix it with `groups`. The
 confirmation flag records the agent's assertion; the conversational confirmation
 is enforced by the tool instructions and bundled skill, not an independent approval UI.
+
+## Aliyun relay configuration
+
+Set `plugins.entries.wechat-group-push.config.endpoint` in the active OpenClaw
+configuration file (normally `~/.openclaw/openclaw.json`) to the full relay URL:
+`https://your-aliyun-domain.example/warning_info`. Replace the placeholder domain
+before sending, and preserve `/warning_info` (or the path exposed by your proxy).
+Keep the existing `groups` map: the plugin resolves the selected group name and
+posts `{ "chatid": "...", "content": "..." }` to this endpoint.
+
+The Aliyun service owns enterprise credentials, access tokens, and the call to
+`appchat/send`. No enterprise credentials belong in this plugin configuration.
+Although the server supports a default group when `chatid` is omitted, this
+plugin always supplies the explicitly selected group's ID. Restart the gateway
+after changing the endpoint. A placeholder endpoint is not a working deployment.
