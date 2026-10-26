@@ -404,6 +404,61 @@ describe("processChatMessage", () => {
     },
   );
 
+  it.each(["error", "timeout"] as const)(
+    "persists terminal %s before cleanup, even when cancellation arrives during cleanup",
+    async (waitStatus) => {
+      const controller = new AbortController();
+      const { historyManager, updateMetadata, updateResponse } = createHistoryManagerMock();
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        waitStatus,
+        waitEndedAt: 1234,
+        onWait: (listener) =>
+          listener?.({
+            runId: "r1",
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "Already generated report", delta: "Already generated report" },
+          }),
+      });
+      updateMetadata.mockImplementation(async (_id, patch) => {
+        if (patch.completionStatus === "failed") {
+          controller.abort();
+        }
+      });
+      await processChatMessage(
+        createChatMessage(),
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { abortSignal: controller.signal, abortRun: vi.fn(() => false) },
+      );
+      expect(updateMetadata).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          completionStatus: "failed",
+          completedAt: expect.any(String),
+        }),
+        expect.anything(),
+      );
+      expect(updateResponse).toHaveBeenCalledWith(1, "Already generated report", expect.anything());
+      expect(
+        updateMetadata.mock.calls.some(([, patch]) => patch.completionStatus === "completed"),
+      ).toBe(false);
+    },
+  );
+
   it("confirms cancellation for a cached terminal timeout instead of retrying a finished run", async () => {
     const controller = new AbortController();
     const abortRun = vi.fn(() => false);
@@ -1070,9 +1125,9 @@ describe("processChatMessage", () => {
       },
     });
     await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
-    const [, metadata] = updateMetadata.mock.calls
-      .filter(([, patch]) => Array.isArray(patch.steps))
-      .at(-1) as unknown as [number, { steps: Array<{ status: string }> }];
+    const [, metadata] = updateMetadata.mock.calls.findLast(([, patch]) =>
+      Array.isArray(patch.steps),
+    ) as unknown as [number, { steps: Array<{ status: string }> }];
     expect(metadata.steps.every((step) => step.status !== "running")).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Persisting running steps failed"),
@@ -1130,9 +1185,8 @@ describe("processChatMessage", () => {
     expect(vi.mocked(logger.warn).mock.calls.flat().join(" ")).not.toContain(
       "private connection details",
     );
-    const last = updateMetadata.mock.calls
-      .filter(([, patch]) => Array.isArray(patch.steps))
-      .at(-1)?.[1].steps as Array<{ status: string }>;
+    const last = updateMetadata.mock.calls.findLast(([, patch]) => Array.isArray(patch.steps))?.[1]
+      .steps as Array<{ status: string }>;
     expect(last.every((step) => step.status !== "running")).toBe(true);
   });
 
@@ -1169,9 +1223,9 @@ describe("processChatMessage", () => {
     await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
 
     expect(updateMetadata).toHaveBeenCalled();
-    const [historyId, metadata] = updateMetadata.mock.calls
-      .filter(([, patch]) => Array.isArray(patch.steps))
-      .at(-1) as unknown as [number, { steps: Array<{ label: string; status: string }> }];
+    const [historyId, metadata] = updateMetadata.mock.calls.findLast(([, patch]) =>
+      Array.isArray(patch.steps),
+    ) as unknown as [number, { steps: Array<{ label: string; status: string }> }];
     expect(historyId).toBe(1);
     const steps = metadata.steps;
     // The unfinished tool step is present in the saved timeline…
