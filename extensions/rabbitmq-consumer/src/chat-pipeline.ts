@@ -558,6 +558,32 @@ export async function processChatMessage(
       logger,
     }));
 
+  const persistPartialResponse = async () => {
+    const partialText = streamPusherCtx.streamPusher?.getFullText();
+    if (!partialText) {
+      return;
+    }
+    try {
+      const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
+      const safePartial = mediaLinesToMarkdown(
+        normalizeChineseProseQuotes(
+          sanitizeInternalRefs(
+            artifactLinks.sanitize(stripDanglingCitationMarkers(partialVisible, partialCites)),
+          ),
+        ),
+      );
+      stage = "updateResponse";
+      await saveResponse(safePartial + artifactLinks.deliveryLinks());
+      logger.info(
+        `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars): historyId=${chatMsg.historyId}`,
+      );
+    } catch (partialError) {
+      logger.warn(
+        `[CHAT_PIPELINE] Partial response persistence failed (non-fatal): ${failureContext(partialError)}`,
+      );
+    }
+  };
+
   // Work-process ("工作过程") timeline accumulated as the turn streams, then
   // persisted to history_messages.metadata so the lobster history view can
   // replay the panel. Declared at function scope so EVERY exit path (success,
@@ -1055,17 +1081,17 @@ export async function processChatMessage(
     // isolating us from concurrent runs (report subagent, heartbeat, another
     // user's chat) whose runId and sessionKey both differ.
     let currentRunId: string | null = null;
-    let abortRunPromise: Promise<void> | null = null;
+    const abortAttemptState: { pending: Promise<void> | null } = { pending: null };
     let abortAttempt = 0;
     let runSettled = false;
     const abortActiveRun = () => {
-      if (!currentRunId || runSettled || abortRunPromise) {
-        return abortRunPromise;
+      if (!currentRunId || runSettled || abortAttemptState.pending) {
+        return abortAttemptState.pending;
       }
       const attempt = ++abortAttempt;
       // Invoke in a promise so synchronous exceptions are handled too. Release
       // the in-flight guard after every attempt: false/throw must be retryable.
-      abortRunPromise = Promise.resolve()
+      abortAttemptState.pending = Promise.resolve()
         .then(async () => {
           const accepted = await options?.abortRun?.(sessionKey);
           if (accepted !== true) {
@@ -1084,9 +1110,9 @@ export async function processChatMessage(
           );
         })
         .finally(() => {
-          abortRunPromise = null;
+          abortAttemptState.pending = null;
         });
-      return abortRunPromise;
+      return abortAttemptState.pending;
     };
     options?.abortSignal?.addEventListener("abort", abortActiveRun, { once: true });
     const unsubscribe = runtime.events.onAgentEvent((evt) => {
@@ -1415,8 +1441,8 @@ export async function processChatMessage(
         }
         // Drain this attempt before the next polling window so an earlier
         // failure cannot occupy the guard and suppress the next real retry.
-        if (options?.abortSignal?.aborted && abortRunPromise) {
-          await abortRunPromise;
+        if (options?.abortSignal?.aborted && abortAttemptState.pending) {
+          await abortAttemptState.pending;
         }
         // Never rely on the RPC to sleep: cached/early timeout responses may
         // return immediately. Yield to the event loop before another attempt.
@@ -1438,8 +1464,16 @@ export async function processChatMessage(
       if (waitResult.status === "error" || waitResult.status === "timeout") {
         logger.error(`[CHAT_PIPELINE] Subagent error: ${waitResult.error}`);
         const notification = notifyFailure("本次任务执行失败，请稍后重试。");
-        // Persist the timeline with unfinished steps marked failed, so the
-        // history view shows a clean failed timeline rather than a spinner.
+        // This outcome is authoritative: waitForRun has confirmed settlement.
+        // Persist it before optional cleanup so a concurrent/late Stop can finish
+        // even after this turn has been removed from the consumer's active map.
+        await historyManager.updateMetadata(
+          chatMsg.historyId,
+          { completionStatus: "failed", completedAt: new Date().toISOString() },
+          historyDbContext,
+        );
+        await persistPartialResponse();
+        // Keep the failure visible without discarding text already generated.
         await persistTimeline("failed");
         // The failed run still consumed tokens; bill what it spent.
         await persistUsage();
@@ -1612,34 +1646,9 @@ export async function processChatMessage(
     // Start terminal delivery before any DB cleanup. An unavailable database
     // must not prevent the live UI from learning that the turn has failed.
     const notification = notifyFailure(message);
-    const partialText = streamPusherCtx.streamPusher?.getFullText();
-    // A final response UPDATE may have committed before its acknowledgement was
-    // lost. Never follow its exhausted retry with a shorter streamed snapshot.
-    if (
-      partialText &&
-      failedStage !== "updateResponse" &&
-      failedStage !== "finalize" &&
-      failedStage !== "notifyFrontend"
-    ) {
-      try {
-        const { text: partialVisible, citations: partialCites } = splitCitations(partialText);
-        const safePartial = mediaLinesToMarkdown(
-          normalizeChineseProseQuotes(
-            sanitizeInternalRefs(
-              artifactLinks.sanitize(stripDanglingCitationMarkers(partialVisible, partialCites)),
-            ),
-          ),
-        );
-        stage = "updateResponse";
-        await saveResponse(safePartial + artifactLinks.deliveryLinks());
-        logger.info(
-          `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars): historyId=${chatMsg.historyId}`,
-        );
-      } catch (partialError) {
-        logger.warn(
-          `[CHAT_PIPELINE] Partial response persistence failed (non-fatal): ${failureContext(partialError)}`,
-        );
-      }
+    // Never replace an ambiguously committed final response with partial text.
+    if (!["updateResponse", "finalize", "notifyFrontend"].includes(failedStage)) {
+      await persistPartialResponse();
     }
     await persistTimeline("failed");
     await persistUsage();
