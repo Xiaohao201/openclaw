@@ -6,6 +6,7 @@ export {
   type PluginRuntime,
 } from "openclaw/plugin-sdk/core";
 export { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export { ArtifactLinks } from "openclaw/plugin-sdk/text-runtime";
 export {
   collectSessionTurnUsage,
   convertSessionTurnCost,

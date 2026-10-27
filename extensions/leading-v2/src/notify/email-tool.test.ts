@@ -31,6 +31,82 @@ function parse(result: unknown): Record<string, unknown> {
 }
 
 describe("send_email", () => {
+  it("withholds unsupported URLs without borrowing another session's evidence", async () => {
+    const url = "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/10/27/123_abcd.xlsx";
+    const getSessionMessages = vi.fn(async ({ sessionKey }: { sessionKey: string }) => ({
+      messages:
+        sessionKey === "first"
+          ? [{ role: "toolResult", toolName: "file_share", details: { ok: true, url } }]
+          : [{ role: "assistant", content: url }],
+    }));
+    const api = createApi();
+    api.runtime = { subagent: { getSessionMessages } } as unknown as OpenClawPluginApi["runtime"];
+    const sender = vi.fn<EmailSender>();
+    const factory = createEmailSendToolFactory(api, smtp, sender);
+    const params = { to: "user@example.com", subject: "report", content: url, confirmed: true };
+    await factory({ agentId: "rabbitmq-1749", sessionKey: "first" })!.execute("one", params);
+    await factory({ agentId: "rabbitmq-1749", sessionKey: "second" })!.execute("two", params);
+    await factory({ agentId: "rabbitmq-1749" })!.execute("three", params);
+    expect(sender.mock.calls.map((call) => call[1].text)).toEqual([
+      url,
+      "（下载链接未核验）",
+      "（下载链接未核验）",
+    ]);
+  });
+
+  it("repairs artifact URLs from the current session before sending", async () => {
+    const url = "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/10/27/123_abcd.xlsx";
+    const wrong = url.replace("2026/10/27", "2026-10-27");
+    const getSessionMessages = vi.fn(async () => ({
+      messages: [{ role: "toolResult", toolName: "file_share", details: { ok: true, url } }],
+    }));
+    const api = createApi();
+    api.runtime = { subagent: { getSessionMessages } } as unknown as OpenClawPluginApi["runtime"];
+    const sender = vi.fn<EmailSender>();
+    const tool = createEmailSendToolFactory(
+      api,
+      smtp,
+      sender,
+    )({
+      agentId: "rabbitmq-1749",
+      sessionKey: "agent:rabbitmq-1749:test:sched",
+    })!;
+    await tool.execute("mail", {
+      to: "user@example.com",
+      subject: "report",
+      content: `[${wrong}](${wrong})`,
+      confirmed: true,
+    });
+    expect(getSessionMessages).toHaveBeenCalledWith({
+      sessionKey: "agent:rabbitmq-1749:test:sched",
+    });
+    expect(sender).toHaveBeenCalledWith(smtp, {
+      to: "user@example.com",
+      subject: "report",
+      text: `[${url}](${url})`,
+    });
+  });
+
+  it("does not send unchecked artifact URLs when the transcript cannot be read", async () => {
+    const api = createApi();
+    api.runtime = {
+      subagent: { getSessionMessages: vi.fn().mockRejectedValue(new Error("unavailable")) },
+    } as unknown as OpenClawPluginApi["runtime"];
+    const sender = vi.fn<EmailSender>();
+    const tool = createEmailSendToolFactory(
+      api,
+      smtp,
+      sender,
+    )({ agentId: "rabbitmq-1749", sessionKey: "current" })!;
+    await tool.execute("mail", {
+      to: "user@example.com",
+      subject: "report",
+      content: "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026-10-27/123_abcd.xlsx",
+      confirmed: true,
+    });
+    expect(sender).not.toHaveBeenCalled();
+  });
+
   it("is available only to rabbitmq chat agents when SMTP is configured", () => {
     const factory = createEmailSendToolFactory(createApi(), smtp, vi.fn<EmailSender>());
 

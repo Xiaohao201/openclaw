@@ -27,6 +27,23 @@ register(api) {
 
 ## Runtime namespaces
 
+### Artifact links in outgoing text
+
+`openclaw/plugin-sdk/text-runtime` exports `ArtifactLinks` and
+`artifactStreamPrefixLength`. Create a fresh `ArtifactLinks` per session or delivery,
+observe successful `file_share` / `chart_render` tool results with `observeMessages`
+or `observeToolEvent`, then call `sanitize` before sending model-authored text.
+It repairs uniquely matched file URLs using the exact URL returned by the tool;
+unknown or ambiguous artifact URLs become a non-clickable unverified marker.
+Assistant text is never upload evidence. `deliveryLinks` optionally appends links
+observed with delivery enabled. The constructor accepts a custom storage domain
+and path prefix in addition to the default artifact location.
+
+Use `api.runtime.subagent.getSessionMessages({ sessionKey })` to read the current
+session at delivery time. Its default window is the latest 200 messages; artifacts
+outside that window cannot be verified from this read. Do not reuse evidence across
+sessions or infer an object key by reformatting a date.
+
 ### `api.runtime.agent`
 
 Agent identity, directories, and session management.

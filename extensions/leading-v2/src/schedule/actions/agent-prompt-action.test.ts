@@ -109,6 +109,29 @@ describe("agentPromptAction.validate", () => {
 });
 
 describe("agentPromptAction runner", () => {
+  it("validates links against upload evidence beyond the last five messages before fanout", async () => {
+    const url = "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/10/27/123_abcd.xlsx";
+    const wrong = url.replace("2026/10/27", "2026-10-27");
+    const subagent = makeSubagent(wrong);
+    const messages = [
+      { role: "toolResult", toolName: "file_share", details: { ok: true, url } },
+      ...Array.from({ length: 6 }, () => ({
+        role: "toolResult",
+        toolName: "send_email",
+        content: "sent",
+      })),
+      { role: "assistant", content: wrong },
+    ];
+    vi.mocked(subagent.getSessionMessages).mockImplementation(async ({ limit }) => ({
+      messages: limit ? messages.slice(-limit) : messages,
+    }));
+    const deliver = vi.fn(async () => true);
+    expect(await agentPromptAction.makeRunner(deps({ subagent, deliver }))(task())).toMatchObject({
+      ok: true,
+    });
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ body: url }), expect.anything());
+  });
+
   it("does not report success when every delivery transport rejects the result", async () => {
     const runner = agentPromptAction.makeRunner(
       deps({

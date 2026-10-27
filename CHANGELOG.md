@@ -89,6 +89,8 @@ Docs: https://docs.openclaw.ai
 
 - WeChat Group Push: build each turn's destination list from the host's current configuration so newly added groups appear even when a cached plugin runtime retains an older snapshot.
 
+- Scheduled tasks/email: validate generated download links against successful uploads in the current session before delivery, matching chat reply link correction instead of forwarding model-rewritten artifact paths.
+
 ## 2026.4.15
 
 ### Changes
