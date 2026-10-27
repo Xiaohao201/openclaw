@@ -67,7 +67,11 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 function makeSubagent(assistantText: string, status: "ok" | "error" | "timeout" = "ok") {
   return {
     run: vi.fn(async () => ({ runId: "r1" })),
-    waitForRun: vi.fn(async () => ({ status, error: status === "ok" ? undefined : "boom" })),
+    waitForRun: vi.fn(async () => ({
+      status,
+      endedAt: Date.now(),
+      error: status === "ok" ? undefined : "boom",
+    })),
     getSessionMessages: vi.fn(async () => ({
       messages: [{ role: "assistant", content: assistantText }],
     })),
@@ -105,6 +109,90 @@ describe("agentPromptAction.validate", () => {
 });
 
 describe("agentPromptAction runner", () => {
+  it("does not report success when every delivery transport rejects the result", async () => {
+    const runner = agentPromptAction.makeRunner(
+      deps({
+        subagent: makeSubagent("answer"),
+        deliver: vi.fn(async () => false),
+      }),
+    );
+    expect(await runner(task())).toMatchObject({
+      ok: false,
+      note: expect.stringContaining("delivery"),
+    });
+  });
+  it("requests cancellation at the deadline but holds the slot until termination is confirmed", async () => {
+    vi.useFakeTimers();
+    try {
+      const subagent = makeSubagent("late response");
+      vi.mocked(subagent.waitForRun)
+        .mockResolvedValueOnce({ status: "timeout" })
+        .mockResolvedValueOnce({ status: "timeout" })
+        .mockResolvedValueOnce({ status: "error", endedAt: Date.now(), error: "aborted" });
+      const abortRun = vi.fn(async () => true);
+      const deliver = vi.fn(async () => true);
+      let settled = false;
+      const running = agentPromptAction
+        .makeRunner(
+          deps({
+            subagent,
+            abortRun,
+            deliver,
+            executionTimeoutMs: 1000,
+          }),
+        )(task())
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(abortRun).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await running).toMatchObject({ ok: false, code: "execution_timeout" });
+      expect(deliver).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting through a non-terminal timeout and uses a dedicated execution lane", async () => {
+    vi.useFakeTimers();
+    try {
+      const subagent = makeSubagent("done");
+      vi.mocked(subagent.waitForRun).mockResolvedValueOnce({ status: "timeout" });
+      const deliver = vi.fn(async () => true);
+      const runner = agentPromptAction.makeRunner(deps({ subagent, deliver }));
+      const running = runner(task(), { lane: "leading-v2-schedule-3" });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(deliver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await running).toMatchObject({ ok: true });
+      expect(subagent.waitForRun).toHaveBeenCalledTimes(2);
+      expect(subagent.run).toHaveBeenCalledWith(
+        expect.objectContaining({ lane: "leading-v2-schedule-3" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains its execution until a failed wait RPC can confirm settlement", async () => {
+    vi.useFakeTimers();
+    try {
+      const subagent = makeSubagent("done");
+      vi.mocked(subagent.waitForRun).mockRejectedValueOnce(new Error("network down"));
+      const deliver = vi.fn(async () => true);
+      const running = agentPromptAction.makeRunner(deps({ subagent, deliver }))(task());
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(deliver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await running).toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs in a derived ':sched' session and delivers the assistant reply", async () => {
     const subagent = makeSubagent("早安！今天有 3 件待办。");
     const deliver = vi.fn(async () => true);

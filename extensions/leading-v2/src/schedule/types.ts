@@ -26,4 +26,7 @@ export interface ScheduledTask {
 }
 
 /** Runs one scheduled action. Returns ok + an optional note for logging. */
-export type ActionRunner = (task: ScheduledTask) => Promise<{ ok: boolean; note?: string }>;
+export type ActionRunner = (
+  task: ScheduledTask,
+  execution?: { lane: string; signal?: AbortSignal },
+) => Promise<{ ok: boolean; note?: string; code?: "cancelled" | "execution_timeout" }>;

@@ -23,6 +23,9 @@ export interface ActionRunnerDeps {
   registry: PendingTaskRegistry;
   /** Subagent surface for agent-prompt actions; undefined outside a gateway runtime. */
   subagent?: PluginRuntime["subagent"];
+  /** Requests termination; capacity remains reserved until waitForRun confirms it. */
+  abortRun?: (sessionKey: string) => boolean | Promise<boolean>;
+  executionTimeoutMs?: number;
   /** Fans a Notification out to all configured transports (Mercure / history / email). */
   deliver: (n: Notification, to: NotifyAddressing) => Promise<boolean>;
   /**
