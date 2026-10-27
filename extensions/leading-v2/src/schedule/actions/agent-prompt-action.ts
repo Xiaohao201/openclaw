@@ -4,10 +4,66 @@ import { insertHistoryRow, sessionIdFromKey } from "../../notify/history-row.js"
 import { collectTurnUsage, formatUsage, markUsageOutcome } from "../../notify/usage.js";
 import type { TurnUsageRecord } from "../../notify/usage.js";
 import type { ScheduledTask } from "../types.js";
-import type { ScheduleActionType } from "./types.js";
+import type { ActionRunnerDeps, ScheduleActionType } from "./types.js";
 
 const MAX_INSTRUCTION = 2000;
-const RUN_TIMEOUT_MS = 300_000; // 5 min, matches the chat pipeline's subagent wait
+const WAIT_WINDOW_MS = 30_000;
+const EXECUTION_TIMEOUT_MS = 15 * 60_000;
+
+/** A wait/RPC timeout is not a model termination. Never release capacity on uncertainty. */
+async function waitUntilSettled(
+  subagent: NonNullable<ActionRunnerDeps["subagent"]>,
+  runId: string,
+  taskId: string,
+  logger: import("../../../api.js").PluginLogger,
+  control: {
+    sessionKey: string;
+    deadline: number;
+    signal?: AbortSignal;
+    abortRun?: ActionRunnerDeps["abortRun"];
+  },
+) {
+  let stopped: "cancelled" | "execution_timeout" | undefined;
+  while (true) {
+    const started = Date.now();
+    stopped ??= control.signal?.aborted
+      ? "cancelled"
+      : started >= control.deadline
+        ? "execution_timeout"
+        : undefined;
+    if (stopped) {
+      try {
+        const accepted = await control.abortRun?.(control.sessionKey);
+        logger.warn(
+          `[LEADING_V2_SCHED] task ${taskId} run ${runId} ${stopped}; abort accepted=${accepted === true}; retaining capacity until settled`,
+        );
+      } catch (error) {
+        logger.warn(`[LEADING_V2_SCHED] task ${taskId} abort failed: ${String(error)}`);
+      }
+    }
+    try {
+      const result = await subagent.waitForRun({ runId, timeoutMs: WAIT_WINDOW_MS });
+      if (
+        result.status !== "timeout" ||
+        (typeof result.endedAt === "number" && Number.isFinite(result.endedAt))
+      ) {
+        return { result, stopped };
+      }
+      logger.info(
+        `[LEADING_V2_SCHED] task ${taskId} run ${runId} still running; retaining capacity`,
+      );
+    } catch (error) {
+      logger.warn(
+        `[LEADING_V2_SCHED] task ${taskId} run ${runId} settlement unknown; retaining capacity: ${String(error)}`,
+      );
+    }
+    // Cached timeouts and disconnected RPCs can return immediately; avoid a hot loop.
+    const delay = Math.max(0, WAIT_WINDOW_MS - (Date.now() - started));
+    if (delay > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
 
 /** Last assistant turn's text — content is a string in simple sessions, an array of
  * content blocks in tool-using ones; extract text so delivery always gets a string. */
@@ -60,7 +116,7 @@ export const agentPromptAction: ScheduleActionType = {
     return { ok: true, params: { instruction: instruction.slice(0, MAX_INSTRUCTION) } };
   },
   makeRunner(deps) {
-    return async (task: ScheduledTask) => {
+    return async (task: ScheduledTask, execution) => {
       const { subagent, deliver, logger, usagePolicy, appConfig } = deps;
       if (!subagent) {
         return { ok: false, note: "subagent runtime unavailable" };
@@ -134,8 +190,19 @@ export const agentPromptAction: ScheduleActionType = {
           sessionKey,
           message: `[scheduled-task][userId:${task.uid}] ${instruction}`,
           deliver: false,
+          lane: execution?.lane ?? "leading-v2-schedule-0",
         });
-        const wait = await subagent.waitForRun({ runId, timeoutMs: RUN_TIMEOUT_MS });
+        logger.info(`[LEADING_V2_SCHED] task ${task.id} started run ${runId}`);
+        const { result: wait, stopped } = await waitUntilSettled(subagent, runId, task.id, logger, {
+          sessionKey,
+          deadline: firedAt + (deps.executionTimeoutMs ?? EXECUTION_TIMEOUT_MS),
+          signal: execution?.signal,
+          abortRun: deps.abortRun,
+        });
+        if (stopped) {
+          await billUnattended(stopped);
+          return { ok: false, code: stopped, note: `${stopped}; run ${runId} settled` };
+        }
         if (wait.status !== "ok") {
           await billUnattended(wait.status);
           return { ok: false, note: `subagent ${wait.status}: ${wait.error ?? ""}` };
@@ -170,6 +237,7 @@ export const agentPromptAction: ScheduleActionType = {
             `[LEADING_V2_SCHED] agent_prompt produced a reply but no transport accepted it ` +
               `(task ${task.id})${usage ? `; unbilled: ${formatUsage(usage)}` : ""}`,
           );
+          return { ok: false, note: "reply generated but no delivery transport accepted it" };
         } else if (usage) {
           logger.info(`[LEADING_V2_SCHED] task ${task.id} billed: ${formatUsage(usage)}`);
         }
