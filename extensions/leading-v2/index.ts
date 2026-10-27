@@ -61,6 +61,7 @@ import {
   createTopicListToolFactory,
 } from "./src/opinion/opinion-read-tools.js";
 import { buildRunners } from "./src/schedule/actions/registry.js";
+import { ExecutionJournal } from "./src/schedule/execution-journal.js";
 import { getSharedScheduleStore } from "./src/schedule/schedule-store.js";
 import {
   createScheduleCreateToolFactory,
@@ -171,6 +172,7 @@ export default definePluginEntry({
 
     let notifier: CompletionNotifier | undefined;
     let scheduler: Scheduler | undefined;
+    let executionJournal: ExecutionJournal | undefined;
     api.registerService({
       id: "leading-v2",
       async start(ctx) {
@@ -318,12 +320,27 @@ export default definePluginEntry({
               resolver,
               registry: pendingTasks,
               subagent: api.runtime?.subagent,
+              abortRun: async (sessionKey) => {
+                const { abortAgentHarnessRun } =
+                  await import("./src/schedule/agent-control.runtime.js");
+                return abortAgentHarnessRun(sessionKey);
+              },
               deliver: (n, to) => fanout.notify(n, to),
               usagePolicy,
               appConfig: api.config,
               logger: ctx.logger,
             });
-            scheduler = new Scheduler({ store: scheduleStore, runners, logger: ctx.logger });
+            executionJournal = new ExecutionJournal(
+              join(ctx.stateDir, "leading-v2-schedule-executions.json"),
+              (message) => ctx.logger.warn(message),
+            );
+            await executionJournal.load();
+            scheduler = new Scheduler({
+              store: scheduleStore,
+              runners,
+              logger: ctx.logger,
+              onEvent: (event) => executionJournal?.record(event),
+            });
             scheduler.start();
           } else {
             ctx.logger.info("[LEADING_V2] Background scheduling and completion polling disabled");
@@ -340,7 +357,8 @@ export default definePluginEntry({
         await stopComplaintBrowserSessions();
         clearNotifyEnqueue();
         notifier?.stop();
-        scheduler?.stop();
+        await scheduler?.stop();
+        await executionJournal?.flush();
         await pendingTasks.flush();
         await scheduleStore.flush();
         await closePool();
