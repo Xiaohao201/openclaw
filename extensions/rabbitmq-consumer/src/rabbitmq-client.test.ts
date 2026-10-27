@@ -10,7 +10,8 @@ import type { RabbitMqConfig } from "./types.js";
 class FakeChannel extends EventEmitter {
   assertQueue = vi.fn().mockResolvedValue(undefined);
   prefetch = vi.fn().mockResolvedValue(undefined);
-  consume = vi.fn().mockResolvedValue(undefined);
+  consume = vi.fn().mockResolvedValue({ consumerTag: "consumer-1" });
+  cancel = vi.fn().mockResolvedValue(undefined);
   ack = vi.fn();
   nack = vi.fn();
   close = vi.fn().mockImplementation(async () => {
@@ -42,6 +43,52 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 afterEach(() => vi.clearAllMocks());
 
 describe("RabbitMqClient connection resilience", () => {
+  it("reports ready only after consumer registration and rejects readiness after stop", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    const client = new RabbitMqClient(config, logger, vi.fn());
+    void client.start();
+    await client.waitUntilReady(1000);
+    expect(conn.channel.consume).toHaveBeenCalledOnce();
+    await client.stop();
+    await expect(client.waitUntilReady()).rejects.toThrow("did not become ready");
+  });
+
+  it("fails readiness on a broker timeout without claiming execution is healthy", async () => {
+    mockConnect.mockRejectedValue(new Error("offline"));
+    const client = new RabbitMqClient(config, logger, vi.fn());
+    void client.start();
+    await expect(client.waitUntilReady(1)).rejects.toThrow("did not become ready");
+    await client.stop();
+  });
+  it("finishes shutdown when broker cancellation and close operations fail", async () => {
+    const conn = new FakeConnection();
+    const control = new FakeChannel();
+    conn.createChannel
+      .mockImplementationOnce(async () => conn.channel)
+      .mockImplementationOnce(async () => control);
+    for (const channel of [conn.channel, control]) {
+      channel.cancel.mockRejectedValue(new Error("connection lost"));
+      channel.close.mockImplementation(async () => {
+        channel.emit("close");
+        throw new Error("already closed");
+      });
+    }
+    conn.close.mockImplementation(async () => {
+      throw new Error("already closed");
+    });
+    mockConnect.mockResolvedValue(conn);
+    const client = new RabbitMqClient(config, logger, vi.fn(), vi.fn());
+    const running = client.start();
+    expect(client.start()).toBe(running);
+    await flush();
+    await client.stop();
+    await running;
+    expect(conn.channel.cancel).toHaveBeenCalled();
+    expect(control.cancel).toHaveBeenCalled();
+    expect(conn.close).toHaveBeenCalled();
+  });
+
   it("attaches a connection 'error' handler so a drop never crashes the process", async () => {
     const conn = new FakeConnection();
     mockConnect.mockResolvedValue(conn);
@@ -61,6 +108,78 @@ describe("RabbitMqClient connection resilience", () => {
 });
 
 describe("RabbitMqClient concurrency", () => {
+  it("cancels intake and waits for accepted messages to settle before closing", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    let finish!: () => void;
+    const work = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const client = new RabbitMqClient(config, logger, () => work);
+    const running = client.start();
+    await flush();
+    const deliver = conn.channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+    const message = { content: Buffer.from("accepted") };
+    const delivery = deliver(message);
+    const stopping = client.stop();
+    await expect(client.start()).rejects.toThrow("while it is stopping");
+    await flush();
+    expect(conn.channel.cancel).toHaveBeenCalledWith("consumer-1");
+    expect(conn.channel.close).not.toHaveBeenCalled();
+    finish();
+    await delivery;
+    await stopping;
+    await running;
+    expect(conn.channel.ack).toHaveBeenCalledWith(message);
+    expect(conn.channel.ack.mock.invocationCallOrder[0]).toBeLessThan(
+      conn.channel.close.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("requeues deliveries racing with stop without starting a new handler", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    const handler = vi.fn();
+    const client = new RabbitMqClient(config, logger, handler);
+    const running = client.start();
+    await flush();
+    const deliver = conn.channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+    const stopping = client.stop();
+    const message = { content: Buffer.from("late") };
+    await deliver(message);
+    await stopping;
+    await running;
+    expect(handler).not.toHaveBeenCalled();
+    expect(conn.channel.nack).toHaveBeenCalledWith(message, false, true);
+  });
+
+  it("settles start when stop interrupts reconnect backoff", async () => {
+    mockConnect.mockRejectedValue(new Error("offline"));
+    const client = new RabbitMqClient(config, logger, vi.fn());
+    const running = client.start();
+    await flush();
+    await client.stop();
+    await running;
+  });
+
+  it("does not create a consumer when stop races with connection setup", async () => {
+    const conn = new FakeConnection();
+    let connected!: (value: FakeConnection) => void;
+    mockConnect.mockReturnValue(
+      new Promise<FakeConnection>((resolve) => {
+        connected = resolve;
+      }),
+    );
+    const client = new RabbitMqClient(config, logger, vi.fn());
+    const running = client.start();
+    const stopping = client.stop();
+    connected(conn);
+    await stopping;
+    await running;
+    expect(conn.channel.consume).not.toHaveBeenCalled();
+    expect(conn.close).toHaveBeenCalled();
+  });
+
   it("consumes cancellation controls on an independent channel", async () => {
     const conn = new FakeConnection();
     const chatChannel = new FakeChannel();

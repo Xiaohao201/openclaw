@@ -27,7 +27,8 @@ function createServiceContext(params: {
 }
 
 export type PluginServicesHandle = {
-  stop: () => Promise<void>;
+  assertHealthy?: () => void;
+  stop: (options?: { strict?: boolean }) => Promise<void>;
 };
 
 export async function startPluginServices(params: {
@@ -39,6 +40,7 @@ export async function startPluginServices(params: {
     id: string;
     stop?: () => void | Promise<void>;
   }> = [];
+  const startupFailures: unknown[] = [];
   const serviceContext = createServiceContext({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -46,13 +48,14 @@ export async function startPluginServices(params: {
 
   for (const entry of params.registry.services) {
     const service = entry.service;
+    running.push({
+      id: service.id,
+      stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
+    });
     try {
       await service.start(serviceContext);
-      running.push({
-        id: service.id,
-        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
-      });
     } catch (err) {
+      startupFailures.push(err);
       const error = err as Error;
       const stack = error?.stack?.trim();
       log.error(
@@ -61,17 +64,31 @@ export async function startPluginServices(params: {
     }
   }
 
+  let stopping: Promise<void> | undefined;
+  const failures: unknown[] = [];
   return {
-    stop: async () => {
-      for (const entry of running.toReversed()) {
-        if (!entry.stop) {
-          continue;
+    assertHealthy: () => {
+      if (startupFailures.length) {
+        throw new AggregateError(startupFailures, "Plugin service startup failed");
+      }
+    },
+    stop: async (options) => {
+      stopping ??= (async () => {
+        for (const entry of running.toReversed()) {
+          if (!entry.stop) {
+            continue;
+          }
+          try {
+            await entry.stop();
+          } catch (err) {
+            failures.push(err);
+            log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
+          }
         }
-        try {
-          await entry.stop();
-        } catch (err) {
-          log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
-        }
+      })();
+      await stopping;
+      if (options?.strict && failures.length > 0) {
+        throw new AggregateError(failures, "Plugin services did not stop cleanly");
       }
     },
   };

@@ -102,7 +102,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
 };
 
 export async function handleGatewayRequest(
-  opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
+  opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers; source?: "internal" },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
   const authError = authorizeGatewayMethod(req.method, client);
@@ -118,6 +118,19 @@ export async function handleGatewayRequest(
         retryable: true,
         retryAfterMs: 500,
         details: { method: req.method },
+      }),
+    );
+    return;
+  }
+  const admission = context.deploymentAdmission;
+  if (opts.source !== "internal" && admission && !admission.accepts(req.method)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "Gateway deployment in progress", {
+        retryable: true,
+        retryAfterMs: 500,
+        details: { method: req.method, notAccepted: true },
       }),
     );
     return;
@@ -169,5 +182,17 @@ export async function handleGatewayRequest(
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
-  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
+  if (admission) {
+    admission.active += 1;
+  }
+  try {
+    await withPluginRuntimeGatewayRequestScope(
+      { context, client, isWebchatConnect },
+      invokeHandler,
+    );
+  } finally {
+    if (admission) {
+      admission.active -= 1;
+    }
+  }
 }

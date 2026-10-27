@@ -1,10 +1,15 @@
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
+import {
+  GatewayRequestError,
+  GatewayTransportError,
+  type GatewayBrowserClient,
+} from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
+import { sendChatWithRecovery } from "./chat-send-recovery.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -233,12 +238,21 @@ async function requestChatSend(
   state: ChatState,
   params: { message: string; attachments?: ChatAttachment[]; runId: string },
 ) {
-  await state.client!.request("chat.send", {
-    sessionKey: state.sessionKey,
+  const client = state.client!;
+  const sessionKey = state.sessionKey;
+  const payload = {
+    sessionKey,
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
+  };
+  await sendChatWithRecovery({
+    send: () =>
+      state.connected
+        ? client.request("chat.send", payload)
+        : Promise.reject(new GatewayTransportError("gateway not connected", "not-sent")),
+    isCurrent: () => state.client === client && state.sessionKey === sessionKey,
   });
 }
 
@@ -347,6 +361,19 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
+    if (err instanceof GatewayTransportError) {
+      // Keep the original draft for review, but never automatically replay an
+      // unknown outcome. Reconnect reloads authoritative session history.
+      if (!state.chatMessage) {
+        state.chatMessage = msg;
+        state.chatAttachments = attachments ? [...attachments] : [];
+      }
+      if (err.outcome === "unknown") {
+        state.lastError =
+          "Connection lost before confirmation. Check the restored history before sending this draft again.";
+      }
+      return null;
+    }
     state.chatMessages = [
       ...state.chatMessages,
       {

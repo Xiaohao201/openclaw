@@ -267,6 +267,7 @@ async function dispatchGatewayMethod<T>(
 
   let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
   await handleGatewayRequest({
+    source: "internal",
     req: {
       type: "req",
       id: `plugin-subagent-${randomUUID()}`,

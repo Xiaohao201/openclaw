@@ -3,6 +3,7 @@ import {
   __testing as controlPlaneRateLimitTesting,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
+import { DeploymentAdmission } from "./deployment-drain.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
@@ -52,6 +53,39 @@ describe("gateway control-plane write rate limit", () => {
       clientIp: "10.0.0.5",
     } as Parameters<typeof handleGatewayRequest>[0]["client"];
   }
+
+  it("rejects external intake during deployment but lets accepted plugin work finish", async () => {
+    const context = buildContext();
+    context.deploymentAdmission = new DeploymentAdmission();
+    context.deploymentAdmission.draining = true;
+    const handler = vi.fn();
+    const respond = await runRequest({
+      method: "chat.send",
+      context,
+      client: buildClient(),
+      handler,
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ details: { method: "chat.send", notAccepted: true } }),
+    );
+    await handleGatewayRequest({
+      req: { type: "req", id: "internal", method: "agent" },
+      context,
+      client: buildClient(),
+      isWebchatConnect: noWebchat,
+      source: "internal",
+      respond: vi.fn(),
+      extraHandlers: {
+        agent: () => {
+          expect(context.deploymentAdmission?.active).toBe(1);
+        },
+      },
+    });
+    expect(context.deploymentAdmission.active).toBe(0);
+  });
 
   async function runRequest(params: {
     method: string;

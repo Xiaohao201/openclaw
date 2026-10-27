@@ -60,6 +60,16 @@ export class GatewayRequestError extends Error {
   }
 }
 
+export class GatewayTransportError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: "not-sent" | "unknown",
+  ) {
+    super(message);
+    this.name = "GatewayTransportError";
+  }
+}
+
 export function resolveGatewayErrorDetailCode(
   error: { details?: unknown } | null | undefined,
 ): string | null {
@@ -313,7 +323,7 @@ export class GatewayBrowserClient {
     this.pendingConnectError = undefined;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    this.flushPending(new Error("gateway client stopped"));
+    this.flushPending(new GatewayTransportError("gateway client stopped", "unknown"));
   }
 
   get connected() {
@@ -332,7 +342,9 @@ export class GatewayBrowserClient {
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
-      this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+      this.flushPending(
+        new GatewayTransportError(`gateway closed (${ev.code}): ${reason}`, "unknown"),
+      );
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       if (
@@ -613,7 +625,7 @@ export class GatewayBrowserClient {
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("gateway not connected"));
+      return Promise.reject(new GatewayTransportError("gateway not connected", "not-sent"));
     }
     const id = generateUUID();
     const frame = { type: "req", id, method, params };

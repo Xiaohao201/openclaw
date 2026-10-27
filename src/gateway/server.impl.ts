@@ -39,6 +39,7 @@ import {
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { DeploymentAdmission, drainDeployment } from "./deployment-drain.js";
 import { closeMcpLoopbackServer } from "./mcp-http.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
@@ -145,6 +146,8 @@ function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | un
 }
 
 export type GatewayServer = {
+  checkDeploymentReady?: () => void;
+  drainForDeployment?: () => Promise<void>;
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
 };
 
@@ -399,6 +402,7 @@ export async function startGatewayServer(
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
+  const deploymentAdmission = new DeploymentAdmission();
   let runtimeState: GatewayServerLiveState | null = null;
   let canvasHostServer: CanvasHostServer | null = null;
   const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
@@ -518,6 +522,7 @@ export async function startGatewayServer(
       closeMcpServer: async () => await closeMcpLoopbackServer(),
     });
   const closeOnStartupFailure = async () => {
+    await runtimeState.pluginServices?.stop({ strict: true });
     await runClosePrelude();
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
@@ -715,6 +720,7 @@ export async function startGatewayServer(
       }
     }
 
+    gatewayRequestContext.deploymentAdmission = deploymentAdmission;
     attachGatewayWsHandlers({
       wss,
       clients,
@@ -849,6 +855,27 @@ export async function startGatewayServer(
   });
 
   return {
+    checkDeploymentReady: () => runtimeState.pluginServices?.assertHealthy?.(),
+    drainForDeployment: () =>
+      drainDeployment({
+        admission: deploymentAdmission,
+        stopProducers: async () => {
+          await runtimeState.configReloader.stop();
+          runtimeState.channelHealthMonitor?.stop();
+          runtimeState.cronState.cron.stop();
+          runtimeState.heartbeatRunner.stop();
+          for (const plugin of listChannelPlugins()) {
+            await stopChannel(plugin.id);
+          }
+          // This must precede close(), which disposes harnesses and secrets.
+          await runtimeState.pluginServices?.stop({ strict: true });
+        },
+        pending: () =>
+          getTotalQueueSize() +
+          getTotalPendingReplies() +
+          getActiveEmbeddedRunCount() +
+          getInspectableTaskRegistrySummary().active,
+      }),
     close: async (opts) => {
       // Run gateway_stop plugin hook before shutdown
       await runGlobalGatewayStopSafely({

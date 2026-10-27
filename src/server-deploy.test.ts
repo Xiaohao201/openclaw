@@ -51,7 +51,7 @@ async function createSandbox(): Promise<Sandbox> {
 }
 
 function runDeploy(sandbox: Sandbox, failCommand?: "pull" | "install" | "build" | "ui") {
-  return spawnSync("cmd.exe", ["/d", "/c", sandbox.launcher], {
+  return spawnSync("cmd.exe", ["/d", "/c", sandbox.launcher, "legacy-restart"], {
     cwd: sandbox.runDir,
     env: {
       ...process.env,
@@ -83,6 +83,38 @@ describe.skipIf(process.platform !== "win32")("deploy-server.cmd", () => {
   });
   beforeEach(async () => {
     await writeFile(sandbox.logPath, "");
+  });
+
+  it("does not mutate the checkout or restart a service without an explicit mode", async () => {
+    const result = spawnSync("cmd.exe", ["/d", "/c", sandbox.launcher], {
+      cwd: sandbox.runDir,
+      env: {
+        ...process.env,
+        PATH: `${sandbox.binDir}${delimiter}${process.env.PATH ?? ""}`,
+        DEPLOY_TEST_LOG: sandbox.logPath,
+      },
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(2);
+    expect(await readCommands(sandbox)).toEqual([]);
+  });
+
+  it.each(["prepare", "verify"])("runs %s without pulling or restarting", async (mode) => {
+    const destination = join(sandbox.runDir, "release candidate");
+    const result = spawnSync("cmd.exe", ["/d", "/c", sandbox.launcher, mode, destination], {
+      cwd: sandbox.runDir,
+      env: {
+        ...process.env,
+        PATH: `${sandbox.binDir}${delimiter}${process.env.PATH ?? ""}`,
+        DEPLOY_TEST_LOG: sandbox.logPath,
+      },
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const commands = await readCommands(sandbox);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain(`deploy:${mode}`);
+    expect(commands[0]).toContain(destination);
   });
 
   it("builds the backend and UI before restarting the gateway", async () => {

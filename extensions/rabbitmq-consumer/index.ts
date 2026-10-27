@@ -301,6 +301,9 @@ export default definePluginEntry({
         client.start().catch((err) => {
           ctx.logger.error(`[RABBITMQ_CONSUMER] Fatal error: ${err}`);
         });
+        if (process.env.OPENCLAW_MANAGED_DEPLOYMENT === "1") {
+          await client.waitUntilReady();
+        }
       },
 
       async stop(ctx) {

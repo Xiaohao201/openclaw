@@ -119,6 +119,35 @@ function createTrackingService(
 }
 
 describe("startPluginServices", () => {
+  it("retains strict drain failures and stops each service only once", async () => {
+    const stop = vi.fn(async () => {
+      throw new Error("still owns work");
+    });
+    const handle = await startTrackingServices({
+      services: [{ id: "test", start: () => {}, stop }],
+    });
+    await handle.stop();
+    await expect(handle.stop({ strict: true })).rejects.toThrow("did not stop cleanly");
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("reports startup failures and cleans up partially started services", async () => {
+    const stop = vi.fn();
+    const handle = await startTrackingServices({
+      services: [
+        {
+          id: "test",
+          start: () => {
+            throw new Error("failed");
+          },
+          stop,
+        },
+      ],
+    });
+    expect(() => handle.assertHealthy?.()).toThrow("startup failed");
+    await handle.stop({ strict: true });
+    expect(stop).toHaveBeenCalledOnce();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });

@@ -128,10 +128,10 @@ export function createGatewayCloseHandler(params: {
       for (const plugin of listChannelPlugins()) {
         await params.stopChannel(plugin.id);
       }
-      await disposeRegisteredAgentHarnesses();
       if (params.pluginServices) {
         await params.pluginServices.stop().catch(() => {});
       }
+      await disposeRegisteredAgentHarnesses();
       await stopGmailWatcher();
       params.cron.stop();
       params.heartbeatRunner.stop();

@@ -36,6 +36,7 @@ export type RespondFn = (
 ) => void;
 
 export type GatewayRequestContext = {
+  deploymentAdmission?: import("../deployment-drain.js").DeploymentAdmission;
   deps: CliDeps;
   cron: CronServiceContract;
   cronStorePath: string;

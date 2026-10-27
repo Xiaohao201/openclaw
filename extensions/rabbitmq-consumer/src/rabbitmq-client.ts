@@ -21,6 +21,23 @@ export class RabbitMqClient {
   private controlChannel: amqplib.Channel | null = null;
   private consuming = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private wakeReconnect: (() => void) | null = null;
+  private running: Promise<void> | null = null;
+  private stopping: Promise<void> | null = null;
+  private connecting: Promise<void> | null = null;
+  private readonly consumers = new Map<amqplib.Channel, string>();
+  private readonly inFlight = new Set<Promise<void>>();
+  private ready = false;
+
+  async waitUntilReady(timeoutMs = 30_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.ready) {
+      if (!this.consuming || Date.now() >= deadline) {
+        throw new Error("RabbitMQ consumer did not become ready");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 
   constructor(
     config: RabbitMqConfig,
@@ -35,21 +52,50 @@ export class RabbitMqClient {
   }
 
   /** Start consuming messages. Runs until stop() is called. */
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    if (this.stopping) {
+      return Promise.reject(new Error("Cannot start RabbitMQ consumer while it is stopping"));
+    }
+    if (this.running) {
+      return this.running;
+    }
     this.consuming = true;
-    await this.consumeLoop();
+    this.running = this.consumeLoop().finally(() => {
+      this.running = null;
+    });
+    return this.running;
   }
 
-  /** Stop consuming and disconnect. */
-  async stop(): Promise<void> {
+  /** Cancel intake, settle accepted deliveries, then disconnect. */
+  stop(): Promise<void> {
+    this.stopping ??= this.stopAndDrain().finally(() => {
+      this.stopping = null;
+    });
+    return this.stopping;
+  }
+
+  private async stopAndDrain(): Promise<void> {
+    this.ready = false;
     this.consuming = false;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-
+    this.wakeReconnect?.();
+    this.wakeReconnect = null;
+    // A connection can finish opening after stop was requested. Wait for its
+    // consumer registration before canceling, without closing accepted work.
+    await this.connecting?.catch(() => {});
+    for (const [channel, tag] of this.consumers) {
+      await channel.cancel(tag).catch((error: unknown) => {
+        this.logger.warn(`[RABBITMQ] Consumer cancellation failed: ${String(error)}`);
+      });
+    }
+    this.consumers.clear();
+    await Promise.all(this.inFlight);
     await this.cleanupConnection();
+    await this.running;
   }
 
   private async consumeLoop(): Promise<void> {
@@ -58,13 +104,18 @@ export class RabbitMqClient {
 
     while (this.consuming) {
       try {
-        await this.connect();
+        this.connecting = this.connect();
+        try {
+          await this.connecting;
+        } finally {
+          this.connecting = null;
+        }
         retryDelay = 5_000; // reset on success
 
         // The consumer is event-driven via amqplib; start() resolves when
         // the channel closes or an error occurs.
         // We set up a "close" listener to trigger reconnection.
-        if (this.channel) {
+        if (this.consuming && this.channel) {
           await new Promise<void>((resolve) => {
             for (const ch of [this.channel, this.controlChannel]) {
               if (!ch) {
@@ -85,6 +136,9 @@ export class RabbitMqClient {
         this.logger.error(`[RABBITMQ] Connection error: ${String(error)}`);
       }
 
+      // Do not reconnect and redeliver while the previous handler is still
+      // writing history or performing an external action.
+      await Promise.all(this.inFlight);
       await this.cleanupConnection();
 
       if (!this.consuming) {
@@ -94,9 +148,11 @@ export class RabbitMqClient {
       // Exponential backoff (interruptible via stop())
       this.logger.info(`[RABBITMQ] Reconnecting in ${retryDelay / 1000}s...`);
       await new Promise<void>((resolve) => {
+        this.wakeReconnect = resolve;
         this.reconnectTimer = setTimeout(resolve, retryDelay);
       });
       this.reconnectTimer = null;
+      this.wakeReconnect = null;
 
       retryDelay = Math.min(retryDelay * 2, maxRetryDelay);
     }
@@ -123,6 +179,10 @@ export class RabbitMqClient {
       this.logger.info("[RABBITMQ] Connection closed");
     });
 
+    if (!this.consuming) {
+      return;
+    }
+
     this.channel = await this.connection.createChannel();
     await this.channel.assertQueue(this.config.queue, { durable: true });
     await this.channel.prefetch(this.config.prefetch);
@@ -139,6 +199,7 @@ export class RabbitMqClient {
       await this.consumeChannel(this.controlChannel, controlQueue, this.controlHandler);
       this.logger.info(`[RABBITMQ] Started consuming controls from queue: ${controlQueue}`);
     }
+    this.ready = this.consuming;
   }
 
   private async consumeChannel(
@@ -146,33 +207,53 @@ export class RabbitMqClient {
     queue: string,
     handler: MessageHandler,
   ): Promise<void> {
-    await channel.consume(queue, async (msg) => {
+    if (!this.consuming) {
+      return;
+    }
+    const { consumerTag } = await channel.consume(queue, async (msg) => {
       if (!msg) {
         return;
       }
-
-      try {
-        await handler(msg);
-      } catch (error) {
-        this.logger.error(`[RABBITMQ] Message handler error: ${String(error)}`);
-        this.settleMessage(channel, msg, "nack");
+      if (!this.consuming) {
+        this.settleMessage(channel, msg, "requeue");
         return;
       }
-
-      this.settleMessage(channel, msg, "ack");
+      const work = this.handleMessage(channel, msg, handler);
+      this.inFlight.add(work);
+      try {
+        await work;
+      } finally {
+        this.inFlight.delete(work);
+      }
     });
+    this.consumers.set(channel, consumerTag);
+  }
+
+  private async handleMessage(
+    channel: amqplib.Channel,
+    msg: amqplib.ConsumeMessage,
+    handler: MessageHandler,
+  ): Promise<void> {
+    try {
+      await handler(msg);
+    } catch (error) {
+      this.logger.error(`[RABBITMQ] Message handler error: ${String(error)}`);
+      this.settleMessage(channel, msg, "nack");
+      return;
+    }
+    this.settleMessage(channel, msg, "ack");
   }
 
   private settleMessage(
     channel: amqplib.Channel,
     msg: amqplib.ConsumeMessage,
-    action: "ack" | "nack",
+    action: "ack" | "nack" | "requeue",
   ): void {
     try {
       if (action === "ack") {
         channel.ack(msg);
       } else {
-        channel.nack(msg, false, false);
+        channel.nack(msg, false, action === "requeue");
       }
     } catch (error) {
       // A channel can close while an async handler is still running. Once
@@ -183,32 +264,36 @@ export class RabbitMqClient {
   }
 
   private async cleanupConnection(): Promise<void> {
-    try {
-      if (this.controlChannel) {
-        await this.controlChannel.close().catch(() => {});
-      }
-    } catch {
-      /* ignore */
-    }
-
-    try {
-      if (this.channel) {
-        await this.channel.close().catch(() => {});
-      }
-    } catch {
-      /* ignore */
-    }
-
-    try {
-      if (this.connection) {
-        await this.connection.close().catch(() => {});
-      }
-    } catch {
-      /* ignore */
-    }
-
+    this.ready = false;
+    const controlChannel = this.controlChannel;
+    const channel = this.channel;
+    const connection = this.connection;
     this.channel = null;
     this.controlChannel = null;
     this.connection = null;
+    this.consumers.clear();
+    try {
+      if (controlChannel) {
+        await controlChannel.close().catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      if (channel) {
+        await channel.close().catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      if (connection) {
+        await connection.close().catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
   }
 }

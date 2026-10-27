@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "allowJs": true, "checkJs": false },
+  "include": ["../scripts/deploy-*.ts", "../test/scripts/deploy-*.test.ts"],
+  "exclude": ["../node_modules", "../dist"]
+}
