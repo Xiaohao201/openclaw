@@ -62,6 +62,7 @@ export type ActivityStep = {
 
 /** Tool name (normalized by the agent runtime) → user-facing activity label. */
 const TOOL_LABELS: Readonly<Record<string, string>> = {
+  full_text_search: "正在检索全网信息",
   // Data query / analysis
   exec: "正在查询分析数据",
   process: "正在查询分析数据",
