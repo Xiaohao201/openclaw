@@ -12,6 +12,8 @@ export default definePluginEntry({
 
     api.registerService({
       id: "daily-risk-tips",
+      // This service owns no ingress; core drains the agent turns using its tools.
+      handoff: { version: 1, pause: async () => {}, resume: async () => {}, isReady: () => true },
       start(ctx) {
         ctx.logger.info("[DAILY_RISK_TIPS] Service initialized");
       },

@@ -44,6 +44,7 @@ export class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private stopped = false;
+  private admissionPaused = false;
   private readonly queue = new Map<string, Waiting>();
   private readonly active = new Map<
     number,
@@ -62,6 +63,7 @@ export class Scheduler {
       return;
     }
     this.stopped = false;
+    this.admissionPaused = false;
     this.timer = setInterval(() => {
       void this.tick().catch((error: unknown) => {
         this.deps.logger.error(`[LEADING_V2_SCHED] Scan failed: ${String(error)}`);
@@ -94,16 +96,31 @@ export class Scheduler {
     return { running: this.active.size, queued: this.queue.size };
   }
 
+  async pause(timeoutMs: number): Promise<void> {
+    this.admissionPaused = true;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (this.ticking || this.active.size > 0 || this.queue.size > 0) {
+      if (Date.now() >= deadline) {
+        throw new Error("Scheduler drain deadline exceeded");
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   /** Scans never wait for model execution; overlapping scans are suppressed. */
   async tick(now = this.now()): Promise<void> {
-    if (this.ticking || this.stopped) {
+    if (this.ticking || this.stopped || this.admissionPaused) {
       return;
     }
     this.ticking = true;
     try {
       await this.deps.store.flush();
       await this.deps.store.reload();
-      if (this.stopped) {
+      if (this.stopped || this.admissionPaused) {
         return;
       }
       const expired = this.prune(now);

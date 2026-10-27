@@ -6,6 +6,7 @@ import {
 import { loadConfig } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isExternallyManagedGateway } from "../../infra/external-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -38,6 +39,10 @@ export async function runGatewayLoop(params: {
   runtime: RuntimeEnv;
   lockPort?: number;
 }) {
+  if (isExternallyManagedGateway()) {
+    const { runManagedGatewayWorker } = await import("../../gateway/lifecycle/worker.runtime.js");
+    return await runManagedGatewayWorker(params);
+  }
   let startupStartedAt = Date.now();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;

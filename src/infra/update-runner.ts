@@ -6,6 +6,7 @@ import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
+import { assertExternalLifecycleAllowed } from "./external-lifecycle.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
 import { trimLogTail } from "./restart-sentinel.js";
@@ -504,6 +505,7 @@ function mergeCommandEnvironments(
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
+  assertExternalLifecycleAllowed("update");
   const startedAt = Date.now();
   const defaultCommandEnv = await createGlobalInstallEnv();
   const runCommand =

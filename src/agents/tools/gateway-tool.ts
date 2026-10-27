@@ -5,6 +5,7 @@ import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js"
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertExternalLifecycleAllowed } from "../../infra/external-lifecycle.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -184,6 +185,9 @@ export function createGatewayTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      if (action === "restart" || action === "update.run") {
+        assertExternalLifecycleAllowed(action);
+      }
       if (action === "restart") {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");

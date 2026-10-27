@@ -108,6 +108,113 @@ describe("RabbitMqClient connection resilience", () => {
 });
 
 describe("RabbitMqClient concurrency", () => {
+  it("resumes surviving consumers after cancellation fails without duplicating them", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    const client = new RabbitMqClient(config, logger, vi.fn());
+    const running = client.start();
+    await flush();
+    conn.channel.cancel.mockRejectedValueOnce(new Error("cancel failed"));
+    await expect(client.pause()).rejects.toThrow("cancellation failed");
+    await client.resume();
+    expect(client.isReady()).toBe(true);
+    expect(conn.channel.consume).toHaveBeenCalledOnce();
+    await client.stop();
+    await running;
+  });
+  it("connects standby workers without claiming any messages", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    const client = new RabbitMqClient(config, logger, vi.fn(), undefined, { startPaused: true });
+    const running = client.start();
+    await flush();
+    expect(client.isConnected()).toBe(true);
+    await client.waitUntilReady();
+    expect(client.isReady()).toBe(false);
+    expect(conn.channel.consume).not.toHaveBeenCalled();
+    await client.resume();
+    expect(conn.channel.consume).toHaveBeenCalledOnce();
+    await client.stop();
+    await running;
+  });
+  it("cancels delivery but retains the connection until accepted work is acknowledged", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    let finish!: () => void;
+    const handler = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const client = new RabbitMqClient(config, logger, handler);
+    const running = client.start();
+    await flush();
+    const receive = conn.channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+    const msg = { content: Buffer.from("work") };
+    const handling = receive(msg);
+    let drained = false;
+    const pause = client.pause().then(() => {
+      drained = true;
+    });
+    await flush();
+    expect(conn.channel.cancel).toHaveBeenCalledWith("consumer-1");
+    expect(drained).toBe(false);
+    expect(conn.channel.close).not.toHaveBeenCalled();
+    finish();
+    await handling;
+    await pause;
+    expect(conn.channel.ack).toHaveBeenCalledWith(msg);
+    expect(client.isReady()).toBe(false);
+    await client.resume();
+    expect(conn.channel.consume).toHaveBeenCalledTimes(2);
+    expect(client.isReady()).toBe(true);
+    await client.stop();
+    await running;
+  });
+
+  it("requeues deliveries racing with cancellation without executing them", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    const handler = vi.fn();
+    const client = new RabbitMqClient(config, logger, handler);
+    const running = client.start();
+    await flush();
+    const receive = conn.channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+    await client.pause();
+    const msg = { content: Buffer.from("late") };
+    await receive(msg);
+    expect(handler).not.toHaveBeenCalled();
+    expect(conn.channel.nack).toHaveBeenCalledWith(msg, false, true);
+    await client.stop();
+    await running;
+  });
+
+  it("leaves accepted work running when the drain deadline expires", async () => {
+    const conn = new FakeConnection();
+    mockConnect.mockResolvedValue(conn);
+    let finish!: () => void;
+    const client = new RabbitMqClient(
+      config,
+      logger,
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const running = client.start();
+    await flush();
+    const receive = conn.channel.consume.mock.calls[0][1] as (msg: unknown) => Promise<void>;
+    const handling = receive({ content: Buffer.from("slow") });
+    await expect(client.pause(5)).rejects.toThrow(/drain/);
+    expect(conn.channel.close).not.toHaveBeenCalled();
+    await client.resume();
+    finish();
+    await handling;
+    await client.stop();
+    await running;
+  });
+
   it("cancels intake and waits for accepted messages to settle before closing", async () => {
     const conn = new FakeConnection();
     mockConnect.mockResolvedValue(conn);

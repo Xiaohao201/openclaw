@@ -159,6 +159,27 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + probe the Gateway",
   });
 
+  gateway
+    .command("supervise")
+    .description("Run an externally managed gateway with drained process handoff (operator stdin)")
+    .requiredOption(
+      "--release <directory>",
+      "Built release directory containing dist/gateway-worker.js",
+    )
+    .option("--port <port>", "Gateway port", "18789")
+    .option("--timeout <ms>", "Worker preparation and readiness deadline", "120000")
+    .option(
+      "--drain-timeout <ms>",
+      "Maximum wait for accepted work; timeout cancels handoff",
+      "300000",
+    )
+    .action(async (opts) => {
+      await runGatewayCommand(async () => {
+        const { runGatewayManager } = await import("../../gateway/lifecycle/manager.runtime.js");
+        await runGatewayManager(opts);
+      });
+    });
+
   gatewayCallOpts(
     gateway
       .command("call")

@@ -232,6 +232,11 @@ export function markGatewayDraining(): void {
   getQueueState().gatewayDraining = true;
 }
 
+/** Reopen admission after a canceled external handoff without resetting active task bookkeeping. */
+export function resumeGatewayAdmission(): void {
+  getQueueState().gatewayDraining = false;
+}
+
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);

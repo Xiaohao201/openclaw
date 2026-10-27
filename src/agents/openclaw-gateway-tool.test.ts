@@ -47,6 +47,20 @@ function expectConfigMutationCall(params: {
 }
 
 describe("gateway tool", () => {
+  it("blocks agent restart and update actions in externally managed workers", async () => {
+    vi.stubEnv("OPENCLAW_EXTERNAL_LIFECYCLE", "1");
+    try {
+      const tool = createGatewayTool();
+      await expect(tool.execute("managed-restart", { action: "restart" })).rejects.toThrow(
+        "external service manager",
+      );
+      await expect(tool.execute("managed-update", { action: "update.run" })).rejects.toThrow(
+        "external service manager",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   beforeEach(() => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();

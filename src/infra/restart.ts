@@ -7,6 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isExternallyManagedGateway } from "./external-lifecycle.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -114,6 +115,10 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
  * to ensure only one restart fires.
  */
 export function emitGatewayRestart(): boolean {
+  if (isExternallyManagedGateway()) {
+    restartLog.warn("Restart requires the external service manager; keeping this worker running");
+    return false;
+  }
   if (hasUnconsumedRestartSignal()) {
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
@@ -303,6 +308,13 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
 }
 
 export function triggerOpenClawRestart(): RestartAttempt {
+  if (isExternallyManagedGateway()) {
+    return {
+      ok: false,
+      method: "supervisor",
+      detail: "Lifecycle belongs to the external service manager",
+    };
+  }
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
@@ -413,6 +425,7 @@ export type ScheduledRestart = {
   mode: "emit" | "signal";
   coalesced: boolean;
   cooldownMsApplied: number;
+  blockedBy?: "external-lifecycle";
 };
 
 export function scheduleGatewaySigusr1Restart(opts?: {
@@ -420,6 +433,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   reason?: string;
   audit?: RestartAuditInfo;
 }): ScheduledRestart {
+  if (isExternallyManagedGateway()) {
+    return {
+      ok: false,
+      pid: process.pid,
+      signal: "SIGUSR1",
+      delayMs: 0,
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+      blockedBy: "external-lifecycle",
+    };
+  }
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
       ? Math.floor(opts.delayMs)

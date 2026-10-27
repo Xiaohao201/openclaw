@@ -497,3 +497,23 @@ For deployment credentials use `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`,
 `MYSQL_PASSWORD`, and `MYSQL_DATABASE`. The account must have the read/write permissions
 required by the enabled plugins. Connection limits do not replace MySQL server-wide
 `max_connections`, which also includes other applications and processes.
+
+## Externally managed service handoff
+
+Services can opt into the additive `handoff.version: 1` contract on
+`api.registerService`. When `ctx.lifecycleMode` is `"externally-managed"`,
+`start(ctx)` must initialize in standby without accepting work. `isReady(ctx)`
+reports dependency readiness, including while paused. The host calls
+`resume(ctx)` only after the external manager grants ownership.
+
+`pause(ctx, timeoutMs)` must stop new deliveries and wait for accepted work,
+including response publication and broker acknowledgments. It must not abort
+accepted work on timeout. A rejected pause can be followed by `resume(ctx)` to
+restore the existing process. Keep connections open until `stop(ctx)`; do not
+close a queue channel while it still owns unsettled deliveries. `resume` must
+be safe after partial pause failure and must not create duplicate consumers.
+
+Legacy services continue to work outside managed mode. Managed startup fails
+readiness for services without this contract rather than silently assuming
+their background work can be interrupted. Tool-only services with no independent
+ingress may implement no-op pause/resume; the host still drains their agent turns.

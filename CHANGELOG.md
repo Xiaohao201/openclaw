@@ -36,6 +36,8 @@ Docs: https://docs.openclaw.ai
 
 - WeChat Group Push: apply group-map edits without restarting the gateway, refresh tool destinations each turn, and reject removed or changed destinations before sending.
 
+- Gateway/queued deployments: add an external `gateway supervise` manager with fresh-process preflight, standby readiness, RabbitMQ and scheduler draining, rollback before consumption, and hot-only configuration reloads; managed agents cannot invoke self-restart, self-update, or host command execution.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

@@ -9,6 +9,7 @@ import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import { assertExternalLifecycleAllowed } from "../../infra/external-lifecycle.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
@@ -33,6 +34,7 @@ function mergeInstallInvocationEnv(params: {
 }
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
+  assertExternalLifecycleAllowed("install");
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
     return;

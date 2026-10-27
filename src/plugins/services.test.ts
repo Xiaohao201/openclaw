@@ -17,6 +17,37 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { startPluginServices } from "./services.js";
 
+describe("service handoff v1", () => {
+  it("refuses to drain services without a handoff contract", async () => {
+    const handle = await startPluginServices({
+      registry: createRegistry([{ id: "legacy", start() {} }]),
+      config: {},
+    });
+    await expect(handle.handoff!.pause(100)).rejects.toThrow("legacy");
+  });
+
+  it("waits for every pause before reporting a failure and supports resume", async () => {
+    const resume = vi.fn(async () => {});
+    const service: OpenClawPluginService = {
+      id: "test",
+      start() {},
+      handoff: {
+        version: 1,
+        pause: async () => {
+          throw new Error("busy");
+        },
+        resume,
+        isReady: () => true,
+      },
+    };
+    const handle = await startPluginServices({ registry: createRegistry([service]), config: {} });
+    expect(handle.handoff!.isReady()).toBe(true);
+    await expect(handle.handoff!.pause(100)).rejects.toThrow("Service drain failed");
+    await handle.handoff!.resume();
+    expect(resume).toHaveBeenCalledOnce();
+  });
+});
+
 function createRegistry(services: OpenClawPluginService[]) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({

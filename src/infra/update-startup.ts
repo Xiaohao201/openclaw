@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
+import { isExternallyManagedGateway } from "./external-lifecycle.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
@@ -317,6 +318,9 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
   const auto = resolveAutoUpdatePolicy(params.cfg);
+  if (isExternallyManagedGateway()) {
+    auto.enabled = false;
+  }
   const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
   if (!shouldRunUpdateHints && !auto.enabled) {
     return;

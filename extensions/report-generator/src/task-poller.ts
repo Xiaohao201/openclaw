@@ -14,6 +14,7 @@ export class TaskPoller {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
   private logger: PluginLogger | null = null;
+  private pollWork: Promise<void> | null = null;
 
   constructor(historyDbConfig: HistoryDbConfig, pollIntervalMs = 30000) {
     this.config = historyDbConfig;
@@ -175,6 +176,9 @@ export class TaskPoller {
         }
         const tasks = await this.fetchPendingTasks();
         for (const task of tasks) {
+          if (!this.isRunning) {
+            break;
+          }
           logger.info(`[TASK_POLLER] Processing task #${task.id}`);
           await pollFn(task, logger);
         }
@@ -183,23 +187,42 @@ export class TaskPoller {
       }
     };
 
-    void poll();
-    this.intervalId = setInterval(poll, this.pollIntervalMs);
+    const runPoll = () => {
+      if (!this.isRunning || this.pollWork) {
+        return;
+      }
+      this.pollWork = poll().finally(() => {
+        this.pollWork = null;
+      });
+    };
+    runPoll();
+    this.intervalId = setInterval(runPoll, this.pollIntervalMs);
     logger.info(
       `[TASK_POLLER] Started polling for pending report tasks (interval=${this.pollIntervalMs}ms)`,
     );
   }
 
   async stop(logger: PluginLogger): Promise<void> {
-    this.isRunning = false;
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
+    await this.pause();
     if (this.pool) {
       await this.pool.end();
       this.pool = null;
     }
     logger.info("[TASK_POLLER] Stopped");
+  }
+
+  async pause(timeoutMs = 300_000): Promise<void> {
+    this.isRunning = false;
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (this.pollWork) {
+      if (Date.now() >= deadline) {
+        throw new Error("Report poller drain deadline exceeded");
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
   }
 }

@@ -2,6 +2,7 @@ import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { assertExternalLifecycleAllowed } from "../../infra/external-lifecycle.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
@@ -133,6 +134,7 @@ async function restartGatewayWithoutServiceManager(port: number) {
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
+  assertExternalLifecycleAllowed("uninstall");
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -143,6 +145,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  assertExternalLifecycleAllowed("start");
   return await runServiceStart({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -156,6 +159,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  assertExternalLifecycleAllowed("stop");
   const service = resolveGatewayService();
   let gatewayPortPromise: Promise<number> | undefined;
   return await runServiceStop({
@@ -177,6 +181,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * Throws/exits on check or restart failures.
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  assertExternalLifecycleAllowed("restart");
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;

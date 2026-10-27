@@ -378,6 +378,17 @@ describe("buildGatewayReloadPlan", () => {
 });
 
 describe("resolveGatewayReloadSettings", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("keeps managed configuration reloads hot without re-enabling disabled watching", () => {
+    vi.stubEnv("OPENCLAW_EXTERNAL_LIFECYCLE", "1");
+    expect(resolveGatewayReloadSettings({}).mode).toBe("hot");
+    expect(resolveGatewayReloadSettings({ gateway: { reload: { mode: "restart" } } }).mode).toBe(
+      "hot",
+    );
+    expect(resolveGatewayReloadSettings({ gateway: { reload: { mode: "off" } } }).mode).toBe("off");
+  });
+
   it("uses defaults when unset", () => {
     const settings = resolveGatewayReloadSettings({});
     expect(settings.mode).toBe("hybrid");

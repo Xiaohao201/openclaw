@@ -3,6 +3,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { isExternallyManagedGateway } from "../infra/external-lifecycle.js";
 import { SafeOpenError, readFileWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -1449,6 +1450,11 @@ export function createExecTool(
         sandboxAvailable: Boolean(defaults?.sandbox),
       });
       const host: ExecHost = target.effectiveHost;
+      if (isExternallyManagedGateway() && (host !== "sandbox" || elevatedRequested)) {
+        throw new Error(
+          "Managed gateway agents may execute commands only in an isolated sandbox; host and node execution are disabled",
+        );
+      }
 
       const approvalDefaults = loadExecApprovals().defaults;
       const configuredSecurity =

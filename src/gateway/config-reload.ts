@@ -8,6 +8,7 @@ import type {
   GatewayReloadMode,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { isExternallyManagedGateway } from "../infra/external-lifecycle.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
 
@@ -91,7 +92,7 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
     typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
       ? Math.max(0, Math.floor(debounceRaw))
       : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
+  return { mode: isExternallyManagedGateway() && mode !== "off" ? "hot" : mode, debounceMs };
 }
 
 export type GatewayConfigReloader = {

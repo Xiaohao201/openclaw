@@ -19,6 +19,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
+import { isExternallyManagedGateway } from "../infra/external-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -149,6 +150,11 @@ export type GatewayServer = {
   checkDeploymentReady?: () => void;
   drainForDeployment?: () => Promise<void>;
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
+  handoff?: {
+    pause: (timeoutMs: number) => Promise<void>;
+    resume: () => Promise<void>;
+    isReady: () => boolean;
+  };
 };
 
 export type GatewayServerOptions = {
@@ -224,10 +230,17 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
+  if (isExternallyManagedGateway()) {
+    log.info("managed startup: reading config snapshot");
+  }
   const configSnapshot = await loadGatewayStartupConfigSnapshot({
     minimalTestGateway,
     log,
   });
+
+  if (isExternallyManagedGateway()) {
+    log.info("managed startup: preparing runtime config");
+  }
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -254,6 +267,9 @@ export async function startGatewayServer(
     activateRuntimeSecrets,
   });
   cfgAtStart = authBootstrap.cfg;
+  if (isExternallyManagedGateway()) {
+    log.info("managed startup: runtime config prepared");
+  }
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
       log.info(
@@ -775,7 +791,7 @@ export async function startGatewayServer(
 
     // Keep scheduled work inert until post-attach sidecars finish.
     const activated = activateGatewayScheduledServices({
-      minimalTestGateway,
+      minimalTestGateway: minimalTestGateway || isExternallyManagedGateway(),
       cfgAtStart,
       cron: runtimeState.cronState.cron,
       logCron,
@@ -854,6 +870,7 @@ export async function startGatewayServer(
     httpServers,
   });
 
+  let scheduledWorkPaused = isExternallyManagedGateway();
   return {
     checkDeploymentReady: () => runtimeState.pluginServices?.assertHealthy?.(),
     drainForDeployment: () =>
@@ -876,6 +893,32 @@ export async function startGatewayServer(
           getActiveEmbeddedRunCount() +
           getInspectableTaskRegistrySummary().active,
       }),
+    handoff: {
+      pause: async (timeoutMs) => {
+        runtimeState.cronState.cron.stop();
+        runtimeState.heartbeatRunner.stop();
+        scheduledWorkPaused = true;
+        await runtimeState.pluginServices?.handoff?.pause(timeoutMs);
+      },
+      resume: async () => {
+        await runtimeState.pluginServices?.handoff?.resume();
+        if (scheduledWorkPaused) {
+          const activated = activateGatewayScheduledServices({
+            minimalTestGateway,
+            cfgAtStart,
+            cron: runtimeState.cronState.cron,
+            logCron,
+            log,
+          });
+          runtimeState.heartbeatRunner = activated.heartbeatRunner;
+          scheduledWorkPaused = false;
+        }
+      },
+      isReady: () =>
+        getReadiness().ready &&
+        (pluginRegistry.services.length === 0 ||
+          runtimeState.pluginServices?.handoff?.isReady() === true),
+    },
     close: async (opts) => {
       // Run gateway_stop plugin hook before shutdown
       await runGlobalGatewayStopSafely({

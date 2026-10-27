@@ -13,6 +13,8 @@ export default definePluginEntry({
 
     api.registerService({
       id: "risk-judge",
+      // This service owns no ingress; core drains the agent turns using its tools.
+      handoff: { version: 1, pause: async () => {}, resume: async () => {}, isReady: () => true },
       start(ctx) {
         ctx.logger.info(`[RISK_JUDGE] Service initialized (媒体白名单 ${MEDIA_WHITELIST_SIZE} 条)`);
       },

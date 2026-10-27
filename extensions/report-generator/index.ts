@@ -130,6 +130,8 @@ let taskListenerRef: TaskListener | undefined;
 let feedCollectorRef: FeedCollector | undefined;
 let templateLoaderRef: TemplateLoader | undefined;
 let emailSenderRef: EmailSender | undefined;
+let resumePolling: (() => void) | undefined;
+let serviceReady = false;
 
 export default definePluginEntry({
   id: "report-generator",
@@ -138,8 +140,30 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     api.registerService({
       id: "report-generator",
+      handoff: {
+        version: 1,
+        pause: async (_ctx, timeoutMs) => {
+          const results = await Promise.allSettled([
+            taskListenerRef?.pause(timeoutMs),
+            taskPollerRef?.pause(timeoutMs),
+          ]);
+          const failures = results.filter((result) => result.status === "rejected");
+          if (failures.length) {
+            throw new AggregateError(
+              failures.map((result) => result.reason),
+              "Reports are still running",
+            );
+          }
+        },
+        resume: async () => {
+          await taskListenerRef?.resume();
+          resumePolling?.();
+        },
+        isReady: () => serviceReady && (!taskListenerRef || taskListenerRef.isConnected()),
+      },
 
       async start(ctx) {
+        serviceReady = false;
         const config = resolveConfig(api.pluginConfig as Record<string, unknown>);
 
         if (!config.historyDb.user || !config.historyDb.host) {
@@ -429,14 +453,19 @@ export default definePluginEntry({
 
         // Instant path: process tasks the moment rabbitmq-consumer queues them.
         if (config.rabbitmq) {
-          const taskListener = new TaskListener(config.rabbitmq, ctx.logger, async (taskId) => {
-            const task = await taskPoller.fetchTaskById(taskId);
-            if (!task) {
-              ctx.logger.warn(`[REPORT_GENERATOR] Notified task #${taskId} not found`);
-              return;
-            }
-            await processTask(task, ctx.logger);
-          });
+          const taskListener = new TaskListener(
+            config.rabbitmq,
+            ctx.logger,
+            async (taskId) => {
+              const task = await taskPoller.fetchTaskById(taskId);
+              if (!task) {
+                ctx.logger.warn(`[REPORT_GENERATOR] Notified task #${taskId} not found`);
+                return;
+              }
+              await processTask(task, ctx.logger);
+            },
+            { startPaused: ctx.lifecycleMode === "externally-managed" },
+          );
           taskListenerRef = taskListener;
           taskListener.start().catch((err: unknown) => {
             ctx.logger.error(`[REPORT_GENERATOR] Task listener fatal error: ${String(err)}`);
@@ -450,10 +479,18 @@ export default definePluginEntry({
 
         // Fallback path: pick up tasks whose notification was lost (or created
         // by other producers). claimTask() makes the two paths race-safe.
-        taskPoller.start(ctx.logger, processTask);
+        resumePolling = () => taskPoller.start(ctx.logger, processTask);
+        if (ctx.lifecycleMode === "externally-managed") {
+          await taskPoller.fetchPendingTasks(1);
+        } else {
+          resumePolling();
+        }
+        serviceReady = true;
       },
 
       async stop(ctx) {
+        serviceReady = false;
+        resumePolling = undefined;
         if (taskListenerRef) {
           await taskListenerRef.stop();
           taskListenerRef = undefined;

@@ -165,6 +165,30 @@ export default definePluginEntry({
     let executionJournal: ExecutionJournal | undefined;
     api.registerService({
       id: "leading-v2",
+      handoff: {
+        version: 1,
+        pause: async (_ctx, timeoutMs) => {
+          const results = await Promise.allSettled([
+            scheduler?.pause(timeoutMs),
+            notifier?.pause(timeoutMs),
+          ]);
+          const failures = results.filter((result) => result.status === "rejected");
+          if (failures.length) {
+            throw new AggregateError(
+              failures.map((result) => result.reason),
+              "Background work is still active",
+            );
+          }
+          await executionJournal?.flush();
+          await pendingTasks.flush();
+          await scheduleStore.flush();
+        },
+        resume: async () => {
+          scheduler?.start();
+          notifier?.start();
+        },
+        isReady: () => true,
+      },
       async start(ctx) {
         try {
           const stateFile = join(ctx.stateDir, "leading-v2-notify.json");
@@ -255,7 +279,9 @@ export default definePluginEntry({
               logger: ctx.logger,
               adapters,
             });
-            notifier.start();
+            if (ctx.lifecycleMode !== "externally-managed") {
+              notifier.start();
+            }
 
             // Expose a narrow enqueue hook so sibling extensions (legal-check
             // submits 内容检测 jobs) can register a task for proactive completion
@@ -331,7 +357,9 @@ export default definePluginEntry({
               logger: ctx.logger,
               onEvent: (event) => executionJournal?.record(event),
             });
-            scheduler.start();
+            if (ctx.lifecycleMode !== "externally-managed") {
+              scheduler.start();
+            }
           } else {
             ctx.logger.info("[LEADING_V2] Background scheduling and completion polling disabled");
           }

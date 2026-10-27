@@ -27,6 +27,30 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 }
 
 describe("Scheduler.tick", () => {
+  it("pauses admission without aborting accepted work and resumes later", async () => {
+    const store = new ScheduleStore();
+    store.add(task());
+    let finish!: () => void;
+    let wasAborted = false;
+    const runner: ActionRunner = async (_task, context) => {
+      context?.signal?.addEventListener("abort", () => {
+        wasAborted = true;
+      });
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return { ok: true };
+    };
+    const scheduler = new Scheduler({ store, runners: { crawl_refresh_create: runner }, logger });
+    await scheduler.tick();
+    const paused = scheduler.pause(1000);
+    expect(wasAborted).toBe(false);
+    finish();
+    await paused;
+    expect(scheduler.snapshot()).toEqual({ running: 0, queued: 0 });
+    scheduler.start();
+    await scheduler.stop();
+  });
   it("admits different users before filling their second waiting positions", async () => {
     const store = new ScheduleStore();
     const now = Date.now();

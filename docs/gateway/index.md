@@ -351,6 +351,73 @@ For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooti
 
 ## Safety guarantees
 
+### External process management for queued web deployments
+
+`openclaw gateway supervise` runs an independent manager with a private IPC
+connection to each worker. This mode is intended for a web frontend whose
+input is persisted in RabbitMQ and whose streaming output is served by a
+separate Mercure hub. It does not preserve direct Gateway WebSocket connections.
+
+Build each release in a separate directory before starting or replacing a worker:
+
+```powershell
+pnpm build
+pnpm openclaw gateway supervise --release "D:\releases\openclaw-a" --port 18789
+```
+
+The release must contain the built `dist/gateway-worker.js` entrypoint. In the
+manager console, enter one JSON command per line:
+
+```json
+{"action":"status"}
+{"action":"replace","release":"D:\\releases\\openclaw-b"}
+{"action":"resume"}
+{"action":"stop"}
+```
+
+Use absolute workspace, agent, and session-store paths so both releases share
+the same persisted state. Managed handoff requires the exclusive Gateway lock;
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` is rejected during preflight.
+
+Replacement preloads a fresh process, pauses old consumers and schedulers,
+waits for accepted work and acknowledgments, releases the old server, and
+checks the candidate in standby. Only then does the manager enable candidate
+consumption and retire the old process. Messages arriving during the transition
+remain in RabbitMQ; the independent frontend-to-Mercure connection stays open.
+The candidate does not share live session writes with the old process.
+
+A drain timeout cancels the handoff and resumes the old service. A candidate
+startup failure terminates the candidate before restoring the old process.
+Once candidate consumption is enabled, failures require recovery on that
+version rather than blindly replaying work on the old one. Confirmed worker
+crashes trigger up to three recovery attempts with backoff. Manager events are
+recorded under the state directory in `lifecycle/events.jsonl`.
+
+Managed workers inherit `OPENCLAW_EXTERNAL_LIFECYCLE=1`. Agent restart/update
+tools, service lifecycle CLI calls, self-restart signals, and automatic updates
+are disabled there. Config watching uses hot mode (or off); changes requiring
+restart wait for an external replacement. Agent shell execution requires a
+sandbox; gateway/node execution and elevated execution are rejected.
+
+For OS-level isolation, run the manager with protected deployment files and
+isolate tool processes from the host PID namespace, service credentials, and
+release/state directories. An environment marker is not an OS security boundary.
+Do not give agents a host shell or writable access to manager executables.
+The manager accepts commands from operator stdin, not a gateway RPC or agent tool.
+
+The first adoption from an ordinary manually started Gateway requires an
+operator-controlled maintenance transition. `gateway restart` retains its
+existing service-manager semantics and is not an alias for this handoff flow.
+Do not replace code files in a running release directory, and use only releases
+with backward-compatible persisted state; this flow does not roll back database
+schema migrations. Broker crash redelivery remains at least once, so external
+side effects still need application-level idempotency.
+
+If the manager disappears, the worker stays alive. A stale `lifecycle/manager.lock`
+is deliberately not reclaimed automatically: inspect the surviving processes,
+restore control externally, and remove the lock only after confirming ownership.
+Closing the manager console is not a safe shutdown mechanism.
+
 - Gateway protocol clients fail fast when Gateway is unavailable (no implicit direct-channel fallback).
 - Invalid/non-connect first frames are rejected and closed.
 - Graceful shutdown emits `shutdown` event before socket close.

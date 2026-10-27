@@ -18,16 +18,23 @@ export class TaskListener {
   private connection: amqplib.ChannelModel | null = null;
   private channel: amqplib.Channel | null = null;
   private consuming = false;
+  private paused = false;
+  private consumerTag: string | undefined;
+  private readonly inFlight = new Set<Promise<void>>();
+  private connecting: Promise<void> | null = null;
+  private wakeReconnect: (() => void) | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     config: RabbitMqListenerConfig,
     logger: PluginLogger,
     handler: TaskNotificationHandler,
+    options?: { startPaused?: boolean },
   ) {
     this.config = config;
     this.logger = logger;
     this.handler = handler;
+    this.paused = options?.startPaused === true;
   }
 
   /** Start consuming notifications. Runs until stop() is called. */
@@ -38,14 +45,44 @@ export class TaskListener {
 
   /** Stop consuming and disconnect. */
   async stop(): Promise<void> {
+    await this.pause();
     this.consuming = false;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.wakeReconnect?.();
 
     await this.cleanupConnection();
+  }
+
+  isConnected(): boolean {
+    return this.consuming && this.connecting === null && this.channel !== null;
+  }
+
+  async pause(timeoutMs = 300_000): Promise<void> {
+    this.paused = true;
+    await this.connecting;
+    if (this.channel && this.consumerTag) {
+      await this.channel.cancel(this.consumerTag);
+      this.consumerTag = undefined;
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (this.inFlight.size > 0) {
+      if (Date.now() >= deadline) {
+        throw new Error("Report listener drain deadline exceeded");
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  async resume(): Promise<void> {
+    await this.connecting;
+    this.paused = false;
+    if (this.channel && !this.consumerTag) {
+      await this.consume(this.channel);
+    }
   }
 
   private async consumeLoop(): Promise<void> {
@@ -54,7 +91,9 @@ export class TaskListener {
 
     while (this.consuming) {
       try {
-        await this.connect();
+        this.connecting = this.connect();
+        await this.connecting;
+        this.connecting = null;
         retryDelay = 5_000; // reset on success
 
         // Wait until the channel closes or errors, then reconnect.
@@ -80,6 +119,7 @@ export class TaskListener {
       } catch (error) {
         this.logger.error(`[TASK_LISTENER] Connection error: ${String(error)}`);
       }
+      this.connecting = null;
 
       await this.cleanupConnection();
 
@@ -89,9 +129,11 @@ export class TaskListener {
 
       this.logger.info(`[TASK_LISTENER] Reconnecting in ${retryDelay / 1000}s...`);
       await new Promise<void>((resolve) => {
+        this.wakeReconnect = resolve;
         this.reconnectTimer = setTimeout(resolve, retryDelay);
       });
       this.reconnectTimer = null;
+      this.wakeReconnect = undefined;
 
       retryDelay = Math.min(retryDelay * 2, maxRetryDelay);
     }
@@ -124,28 +166,55 @@ export class TaskListener {
 
     this.logger.info(`[TASK_LISTENER] Listening for report tasks on queue: ${this.config.queue}`);
 
-    await this.channel.consume(this.config.queue, async (msg) => {
+    if (!this.paused) {
+      await this.consume(this.channel);
+    }
+  }
+
+  private async consume(channel: amqplib.Channel): Promise<void> {
+    const result = await channel.consume(this.config.queue, async (msg) => {
       if (!msg) {
+        this.consumerTag = undefined;
         return;
       }
-
-      try {
-        const taskId = this.parseTaskId(msg.content);
-        if (taskId === null) {
-          this.logger.warn(
-            `[TASK_LISTENER] Ignoring malformed notification: ${msg.content.toString("utf-8").slice(0, 200)}`,
-          );
-        } else {
-          await this.handler(taskId);
+      if (this.paused) {
+        try {
+          channel.nack(msg, false, true);
+        } catch {
+          /* broker owns unsettled deliveries */
         }
-        this.channel?.ack(msg);
-      } catch (error) {
-        this.logger.error(`[TASK_LISTENER] Notification handler error: ${String(error)}`);
-        // Drop the message: the fallback poller retries Pending tasks anyway,
-        // so requeueing would only risk a poison-message loop.
-        this.channel?.nack(msg, false, false);
+        return;
+      }
+      const work = (async () => {
+        try {
+          const taskId = this.parseTaskId(msg.content);
+          if (taskId === null) {
+            this.logger.warn(
+              `[TASK_LISTENER] Ignoring malformed notification: ${msg.content.toString("utf-8").slice(0, 200)}`,
+            );
+          } else {
+            await this.handler(taskId);
+          }
+          channel.ack(msg);
+        } catch (error) {
+          this.logger.error(`[TASK_LISTENER] Notification handler error: ${String(error)}`);
+          // Drop the message: the fallback poller retries Pending tasks anyway,
+          // so requeueing would only risk a poison-message loop.
+          try {
+            channel.nack(msg, false, false);
+          } catch {
+            /* broker owns unsettled deliveries */
+          }
+        }
+      })();
+      this.inFlight.add(work);
+      try {
+        await work;
+      } finally {
+        this.inFlight.delete(work);
       }
     });
+    this.consumerTag = result.consumerTag;
   }
 
   private parseTaskId(content: Buffer): number | null {
@@ -159,6 +228,7 @@ export class TaskListener {
   }
 
   private async cleanupConnection(): Promise<void> {
+    this.consumerTag = undefined;
     try {
       if (this.channel) {
         await this.channel.close().catch(() => {});

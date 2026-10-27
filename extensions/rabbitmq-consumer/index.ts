@@ -201,6 +201,16 @@ export default definePluginEntry({
 
     api.registerService({
       id: "rabbitmq-consumer",
+      handoff: {
+        version: 1,
+        pause: async (_ctx, timeoutMs) => {
+          await clientRef?.pause(timeoutMs);
+        },
+        resume: async () => {
+          await clientRef?.resume();
+        },
+        isReady: () => localDebug?.enabled === true || clientRef?.isConnected() === true,
+      },
 
       async start(ctx) {
         if (localDebug?.enabled === true) {
@@ -294,6 +304,7 @@ export default definePluginEntry({
           ctx.logger,
           messageConsumer,
           messageConsumer,
+          { startPaused: ctx.lifecycleMode === "externally-managed" },
         );
 
         clientRef = client;

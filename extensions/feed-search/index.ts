@@ -17,6 +17,8 @@ export default definePluginEntry({
     // Register a background service for MySQL pool lifecycle
     api.registerService({
       id: "feed-search",
+      // This service owns no ingress; core drains the agent turns using its tools.
+      handoff: { version: 1, pause: async () => {}, resume: async () => {}, isReady: () => true },
       start(ctx) {
         // Patch every resolvable mysql2 install (gateway in-process + the home-dir
         // install the agent's workspace scripts resolve) so all LLM-issued SQL is

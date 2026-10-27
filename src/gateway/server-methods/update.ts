@@ -1,5 +1,6 @@
 import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { isExternallyManagedGateway } from "../../infra/external-lifecycle.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -10,13 +11,21 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { validateUpdateRunParams } from "../protocol/index.js";
+import { ErrorCodes, errorShape, validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond, client, context }) => {
+    if (isExternallyManagedGateway()) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Updates require the external service manager"),
+      );
+      return;
+    }
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }

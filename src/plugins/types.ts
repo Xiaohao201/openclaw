@@ -1814,6 +1814,8 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  /** Managed services must connect in standby and accept work only after handoff.resume. */
+  lifecycleMode?: "externally-managed";
 };
 
 /** Background service registered by a plugin during `register(api)`. */
@@ -1821,6 +1823,13 @@ export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
+  /** Optional v1 externally coordinated handoff; pause must retain accepted work until settled. */
+  handoff?: {
+    version: 1;
+    pause: (ctx: OpenClawPluginServiceContext, timeoutMs: number) => Promise<void>;
+    resume: (ctx: OpenClawPluginServiceContext) => Promise<void>;
+    isReady: (ctx: OpenClawPluginServiceContext) => boolean;
+  };
 };
 
 export type OpenClawPluginChannelRegistration = {

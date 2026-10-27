@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { assertExternalLifecycleAllowed } from "../../infra/external-lifecycle.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -287,6 +288,7 @@ export function createNodesTool(options?: {
             });
           }
           case "invoke": {
+            assertExternalLifecycleAllowed("invoke arbitrary node commands");
             return await executeNodeCommandAction({
               action,
               input: params,

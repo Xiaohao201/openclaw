@@ -55,6 +55,17 @@ export class CompletionNotifier {
     }
   }
 
+  async pause(timeoutMs: number): Promise<void> {
+    this.stop();
+    const deadline = Date.now() + timeoutMs;
+    while (this.ticking) {
+      if (Date.now() >= deadline) {
+        throw new Error("Completion notifier drain deadline exceeded");
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   /** One polling pass. Public for tests; guarded against re-entrancy. */
   async tick(): Promise<void> {
     if (this.ticking) {
