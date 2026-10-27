@@ -1,3 +1,4 @@
+import { ArtifactLinks } from "../../../api.js";
 import { agentIdFromSessionKey } from "../../client/agent-id.js";
 import { asString } from "../../client/envelope.js";
 import { insertHistoryRow, sessionIdFromKey } from "../../notify/history-row.js";
@@ -208,8 +209,15 @@ export const agentPromptAction: ScheduleActionType = {
           return { ok: false, note: `subagent ${wait.status}: ${wait.error ?? ""}` };
         }
         const usage = billing ? await collectTurnUsage(billing) : undefined;
-        const { messages } = await subagent.getSessionMessages({ sessionKey, limit: 5 });
-        const text = lastAssistantText(messages ?? []);
+        // Upload evidence can precede many subsequent tool calls. Use the runtime's
+        // recent-session window instead of only the last five reply messages.
+        const { messages } = await subagent.getSessionMessages({ sessionKey });
+        const links = new ArtifactLinks(
+          process.env.ALIYUN_OSS_CUSTOM_DOMAIN,
+          process.env.ALIYUN_OSS_PATH_PREFIX,
+        );
+        links.observeMessages(messages ?? []);
+        const text = links.sanitize(lastAssistantText(messages ?? []));
         if (!text) {
           await billUnattended("empty-reply", usage);
           return { ok: false, note: "empty agent response" };

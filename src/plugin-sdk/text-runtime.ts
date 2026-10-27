@@ -1,4 +1,5 @@
 // Public shared text/formatting helpers for plugins that parse or rewrite message text.
+export { ArtifactLinks, artifactStreamPrefixLength } from "../shared/artifact-links.js";
 
 export * from "../logger.js";
 export * from "../logging/diagnostic.js";

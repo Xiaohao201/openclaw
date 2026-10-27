@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { jsonResult, type OpenClawPluginApi } from "../../api.js";
+import { ArtifactLinks, jsonResult, type OpenClawPluginApi } from "../../api.js";
 import { extractUserId } from "../client/agent-id.js";
 import { type EmailMessage, type SmtpConfig, sendEmail } from "./email-client.js";
 
@@ -110,7 +110,7 @@ export function createEmailSendToolFactory(
 ) {
   const attemptsByUser = new Map<string, readonly number[]>();
 
-  return (ctx: { agentId?: string }) => {
+  return (ctx: { agentId?: string; sessionKey?: string }) => {
     const userId = extractUserId(ctx.agentId);
     if (!userId || !smtp) {
       return null;
@@ -135,7 +135,19 @@ export function createEmailSendToolFactory(
 
         const { to, subject, content } = validation.request;
         try {
-          await sender(smtp, { to, subject, text: content });
+          // Read at send time: uploads may happen after this tool is created.
+          // Never borrow another session's evidence or trust assistant prose.
+          const links = new ArtifactLinks(
+            process.env.ALIYUN_OSS_CUSTOM_DOMAIN,
+            process.env.ALIYUN_OSS_PATH_PREFIX,
+          );
+          if (ctx.sessionKey && /https?:\/\//i.test(content)) {
+            const { messages } = await api.runtime.subagent.getSessionMessages({
+              sessionKey: ctx.sessionKey,
+            });
+            links.observeMessages(messages);
+          }
+          await sender(smtp, { to, subject, text: links.sanitize(content) });
           return jsonResult({ success: true, to, subject, message: "邮件已发送。" });
         } catch (error) {
           const code = smtpErrorCode(error);
