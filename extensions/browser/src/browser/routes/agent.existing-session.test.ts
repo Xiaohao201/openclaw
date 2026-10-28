@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createExistingSessionAgentSharedModule,
@@ -154,7 +155,7 @@ describe("existing-session browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       ok: true,
-      path: "/tmp/fake.png",
+      path: path.resolve("/tmp/fake.png"),
       targetId: "7",
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith({

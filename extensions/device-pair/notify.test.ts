@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/service-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
@@ -10,7 +12,7 @@ vi.mock("./api.js", () => ({
   listDevicePairing: listDevicePairingMock,
 }));
 
-import { handleNotifyCommand } from "./notify.js";
+import { handleNotifyCommand, registerPairingNotifierService } from "./notify.js";
 
 describe("device-pair notify persistence", () => {
   let stateDir: string;
@@ -22,7 +24,125 @@ describe("device-pair notify persistence", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("keeps managed startup silent and waits for a pending poll before pausing", async () => {
+    const registered: OpenClawPluginService[] = [];
+    const api = createTestPluginApi({
+      registerService: (service) => {
+        registered.push(service);
+      },
+    });
+    registerPairingNotifierService(api);
+    const service = registered[0];
+    const ctx = {
+      config: {},
+      stateDir,
+      logger: console,
+      lifecycleMode: "externally-managed" as const,
+    };
+    await service.start(ctx);
+    expect(listDevicePairingMock).not.toHaveBeenCalled();
+    expect(service.handoff!.isReady(ctx)).toBe(true);
+    const pending = createDeferred<{ pending: [] }>();
+    listDevicePairingMock.mockReturnValueOnce(pending.promise);
+    await service.handoff!.resume(ctx);
+    await vi.waitFor(() => expect(listDevicePairingMock).toHaveBeenCalledOnce());
+    await expect(service.handoff!.pause(ctx, 5)).rejects.toThrow("active");
+    pending.resolve({ pending: [] });
+    await service.handoff!.pause(ctx, 1000);
+    await service.stop!(ctx);
+  });
+
+  it("serializes concurrent subscriber updates without losing either chat", async () => {
+    const api = createTestPluginApi({
+      runtime: { state: { resolveStateDir: () => stateDir } } as never,
+    });
+    await Promise.all(
+      ["chat-a", "chat-b"].map((senderId) =>
+        handleNotifyCommand({ api, ctx: { channel: "telegram", senderId }, action: "on" }),
+      ),
+    );
+    const state = JSON.parse(
+      await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
+    ) as { subscribers: { to: string }[] };
+    expect(state.subscribers.map((entry) => entry.to).toSorted()).toEqual(["chat-a", "chat-b"]);
+  });
+
+  it("waits for sending and persistence, then resumes without duplicate notifications", async () => {
+    const registered: OpenClawPluginService[] = [];
+    const sent = createDeferred<void>();
+    const send = vi.fn(() => sent.promise);
+    const api = createTestPluginApi({
+      registerService: (service) => {
+        registered.push(service);
+      },
+      runtime: {
+        state: { resolveStateDir: () => stateDir },
+        channel: { outbound: { loadAdapter: async () => ({ sendText: send }) } },
+      } as never,
+    });
+    await handleNotifyCommand({
+      api,
+      ctx: { channel: "telegram", senderId: "chat-test" },
+      action: "on",
+    });
+    listDevicePairingMock.mockResolvedValue({
+      pending: [{ requestId: "request-test", deviceId: "test-device", ts: Date.now() }],
+    } as never);
+    registerPairingNotifierService(api);
+    const service = registered[0];
+    const ctx = {
+      config: {},
+      stateDir,
+      logger: console,
+      lifecycleMode: "externally-managed" as const,
+    };
+    await service.start(ctx);
+    await service.handoff!.resume(ctx);
+    await service.handoff!.resume(ctx);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    await expect(service.handoff!.pause(ctx, 5)).rejects.toThrow("active");
+    const update = handleNotifyCommand({
+      api,
+      ctx: { channel: "telegram", senderId: "second-chat" },
+      action: "on",
+    });
+    sent.resolve(undefined);
+    await service.handoff!.pause(ctx, 1000);
+    await update;
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
+    ) as { notifiedRequestIds: Record<string, number>; subscribers: unknown[] };
+    expect(persisted.notifiedRequestIds["request-test"]).toBeGreaterThan(0);
+    expect(persisted.subscribers).toHaveLength(2);
+    await service.handoff!.resume(ctx);
+    await vi.waitFor(() => expect(listDevicePairingMock).toHaveBeenCalledTimes(2));
+    await service.handoff!.pause(ctx, 1000);
+    expect(send).toHaveBeenCalledOnce();
+    await service.stop!(ctx);
+  });
+
+  it("does not report readiness when persisted notification state is unreadable", async () => {
+    await fs.writeFile(path.join(stateDir, "device-pair-notify.json"), "{broken json");
+    const registered: OpenClawPluginService[] = [];
+    const api = createTestPluginApi({
+      registerService: (service) => {
+        registered.push(service);
+      },
+    });
+    registerPairingNotifierService(api);
+    const ctx = {
+      config: {},
+      stateDir,
+      logger: console,
+      lifecycleMode: "externally-managed" as const,
+    };
+    await expect(registered[0].start(ctx)).rejects.toThrow();
+    expect(registered[0].handoff!.isReady(ctx)).toBe(false);
+    await registered[0].stop!(ctx);
   });
 
   it("matches persisted telegram thread ids across number and string roundtrips", async () => {

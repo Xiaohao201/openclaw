@@ -90,6 +90,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/plugin config: preserve startup reload rules across scoped runtime plugin loads so dynamic group-map edits do not unexpectedly restart the gateway.
 
 - WeChat Group Push: build each turn's destination list from the host's current configuration so newly added groups appear even when a cached plugin runtime retains an older snapshot.
+- Gateway/plugin handoff: support standby and draining for ACP, browser control, and device pairing notifications; pause ingress before execution backends, preserve in-flight work, and report unsupported lifecycle contracts before starting services.
 
 ## 2026.4.15
 

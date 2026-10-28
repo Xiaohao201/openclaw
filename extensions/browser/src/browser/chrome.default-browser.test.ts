@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
@@ -82,7 +83,12 @@ describe("browser default executable detection", () => {
   });
 
   it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", async () => {
-    const edgeExecutablePath = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+    const edgeExecutablePath = path.join(
+      "/Applications/Microsoft Edge.app",
+      "Contents",
+      "MacOS",
+      "Microsoft Edge",
+    );
     // macOS LaunchServices registers Edge as "com.microsoft.edgemac", which
     // differs from the CFBundleIdentifier "com.microsoft.Edge" in the app's
     // own Info.plist. Both must be recognised.

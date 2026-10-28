@@ -152,6 +152,7 @@ export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
   handoff?: {
     pause: (timeoutMs: number) => Promise<void>;
+    pauseExecution?: (timeoutMs: number) => Promise<void>;
     resume: () => Promise<void>;
     isReady: () => boolean;
   };
@@ -894,6 +895,9 @@ export async function startGatewayServer(
           getInspectableTaskRegistrySummary().active,
       }),
     handoff: {
+      pauseExecution: async (timeoutMs) => {
+        await runtimeState.pluginServices?.handoff?.pauseExecution?.(timeoutMs);
+      },
       pause: async (timeoutMs) => {
         runtimeState.cronState.cron.stop();
         runtimeState.heartbeatRunner.stop();

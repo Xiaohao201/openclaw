@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+import { isBrowserControlManaged } from "./service-handoff.js";
 
 export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
@@ -46,15 +47,17 @@ export async function stopBrowserRuntime(params: {
     });
   }
 
-  params.clearState();
-
   if (!isPwAiLoaded()) {
+    params.clearState();
     return;
   }
   try {
     const mod = await import("./pw-ai.js");
     await mod.closePlaywrightBrowserConnection();
-  } catch {
-    // ignore
+  } catch (error) {
+    if (isBrowserControlManaged()) {
+      throw error;
+    }
   }
+  params.clearState();
 }

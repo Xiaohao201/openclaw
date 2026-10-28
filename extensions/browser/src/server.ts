@@ -18,6 +18,13 @@ import {
 import { loadConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+export { createBrowserControlHandoff } from "./browser/service-handoff.js";
+import {
+  browserServiceWork,
+  isBrowserControlManaged,
+  markBrowserControlInitialized,
+  markBrowserControlStopped,
+} from "./browser/service-handoff.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -30,10 +37,12 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const cfg = loadConfig();
   if (!isDefaultBrowserPluginEnabled(cfg)) {
+    markBrowserControlInitialized();
     return null;
   }
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (!resolved.enabled) {
+    markBrowserControlInitialized();
     return null;
   }
 
@@ -73,6 +82,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     } else {
       logServer.error("browser control startup aborted: no authentication configured.");
     }
+    if (isBrowserControlManaged()) {
+      throw new Error("browser-control authentication initialization failed");
+    }
     return null;
   }
 
@@ -91,6 +103,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
     s.once("error", reject);
   }).catch((err) => {
+    if (isBrowserControlManaged()) {
+      throw err;
+    }
     logServer.error(`openclaw browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
     return null;
   });
@@ -109,10 +124,14 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
+  markBrowserControlInitialized();
   return state;
 }
 
 export async function stopBrowserControlServer(): Promise<void> {
+  if (isBrowserControlManaged()) {
+    await browserServiceWork.pause(30_000);
+  }
   const current = state;
   if (current?.port) {
     deleteBridgeAuthForPort(current.port);
@@ -126,4 +145,5 @@ export async function stopBrowserControlServer(): Promise<void> {
     closeServer: true,
     onWarn: (message) => logServer.warn(message),
   });
+  markBrowserControlStopped();
 }

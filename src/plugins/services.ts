@@ -24,13 +24,16 @@ function createServiceContext(params: {
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
-    ...(isExternallyManagedGateway() ? { lifecycleMode: "externally-managed" as const } : {}),
+    ...(isExternallyManagedGateway()
+      ? { lifecycleMode: "externally-managed" as const, handoffVersion: 2 as const }
+      : {}),
   };
 }
 
 export type PluginServicesHandle = {
   handoff?: {
     pause: (timeoutMs: number) => Promise<void>;
+    pauseExecution?: (timeoutMs: number) => Promise<void>;
     resume: () => Promise<void>;
     isReady: () => boolean;
   };
@@ -54,7 +57,30 @@ export async function startPluginServices(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  for (const entry of params.registry.services) {
+  if (serviceContext.lifecycleMode) {
+    const invalid = params.registry.services.filter(({ service }) => {
+      const handoff = service.handoff;
+      return (
+        !handoff ||
+        ![1, 2].includes(handoff.version) ||
+        (handoff.version === 2 && !["ingress", "execution"].includes(handoff.drainPhase)) ||
+        typeof handoff.pause !== "function" ||
+        typeof handoff.resume !== "function" ||
+        typeof handoff.isReady !== "function"
+      );
+    });
+    if (invalid.length) {
+      const failure = new Error(
+        `Invalid managed service handoff contract: ${invalid
+          .map(({ service }) => service.id)
+          .toSorted()
+          .join(", ")}`,
+      );
+      startupFailures.push(failure);
+      log.error(failure.message);
+    }
+  }
+  for (const entry of startupFailures.length ? [] : params.registry.services) {
     const service = entry.service;
     running.push({
       id: service.id,
@@ -62,12 +88,14 @@ export async function startPluginServices(params: {
       stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
     });
     try {
-      if (serviceContext.lifecycleMode && !service.handoff) {
-        throw new Error("Externally managed services require the v1 handoff contract");
-      }
       await service.start(serviceContext);
     } catch (err) {
-      startupFailures.push(err);
+      startupFailures.push(
+        new Error(
+          `Service startup failed (${service.id}): ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        ),
+      );
       const error = err as Error;
       const stack = error?.stack?.trim();
       log.error(
@@ -78,29 +106,44 @@ export async function startPluginServices(params: {
 
   let stopping: Promise<void> | undefined;
   const failures: unknown[] = [];
+  const isExecution = (entry: (typeof running)[number]) =>
+    entry.handoff?.version === 2 && entry.handoff.drainPhase === "execution";
+  const pausePhase = async (timeoutMs: number, execution: boolean) => {
+    const unsupported = running.filter((entry) => !entry.handoff).map((entry) => entry.id);
+    if (unsupported.length) {
+      throw new Error(`Services do not support safe handoff: ${unsupported.toSorted().join(", ")}`);
+    }
+    const results = await Promise.allSettled(
+      running
+        .filter((entry) => isExecution(entry) === execution)
+        .map(async (entry) => {
+          try {
+            await entry.handoff!.pause(serviceContext, timeoutMs);
+          } catch (cause) {
+            throw new Error(
+              `Service drain failed (${entry.id}): ${cause instanceof Error ? cause.message : String(cause)}`,
+              { cause },
+            );
+          }
+        }),
+    );
+    const rejected = results.filter((result) => result.status === "rejected");
+    if (rejected.length) {
+      throw new AggregateError(
+        rejected.map((result) => result.reason),
+        `Service drain failed: ${rejected.map((result) => String(result.reason)).join("; ")}`,
+      );
+    }
+  };
   return {
     handoff: {
-      pause: async (timeoutMs) => {
-        const unsupported = running.filter((entry) => !entry.handoff).map((entry) => entry.id);
-        if (unsupported.length > 0) {
-          throw new Error(
-            `Services do not support safe handoff: ${unsupported.toSorted().join(", ")}`,
-          );
-        }
-        // Settle every pause before rollback can resume any service.
-        const results = await Promise.allSettled(
-          running.map((entry) => entry.handoff!.pause(serviceContext, timeoutMs)),
-        );
-        const failures = results.filter((result) => result.status === "rejected");
-        if (failures.length > 0) {
-          throw new AggregateError(
-            failures.map((result) => result.reason),
-            "Service drain failed",
-          );
-        }
-      },
+      pause: (timeoutMs) => pausePhase(timeoutMs, false),
+      pauseExecution: (timeoutMs) => pausePhase(timeoutMs, true),
       resume: async () => {
-        for (const entry of running) {
+        for (const entry of [
+          ...running.filter(isExecution),
+          ...running.filter((entry) => !isExecution(entry)),
+        ]) {
           await entry.handoff?.resume(serviceContext);
         }
       },
@@ -111,7 +154,10 @@ export async function startPluginServices(params: {
     },
     assertHealthy: () => {
       if (startupFailures.length) {
-        throw new AggregateError(startupFailures, "Plugin service startup failed");
+        throw new AggregateError(
+          startupFailures,
+          `Plugin service startup failed: ${startupFailures.map(String).join("; ")}`,
+        );
       }
     },
     stop: async (options) => {

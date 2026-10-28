@@ -12,6 +12,7 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
+import { createManagedAcpRuntime } from "./managed-runtime.js";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime,
@@ -87,11 +88,37 @@ export function createAcpxRuntimeService(
 ): OpenClawPluginService {
   let runtime: AcpxRuntimeLike | null = null;
   let lifecycleRevision = 0;
+  let managed: ReturnType<typeof createManagedAcpRuntime> | undefined;
+  let initialized = false;
+  let disabled = false;
+  let probing: Promise<void> | undefined;
 
   return {
     id: "acpx-runtime",
+    handoff: {
+      version: 2,
+      drainPhase: "execution",
+      isReady: () => initialized && (disabled || (runtime?.isHealthy() ?? false)),
+      pause: async (_ctx, timeoutMs) => {
+        await managed?.pause(timeoutMs);
+      },
+      resume: async () => {
+        if (!initialized || (!disabled && !runtime?.isHealthy())) {
+          throw new Error("acpx-runtime is not ready");
+        }
+        managed?.work.resume();
+      },
+    },
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
+      if (initialized || runtime) {
+        return;
+      }
+      if (ctx.lifecycleMode && ctx.handoffVersion !== 2) {
+        throw new Error("acpx-runtime requires a host with handoff v2 support");
+      }
       if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME === "1") {
+        disabled = true;
+        initialized = true;
         ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
         return;
       }
@@ -112,26 +139,33 @@ export function createAcpxRuntimeService(
         logger: ctx.logger,
       });
 
+      managed = ctx.lifecycleMode ? createManagedAcpRuntime(runtime) : undefined;
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
-        runtime,
+        runtime: managed?.runtime ?? runtime,
         healthy: () => runtime?.isHealthy() ?? false,
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
       if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+        if (ctx.lifecycleMode && !runtime.isHealthy()) {
+          throw new Error("acpx-runtime: skipped probe cannot establish managed readiness");
+        }
+        initialized = true;
         return;
       }
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
-      void (async () => {
+      const currentRuntime = runtime;
+      probing = (async () => {
         try {
-          await runtime?.probeAvailability();
+          await currentRuntime.probeAvailability();
           if (currentRevision !== lifecycleRevision) {
             return;
           }
           if (runtime?.isHealthy()) {
+            initialized = true;
             ctx.logger.info("embedded acpx runtime backend ready");
             return;
           }
@@ -142,18 +176,33 @@ export function createAcpxRuntimeService(
           ctx.logger.warn(
             `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
           );
+          if (ctx.lifecycleMode) {
+            throw new Error("acpx-runtime availability probe failed");
+          }
         } catch (err) {
           if (currentRevision !== lifecycleRevision) {
             return;
           }
           ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+          if (ctx.lifecycleMode) {
+            throw err;
+          }
         }
       })();
+      if (ctx.lifecycleMode) {
+        await probing;
+      }
     },
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
+      await managed?.pause(30_000);
       lifecycleRevision += 1;
+      await probing?.catch(() => {});
       unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
       runtime = null;
+      managed = undefined;
+      initialized = false;
+      disabled = false;
+      probing = undefined;
     },
   };
 }

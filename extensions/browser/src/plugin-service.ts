@@ -17,14 +17,34 @@ function validateBrowserControlOverrideSpecifier(specifier: string): string {
 
 export function createBrowserPluginService(): OpenClawPluginService {
   let handle: BrowserControlHandle = null;
+  let started = false;
 
   return {
     id: "browser-control",
-    start: async () => {
-      if (handle) {
+    handoff: {
+      version: 2,
+      drainPhase: "execution",
+      isReady: (ctx) => started && (handle?.handoff?.isReady(ctx) ?? true),
+      pause: async (ctx, timeoutMs) => {
+        await handle?.handoff?.pause(ctx, timeoutMs);
+      },
+      resume: async (ctx) => {
+        if (!started) {
+          throw new Error("browser-control is not initialized");
+        }
+        await handle?.handoff?.resume(ctx);
+      },
+    },
+    start: async (ctx) => {
+      if (started) {
         return;
       }
+      if (ctx.lifecycleMode && ctx.handoffVersion !== 2) {
+        throw new Error("browser-control requires a host with handoff v2 support");
+      }
       handle = await startLazyPluginServiceModule({
+        serviceContext: ctx,
+        handoffExportName: "createBrowserControlHandoff",
         skipEnvVar: "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
         overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE",
         validateOverrideSpecifier: validateBrowserControlOverrideSpecifier,
@@ -36,14 +56,17 @@ export function createBrowserPluginService(): OpenClawPluginService {
         ],
         stopExportNames: ["stopBrowserControlService", "stopBrowserControlServer"],
       });
+      started = true;
     },
     stop: async () => {
       const current = handle;
-      handle = null;
       if (!current) {
+        started = false;
         return;
       }
-      await current.stop().catch(() => {});
+      await current.stop();
+      handle = null;
+      started = false;
     },
   };
 }

@@ -2,6 +2,12 @@ import { resolveBrowserConfig } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./browser/server-context.js";
+import {
+  browserServiceWork,
+  isBrowserControlManaged,
+  markBrowserControlInitialized,
+  markBrowserControlStopped,
+} from "./browser/service-handoff.js";
 import { loadConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
@@ -28,10 +34,12 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
 
   const cfg = loadConfig();
   if (!isDefaultBrowserPluginEnabled(cfg)) {
+    markBrowserControlInitialized();
     return null;
   }
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (!resolved.enabled) {
+    markBrowserControlInitialized();
     return null;
   }
   try {
@@ -40,6 +48,9 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
       logService.info("No browser auth configured; generated gateway.auth.token automatically.");
     }
   } catch (err) {
+    if (isBrowserControlManaged()) {
+      throw err;
+    }
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
@@ -53,10 +64,14 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   logService.info(
     `Browser control service ready (profiles=${Object.keys(resolved.profiles).length})`,
   );
+  markBrowserControlInitialized();
   return state;
 }
 
 export async function stopBrowserControlService(): Promise<void> {
+  if (isBrowserControlManaged()) {
+    await browserServiceWork.pause(30_000);
+  }
   const current = state;
   await stopBrowserRuntime({
     current,
@@ -66,4 +81,5 @@ export async function stopBrowserControlService(): Promise<void> {
     },
     onWarn: (message) => logService.warn(message),
   });
+  markBrowserControlStopped();
 }

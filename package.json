@@ -84,6 +84,10 @@
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"
     },
+    "./plugin-sdk/service-runtime": {
+      "types": "./dist/plugin-sdk/service-runtime.d.ts",
+      "default": "./dist/plugin-sdk/service-runtime.js"
+    },
     "./plugin-sdk/runtime": {
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"

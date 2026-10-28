@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runExec = vi.hoisted(() => vi.fn());
@@ -35,9 +36,14 @@ describe("browser trash", () => {
     const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/home/test/.Trash/demo-123");
-    expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
-    expect(existsSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123");
-    expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123");
+    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+      path.join("/home/test", ".Trash", "demo-123"),
+    );
+    expect(mkdirSync).toHaveBeenCalledWith(path.join("/home/test", ".Trash"), { recursive: true });
+    expect(existsSync).toHaveBeenCalledWith(path.join("/home/test", ".Trash", "demo-123"));
+    expect(renameSync).toHaveBeenCalledWith(
+      "/tmp/demo",
+      path.join("/home/test", ".Trash", "demo-123"),
+    );
   });
 });

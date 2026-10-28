@@ -13,13 +13,14 @@ import {
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { getInspectableTaskRegistrySummary } from "../../tasks/task-registry.maintenance.js";
 import type { GatewayServer } from "../server.js";
+import { drainManagedGateway } from "./drain.js";
 import { LifecycleCommandSchema } from "./protocol.js";
 import { GatewayLifecycleWorker } from "./worker.js";
 
 async function waitUntil(check: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   while (!check()) {
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error("Lifecycle deadline exceeded; active work was not aborted");
     }
     await delay(100);
@@ -60,6 +61,7 @@ export async function runManagedGatewayWorker(params: {
     getInspectableTaskRegistrySummary().active === 0;
   const worker = new GatewayLifecycleWorker({
     activate: async (timeoutMs) => {
+      const deadline = performance.now() + timeoutMs;
       if (server || lock) {
         throw new Error("Previous server has not fully released ownership");
       }
@@ -71,24 +73,35 @@ export async function runManagedGatewayWorker(params: {
       resetAllLanes();
       markGatewayDraining();
       server = await params.start({ startupStartedAt: Date.now() });
+      if (performance.now() >= deadline) {
+        throw new Error("Managed Gateway activation exceeded its startup deadline");
+      }
       process.stderr.write("[lifecycle] server started; checking dependencies\n");
       if (!server.handoff) {
         throw new Error("Server does not support managed handoff");
       }
-      await waitUntil(() => server?.handoff?.isReady() === true, timeoutMs);
+      await waitUntil(
+        () => {
+          server?.checkDeploymentReady?.();
+          return server?.handoff?.isReady() === true;
+        },
+        Math.max(1, deadline - performance.now()),
+      );
     },
     quiesce: async (timeoutMs) => {
       if (!server?.handoff) {
         throw new Error("No managed server is active");
       }
-      const deadline = Date.now() + timeoutMs;
-      await server.handoff.pause(timeoutMs);
-      // Plugin ingress is paused first, so accepted RabbitMQ handlers can finish all nested work.
-      await waitUntil(idle, Math.max(1, deadline - Date.now()));
-      markGatewayDraining();
-      if (!idle()) {
-        throw new Error("New work arrived while closing admission");
-      }
+      const handoff = server.handoff;
+      await drainManagedGateway({
+        timeoutMs,
+        pauseIngress: (budget) => handoff.pause(budget),
+        isIdle: idle,
+        closeAdmission: markGatewayDraining,
+        pauseExecution: async (budget) => {
+          await handoff.pauseExecution?.(budget);
+        },
+      });
     },
     resume: async () => {
       resumeGatewayAdmission();

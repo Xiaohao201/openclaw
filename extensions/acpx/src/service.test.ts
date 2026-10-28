@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { runtimeRegistry } = vi.hoisted(() => ({
@@ -59,6 +60,90 @@ function createServiceContext(workspaceDir: string) {
 }
 
 describe("createAcpxRuntimeService", () => {
+  it.each(["unhealthy", "failed-probe", "skipped-probe"])(
+    "fails managed readiness for %s",
+    async (scenario) => {
+      if (scenario === "skipped-probe") {
+        process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
+      }
+      const workspaceDir = await makeTempDir();
+      const ctx = {
+        ...createServiceContext(workspaceDir),
+        lifecycleMode: "externally-managed" as const,
+        handoffVersion: 2 as const,
+      };
+      const service = createAcpxRuntimeService({
+        pluginConfig: { stateDir: path.join(workspaceDir, "state") },
+        runtimeFactory: () =>
+          ({
+            ensureSession: vi.fn(),
+            runTurn: vi.fn(),
+            close: vi.fn(),
+            cancel: vi.fn(),
+            isHealthy: () => false,
+            probeAvailability: async () => {
+              if (scenario === "failed-probe") {
+                throw new Error("probe failed");
+              }
+            },
+            doctor: async () => ({
+              ok: false,
+              message: "missing fixture backend",
+              details: ["not available"],
+            }),
+          }) as never,
+      });
+      await expect(service.start(ctx)).rejects.toThrow();
+      expect(service.handoff!.isReady(ctx)).toBe(false);
+      await expect(service.handoff!.resume(ctx)).rejects.toThrow("not ready");
+      await service.stop!(ctx);
+      expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+    },
+  );
+  it("starts managed backends in standby and drains a running stream", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = {
+      ...createServiceContext(workspaceDir),
+      lifecycleMode: "externally-managed" as const,
+      handoffVersion: 2 as const,
+    };
+    const finish = createDeferred<void>();
+    const runtime = {
+      ensureSession: vi.fn(async () => ({
+        sessionKey: "test",
+        backend: "acpx",
+        runtimeSessionName: "test",
+      })),
+      async *runTurn() {
+        yield { type: "text_delta" as const, text: "started" };
+        await finish.promise;
+      },
+      cancel: vi.fn(),
+      close: vi.fn(),
+      probeAvailability: vi.fn(async () => {}),
+      isHealthy: () => true,
+    };
+    const service = createAcpxRuntimeService({
+      pluginConfig: { stateDir: path.join(workspaceDir, "state") },
+      runtimeFactory: () => runtime,
+    });
+    await service.start(ctx);
+    const backend = getAcpRuntimeBackend("acpx")!.runtime;
+    const input = { sessionKey: "test", agent: "test", mode: "persistent" as const };
+    await expect(backend.ensureSession(input)).rejects.toThrow("not accepting");
+    expect(service.handoff!.isReady(ctx)).toBe(true);
+    await service.handoff!.resume(ctx);
+    const handle = await backend.ensureSession(input);
+    const stream = backend.runTurn({ handle, text: "hello", mode: "prompt", requestId: "test" });
+    const iterator = stream[Symbol.asyncIterator]();
+    await iterator.next();
+    await expect(service.handoff!.pause(ctx, 5)).rejects.toThrow("active");
+    expect(runtime.cancel).not.toHaveBeenCalled();
+    finish.resolve(undefined);
+    await iterator.next();
+    await service.handoff!.pause(ctx, 100);
+    await service.stop!(ctx);
+  });
   it("registers and unregisters the embedded backend", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createServiceWorkTracker } from "openclaw/plugin-sdk/service-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "./api.js";
 import { listDevicePairing } from "./api.js";
@@ -138,15 +140,40 @@ async function readNotifyState(filePath: string): Promise<NotifyStateFile> {
   try {
     const content = await fs.readFile(filePath, "utf8");
     return normalizeNotifyState(JSON.parse(content));
-  } catch {
-    return { subscribers: [], notifiedRequestIds: {} };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { subscribers: [], notifiedRequestIds: {} };
+    }
+    throw error;
   }
 }
 
 async function writeNotifyState(filePath: string, state: NotifyStateFile): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const content = JSON.stringify(state, null, 2);
-  await fs.writeFile(filePath, `${content}\n`, "utf8");
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporary, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+    await fs.rename(temporary, filePath);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+
+const stateUpdates = new Map<string, Promise<unknown>>();
+
+async function withNotifyState<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const key = path.resolve(filePath);
+  const previous = stateUpdates.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  stateUpdates.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (stateUpdates.get(key) === current) {
+      stateUpdates.delete(key);
+    }
+  }
 }
 
 function notifySubscriberKey(subscriber: {
@@ -395,17 +422,19 @@ export async function armPairNotifyOnce(params: {
 
   const stateDir = params.api.runtime.state.resolveStateDir();
   const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
-  let changed = false;
+  return await withNotifyState(statePath, async () => {
+    const state = await readNotifyState(statePath);
+    let changed = false;
 
-  if (upsertNotifySubscriber(state.subscribers, target, "once")) {
-    changed = true;
-  }
+    if (upsertNotifySubscriber(state.subscribers, target, "once")) {
+      changed = true;
+    }
 
-  if (changed) {
-    await writeNotifyState(statePath, state);
-  }
-  return true;
+    if (changed) {
+      await writeNotifyState(statePath, state);
+    }
+    return true;
+  });
 }
 
 export async function handleNotifyCommand(params: {
@@ -431,90 +460,140 @@ export async function handleNotifyCommand(params: {
 
   const stateDir = params.api.runtime.state.resolveStateDir();
   const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
-  const targetKey = notifySubscriberKey(target);
-  const current = state.subscribers.find((entry) => notifySubscriberKey(entry) === targetKey);
+  return await withNotifyState(statePath, async () => {
+    const state = await readNotifyState(statePath);
+    const targetKey = notifySubscriberKey(target);
+    const current = state.subscribers.find((entry) => notifySubscriberKey(entry) === targetKey);
 
-  if (params.action === "on" || params.action === "enable") {
-    if (upsertNotifySubscriber(state.subscribers, target, "persistent")) {
-      await writeNotifyState(statePath, state);
+    if (params.action === "on" || params.action === "enable") {
+      if (upsertNotifySubscriber(state.subscribers, target, "persistent")) {
+        await writeNotifyState(statePath, state);
+      }
+      return {
+        text:
+          "✅ Pair request notifications enabled for this Telegram chat.\n" +
+          "I will ping here when a new device pairing request arrives.",
+      };
     }
-    return {
-      text:
-        "✅ Pair request notifications enabled for this Telegram chat.\n" +
-        "I will ping here when a new device pairing request arrives.",
-    };
-  }
 
-  if (params.action === "off" || params.action === "disable") {
-    const currentIndex = state.subscribers.findIndex(
-      (entry) => notifySubscriberKey(entry) === targetKey,
-    );
-    if (currentIndex !== -1) {
-      state.subscribers.splice(currentIndex, 1);
-      await writeNotifyState(statePath, state);
+    if (params.action === "off" || params.action === "disable") {
+      const currentIndex = state.subscribers.findIndex(
+        (entry) => notifySubscriberKey(entry) === targetKey,
+      );
+      if (currentIndex !== -1) {
+        state.subscribers.splice(currentIndex, 1);
+        await writeNotifyState(statePath, state);
+      }
+      return { text: "✅ Pair request notifications disabled for this Telegram chat." };
     }
-    return { text: "✅ Pair request notifications disabled for this Telegram chat." };
-  }
 
-  if (params.action === "once" || params.action === "arm") {
-    await armPairNotifyOnce({
-      api: params.api,
-      ctx: params.ctx,
-    });
-    return {
-      text:
-        "✅ One-shot pairing notification armed for this Telegram chat.\n" +
-        "I will notify on the next new pairing request, then auto-disable.",
-    };
-  }
+    if (params.action === "once" || params.action === "arm") {
+      if (upsertNotifySubscriber(state.subscribers, target, "once")) {
+        await writeNotifyState(statePath, state);
+      }
+      return {
+        text:
+          "✅ One-shot pairing notification armed for this Telegram chat.\n" +
+          "I will notify on the next new pairing request, then auto-disable.",
+      };
+    }
 
-  if (params.action === "status" || params.action === "") {
-    const pending = await listDevicePairing();
-    const enabled = Boolean(current);
-    const mode = current?.mode ?? "off";
-    return {
-      text: [
-        `Pair request notifications: ${enabled ? "enabled" : "disabled"} for this chat.`,
-        `Mode: ${mode}`,
-        `Subscribers: ${state.subscribers.length}`,
-        `Pending requests: ${pending.pending.length}`,
-        "",
-        "Use /pair notify on|off|once",
-      ].join("\n"),
-    };
-  }
+    if (params.action === "status" || params.action === "") {
+      const pending = await listDevicePairing();
+      const enabled = Boolean(current);
+      const mode = current?.mode ?? "off";
+      return {
+        text: [
+          `Pair request notifications: ${enabled ? "enabled" : "disabled"} for this chat.`,
+          `Mode: ${mode}`,
+          `Subscribers: ${state.subscribers.length}`,
+          `Pending requests: ${pending.pending.length}`,
+          "",
+          "Use /pair notify on|off|once",
+        ].join("\n"),
+      };
+    }
 
-  return { text: "Usage: /pair notify on|off|once|status" };
+    return { text: "Usage: /pair notify on|off|once|status" };
+  });
 }
 
 export function registerPairingNotifierService(api: OpenClawPluginApi): void {
-  let notifyInterval: ReturnType<typeof setInterval> | null = null;
-
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let initialized = false;
+  let polling = false;
+  let statePath: string;
+  let inFlight: Promise<void> | undefined;
+  let pollFailure: unknown;
+  const work = createServiceWorkTracker("device-pair-notifier");
+  const tick = () => {
+    if (!polling || inFlight) {
+      return;
+    }
+    inFlight = work
+      .run(() => withNotifyState(statePath, () => notifyPendingPairingRequests({ api, statePath })))
+      .then(() => {
+        pollFailure = undefined;
+      })
+      .catch((error: unknown) => {
+        pollFailure = error;
+        api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(error)}`);
+      })
+      .finally(() => {
+        inFlight = undefined;
+        if (polling) {
+          timer = setTimeout(tick, NOTIFY_POLL_INTERVAL_MS);
+          timer.unref?.();
+        }
+      });
+  };
+  const resume = () => {
+    if (!initialized) {
+      throw new Error("device-pair-notifier is not initialized");
+    }
+    if (polling) {
+      return;
+    }
+    polling = true;
+    work.resume();
+    tick();
+  };
+  const pause = async (timeoutMs: number) => {
+    polling = false;
+    clearTimeout(timer);
+    timer = undefined;
+    await work.pause(timeoutMs);
+    await inFlight;
+    if (pollFailure) {
+      throw new Error("device-pair-notifier poll did not settle successfully", {
+        cause: pollFailure,
+      });
+    }
+  };
   api.registerService({
     id: "device-pair-notifier",
+    handoff: {
+      version: 1,
+      isReady: () => initialized,
+      pause: async (_ctx, timeoutMs) => pause(timeoutMs),
+      resume: async () => resume(),
+    },
     start: async (ctx) => {
-      const statePath = resolveNotifyStatePath(ctx.stateDir);
-      const tick = async () => {
-        await notifyPendingPairingRequests({ api, statePath });
-      };
-
-      await tick().catch((err) => {
-        api.logger.warn(`device-pair: initial notify poll failed: ${formatErrorMessage(err)}`);
-      });
-
-      notifyInterval = setInterval(() => {
-        tick().catch((err) => {
-          api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
-        });
-      }, NOTIFY_POLL_INTERVAL_MS);
-      notifyInterval.unref?.();
+      if (initialized) {
+        return;
+      }
+      statePath = resolveNotifyStatePath(ctx.stateDir);
+      await fs.mkdir(ctx.stateDir, { recursive: true });
+      await readNotifyState(statePath);
+      initialized = true;
+      if (!ctx.lifecycleMode) {
+        resume();
+        await inFlight;
+      }
     },
     stop: async () => {
-      if (notifyInterval) {
-        clearInterval(notifyInterval);
-        notifyInterval = null;
-      }
+      await pause(30_000);
+      initialized = false;
     },
   });
 }

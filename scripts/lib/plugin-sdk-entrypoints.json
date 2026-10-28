@@ -8,6 +8,7 @@
   "self-hosted-provider-setup",
   "routing",
   "runtime",
+  "service-runtime",
   "runtime-doctor",
   "runtime-env",
   "file-delivery-runtime",

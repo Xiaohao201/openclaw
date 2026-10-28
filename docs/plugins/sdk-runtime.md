@@ -517,3 +517,36 @@ Legacy services continue to work outside managed mode. Managed startup fails
 readiness for services without this contract rather than silently assuming
 their background work can be interrupted. Tool-only services with no independent
 ingress may implement no-op pause/resume; the host still drains their agent turns.
+
+Execution backends can use `handoff: { version: 2, drainPhase: "execution", ... }`
+with the same `pause`, `resume`, and `isReady` methods. Check
+`ctx.handoffVersion === 2` during managed startup and reject older hosts. V1
+services and v2 services with `drainPhase: "ingress"` drain first. The host then
+waits for accepted agent work, closes command admission, and drains execution
+services. On recovery, execution services resume before ingress. A busy direct
+entry point can postpone the idle boundary and cause the upgrade to time out;
+the host restores the old worker rather than aborting its tasks.
+
+`openclaw/plugin-sdk/service-runtime` provides `createServiceWorkTracker(id,
+initiallyAccepting?)`. Its `run` and `stream` helpers hold leases until the
+underlying operation finishes. `pause(timeoutMs)` closes admission and waits for
+all leases without cancelling them. `resume()` reopens admission. Stream leases
+drain the producer even if the consumer stops reading, so producer cleanup and
+persistence remain part of the drain. Use this only for finite operations;
+infinite subscriptions need their own explicit unsubscribe-and-settle protocol.
+
+Managed lazy modules must expose the handoff factory selected by
+`handoffExportName`, plus start and stop exports. The host resolves and validates
+the execution v2 contract before calling start, and passes the service context
+to the factory. Missing capabilities are errors in managed mode; ordinary
+unmanaged modules remain compatible.
+
+The bundled ACP adapter requires a successful availability probe. With acpx
+0.5.3, a persistent session that has been ensured but has not completed a turn
+may still own a cached client without a public non-destructive disposal API.
+The adapter refuses handoff in that case and lets the manager resume the old
+worker; it does not delete persistent sessions or kill untracked processes.
+Browser handoff drains operations but does not preserve the in-memory state of
+Chrome instances owned and stopped by the old worker. Pairing notification
+handoff waits for sending and state persistence; crash recovery between a
+remote send and local persistence can still produce duplicate notifications.

@@ -221,7 +221,7 @@ describe("BrowserProfilesService", () => {
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
-    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    const userDataDir = path.resolve(tempDir, "BraveSoftware", "Brave-Browser");
     fs.mkdirSync(userDataDir, { recursive: true });
 
     const service = createBrowserProfilesService(ctx);
@@ -247,7 +247,7 @@ describe("BrowserProfilesService", () => {
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
-    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    const userDataDir = path.resolve(tempDir, "BraveSoftware", "Brave-Browser");
     fs.mkdirSync(userDataDir, { recursive: true });
 
     const service = createBrowserProfilesService(ctx);

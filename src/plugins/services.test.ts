@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
@@ -18,6 +18,104 @@ import { STATE_DIR } from "../config/paths.js";
 import { startPluginServices } from "./services.js";
 
 describe("service handoff v1", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("validates all managed contracts before starting any service", async () => {
+    vi.stubEnv("OPENCLAW_EXTERNAL_LIFECYCLE", "1");
+    const start = vi.fn();
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "valid",
+          start,
+          handoff: {
+            version: 1,
+            pause: async () => {},
+            resume: async () => {},
+            isReady: () => true,
+          },
+        },
+        { id: "legacy", start },
+      ]),
+      config: {},
+    });
+    expect(() => handle.assertHealthy?.()).toThrow("legacy");
+    expect(handle.handoff!.isReady()).toBe(false);
+    expect(start).not.toHaveBeenCalled();
+  });
+  it("announces phase support to managed services", async () => {
+    vi.stubEnv("OPENCLAW_EXTERNAL_LIFECYCLE", "1");
+    const start = vi.fn();
+    await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "service",
+          start,
+          handoff: {
+            version: 2,
+            drainPhase: "execution",
+            pause: async () => {},
+            resume: async () => {},
+            isReady: () => true,
+          },
+        },
+      ]),
+      config: {},
+    });
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycleMode: "externally-managed", handoffVersion: 2 }),
+    );
+  });
+  it("keeps execution services available until ingress has drained and resumes them first", async () => {
+    const events: string[] = [];
+    let accepting = true;
+    const backend: OpenClawPluginService = {
+      id: "backend",
+      start() {},
+      handoff: {
+        version: 2,
+        drainPhase: "execution",
+        pause: async () => {
+          accepting = false;
+          events.push("backend paused");
+        },
+        resume: async () => {
+          accepting = true;
+          events.push("backend resumed");
+        },
+        isReady: () => true,
+      },
+    };
+    const ingress: OpenClawPluginService = {
+      id: "ingress",
+      start() {},
+      handoff: {
+        version: 1,
+        pause: async () => {
+          expect(accepting).toBe(true);
+          events.push("accepted task finished");
+        },
+        resume: async () => {
+          expect(accepting).toBe(true);
+          events.push("ingress resumed");
+        },
+        isReady: () => true,
+      },
+    };
+    const handle = await startPluginServices({
+      registry: createRegistry([ingress, backend]),
+      config: {},
+    });
+    await handle.handoff!.pause(100);
+    expect(accepting).toBe(true);
+    await handle.handoff!.pauseExecution!(100);
+    await handle.handoff!.resume();
+    expect(events).toEqual([
+      "accepted task finished",
+      "backend paused",
+      "backend resumed",
+      "ingress resumed",
+    ]);
+  });
   it("refuses to drain services without a handoff contract", async () => {
     const handle = await startPluginServices({
       registry: createRegistry([{ id: "legacy", start() {} }]),

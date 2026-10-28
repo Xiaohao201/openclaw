@@ -39,6 +39,85 @@ async function expectLifecycleStarted(params: {
 }
 
 describe("startLazyPluginServiceModule", () => {
+  it("creates the managed handoff before starting and exposes its readiness", async () => {
+    const events: string[] = [];
+    const ctx = {
+      config: {},
+      stateDir: "test",
+      logger: console,
+      lifecycleMode: "externally-managed" as const,
+      handoffVersion: 2 as const,
+    };
+    const handoff = {
+      version: 2 as const,
+      drainPhase: "execution" as const,
+      pause: async () => {},
+      resume: async () => {},
+      isReady: () => true,
+    };
+    const stop = vi.fn(async () => {});
+    const handle = await startLazyPluginServiceModule({
+      loadDefaultModule: async () => ({
+        createHandoff: () => {
+          events.push("standby");
+          return handoff;
+        },
+        start: async () => {
+          events.push("start");
+        },
+        stop,
+      }),
+      startExportNames: ["start"],
+      stopExportNames: ["stop"],
+      handoffExportName: "createHandoff",
+      serviceContext: ctx,
+    });
+    expect(events).toEqual(["standby", "start"]);
+    expect(handle?.handoff?.isReady(ctx)).toBe(true);
+    await handle?.stop();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+  it("cleans up partial initialization without hiding either failure", async () => {
+    const stop = vi.fn(async () => {
+      throw new Error("cleanup failed");
+    });
+    await expect(
+      startLazyPluginServiceModule({
+        loadDefaultModule: async () => ({
+          start: async () => {
+            throw new Error("start failed");
+          },
+          stop,
+        }),
+        startExportNames: ["start"],
+        stopExportNames: ["stop"],
+      }),
+    ).rejects.toMatchObject({
+      errors: [
+        expect.objectContaining({ message: "start failed" }),
+        expect.objectContaining({ message: "cleanup failed" }),
+      ],
+    });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+  it("rejects managed modules without a lifecycle capability before starting", async () => {
+    const start = vi.fn();
+    await expect(
+      startLazyPluginServiceModule({
+        loadDefaultModule: async () => ({ start }),
+        startExportNames: ["start"],
+        handoffExportName: "createHandoff",
+        serviceContext: {
+          config: {},
+          stateDir: "test",
+          logger: console,
+          lifecycleMode: "externally-managed",
+          handoffVersion: 2,
+        },
+      }),
+    ).rejects.toThrow("handoff");
+    expect(start).not.toHaveBeenCalled();
+  });
   afterEach(() => {
     delete process.env.OPENCLAW_LAZY_SERVICE_SKIP;
     delete process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE;
