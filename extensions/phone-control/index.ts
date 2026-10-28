@@ -4,11 +4,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/text-runtime";
-import {
-  definePluginEntry,
-  type OpenClawPluginApi,
-  type OpenClawPluginService,
-} from "./runtime-api.js";
+import { createPhoneControlExpiryService } from "./expiry-service.js";
+import { definePluginEntry, type OpenClawPluginApi } from "./runtime-api.js";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
@@ -304,48 +301,24 @@ export default definePluginEntry({
   name: "Phone Control",
   description: "Temporary allowlist control for phone automation commands",
   register(api: OpenClawPluginApi) {
-    let expiryInterval: ReturnType<typeof setInterval> | null = null;
-
-    const timerService: OpenClawPluginService = {
-      id: "phone-control-expiry",
-      start: async (ctx) => {
+    api.registerService(
+      createPhoneControlExpiryService(async (ctx) => {
         const statePath = resolveStatePath(ctx.stateDir);
-        const tick = async () => {
-          const state = await readArmState(statePath);
-          if (!state || state.expiresAtMs == null) {
-            return;
-          }
-          if (Date.now() < state.expiresAtMs) {
-            return;
-          }
-          await disarmNow({
-            api,
-            stateDir: ctx.stateDir,
-            statePath,
-            reason: "expired",
-          });
-        };
-
-        // Best effort; don't crash the gateway if state is corrupt.
-        await tick().catch(() => {});
-
-        expiryInterval = setInterval(() => {
-          tick().catch(() => {});
-        }, 15_000);
-        expiryInterval.unref?.();
-
-        return;
-      },
-      stop: async () => {
-        if (expiryInterval) {
-          clearInterval(expiryInterval);
-          expiryInterval = null;
+        const state = await readArmState(statePath);
+        if (!state || state.expiresAtMs == null) {
+          return;
         }
-        return;
-      },
-    };
-
-    api.registerService(timerService);
+        if (Date.now() < state.expiresAtMs) {
+          return;
+        }
+        await disarmNow({
+          api,
+          stateDir: ctx.stateDir,
+          statePath,
+          reason: "expired",
+        });
+      }),
+    );
 
     api.registerCommand({
       name: "phone",

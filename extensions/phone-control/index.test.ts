@@ -8,6 +8,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
+  OpenClawPluginService,
 } from "./runtime-api.js";
 
 const PHONE_CONTROL_STATE_PREFIX = "openclaw-phone-control-test-";
@@ -18,6 +19,7 @@ function createApi(params: {
   getConfig: () => Record<string, unknown>;
   writeConfig: (next: Record<string, unknown>) => Promise<void>;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerService?: (service: OpenClawPluginService) => void;
 }): OpenClawPluginApi {
   return createTestPluginApi({
     id: "phone-control",
@@ -35,6 +37,7 @@ function createApi(params: {
       },
     } as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
+    ...(params.registerService ? { registerService: params.registerService } : {}),
   });
 }
 
@@ -70,6 +73,8 @@ async function withRegisteredPhoneControl(
     command: OpenClawPluginCommandDefinition;
     writeConfigFile: ReturnType<typeof vi.fn>;
     getConfig: () => Record<string, unknown>;
+    service: OpenClawPluginService;
+    stateDir: string;
   }) => Promise<void>,
 ) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), PHONE_CONTROL_STATE_PREFIX));
@@ -80,6 +85,7 @@ async function withRegisteredPhoneControl(
     });
 
     let command: OpenClawPluginCommandDefinition | undefined;
+    let service: OpenClawPluginService | undefined;
     registerPhoneControl.register(
       createApi({
         stateDir,
@@ -88,10 +94,13 @@ async function withRegisteredPhoneControl(
         registerCommand: (nextCommand) => {
           command = nextCommand;
         },
+        registerService: (registered) => {
+          service = registered;
+        },
       }),
     );
 
-    if (!command) {
+    if (!command || !service) {
       throw new Error("phone-control plugin did not register its command");
     }
 
@@ -99,6 +108,8 @@ async function withRegisteredPhoneControl(
       command,
       writeConfigFile,
       getConfig: () => config,
+      service,
+      stateDir,
     });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -106,6 +117,44 @@ async function withRegisteredPhoneControl(
 }
 
 describe("phone-control plugin", () => {
+  it("reconciles a grant that expires during managed standby before resuming", async () => {
+    await withRegisteredPhoneControl(
+      async ({ command, service, stateDir, getConfig, writeConfigFile }) => {
+        const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+        const ctx = {
+          config: {},
+          stateDir,
+          logger: console,
+          lifecycleMode: "externally-managed" as const,
+          handoffVersion: 2 as const,
+        };
+        try {
+          await command.handler({
+            ...createCommandContext("arm writes 30s"),
+            channel: "webchat",
+            gatewayClientScopes: ["operator.admin"],
+          });
+          writeConfigFile.mockClear();
+          await service.start(ctx);
+          now.mockReturnValue(131_000);
+          expect(writeConfigFile).not.toHaveBeenCalled();
+          await service.handoff!.resume(ctx);
+          expect(writeConfigFile).toHaveBeenCalledOnce();
+          const nodes = (
+            getConfig().gateway as { nodes: { allowCommands: string[]; denyCommands: string[] } }
+          ).nodes;
+          expect(nodes.allowCommands).not.toContain("sms.send");
+          expect(nodes.denyCommands).toContain("sms.send");
+          expect((await command.handler(createCommandContext("status")))?.text).toContain(
+            "disarmed",
+          );
+        } finally {
+          await service.stop!(ctx);
+          now.mockRestore();
+        }
+      },
+    );
+  });
   it("arms sms.send as part of the writes group", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");

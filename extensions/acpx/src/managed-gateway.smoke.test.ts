@@ -9,7 +9,7 @@ import { expect, it } from "vitest";
 // Exercises real built plugin loading and two worker processes, using an isolated
 // ACP protocol fixture. No model, broker, or notification credentials are used.
 it.runIf(process.env.OPENCLAW_MANAGED_PLUGINS_SMOKE === "1")(
-  "hands off with ACP, browser, and pairing services enabled",
+  "hands off with ACP, browser, pairing, and phone expiry services enabled",
   async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-managed-plugins-"));
     const probe = net.createServer();
@@ -50,7 +50,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         },
         agents: { defaults: { workspace } },
         plugins: {
-          allow: ["acpx", "browser", "device-pair"],
+          allow: ["acpx", "browser", "device-pair", "phone-control"],
           slots: { memory: "none" },
           entries: {
             acpx: {
@@ -67,6 +67,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             },
             browser: { enabled: true },
             "device-pair": { enabled: true },
+            "phone-control": { enabled: true },
           },
         },
         browser: { enabled: true },
@@ -163,6 +164,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       expect(output).toContain("embedded acpx runtime backend ready");
       expect(output).toContain("Browser control listening on http://127.0.0.1:");
       expect(output).not.toContain("plugin service failed");
+      expect(output).not.toContain("Invalid managed service handoff contract");
       manager.stdin.write('{"action":"stop"}\n');
       await waitEvent("stopped");
       console.info("Managed plugins smoke: first start, replacement, and drained stop succeeded");
