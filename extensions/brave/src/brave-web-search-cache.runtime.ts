@@ -4,7 +4,7 @@ import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type {
   BraveSearchCacheDbConfig,
   BraveSearchCacheSqlValue,
-} from "./brave-web-search-cache.js";
+} from "./brave-web-search-cache.types.js";
 
 const pools = new Map<string, mysql.Pool>();
 

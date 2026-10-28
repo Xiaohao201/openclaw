@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
+import type {
+  BraveSearchCacheDbConfig,
+  BraveSearchCacheSqlValue,
+} from "./brave-web-search-cache.types.js";
 
-export type BraveSearchCacheDbConfig = {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-};
-
-export type BraveSearchCacheSqlValue = string | number | Date;
+export type {
+  BraveSearchCacheDbConfig,
+  BraveSearchCacheSqlValue,
+} from "./brave-web-search-cache.types.js";
 
 type PersistDeps = {
   execute?: (sql: string, values: BraveSearchCacheSqlValue[]) => Promise<unknown>;
