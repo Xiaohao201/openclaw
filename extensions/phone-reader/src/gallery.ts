@@ -35,9 +35,13 @@ export function findGallery(xml: string, packageName: string): Gallery | undefin
     if (node["@_package"] !== packageName || node["@_visible-to-user"] === "false") {
       continue;
     }
-    const desc = String(node["@_content-desc"] ?? "");
+    const desc = node["@_content-desc"];
+    const bounds = node["@_bounds"];
+    if (typeof desc !== "string" || typeof bounds !== "string") {
+      continue;
+    }
     const match = /图片[,，]\s*第\s*(\d+)\s*张[,，]\s*共\s*(\d+)\s*张/.exec(desc);
-    const rect = /^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(String(node["@_bounds"] ?? ""));
+    const rect = /^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(bounds);
     if (!match || !rect) {
       continue;
     }

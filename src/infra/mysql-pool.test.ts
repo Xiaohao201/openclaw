@@ -72,7 +72,7 @@ beforeEach(() => {
   vi.stubEnv("MYSQL_IDLE_TIMEOUT_MS", "2000");
   vi.stubEnv("MYSQL_QUEUE_LIMIT", "1");
   vi.mocked(mysql.createPool).mockImplementation((options) => {
-    settings = options as mysql.PoolOptions;
+    settings = options;
     return Object.assign(emitter, {
       getConnection: vi.fn(borrow),
       execute: vi.fn(async () => {

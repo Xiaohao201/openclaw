@@ -338,12 +338,10 @@ export function createVideoLinkParseToolFactory(api: OpenClawPluginApi) {
   if (config) {
     api.on("before_tool_call", (event, context) => {
       if (event.toolName !== "video_understand") {
-        return;
+        return undefined;
       }
       const videoUrl = handoff.resolve(context, event.params.url);
-      if (videoUrl) {
-        return { params: { ...event.params, url: videoUrl } };
-      }
+      return videoUrl ? { params: { ...event.params, url: videoUrl } } : undefined;
     });
   }
   return (context: OpenClawPluginToolContext = {}) =>
