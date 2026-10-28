@@ -2245,6 +2245,33 @@ describe("processChatMessage", () => {
     expect(capturedMessage).toContain("你先学习一下这份舆情专报的模版");
   });
 
+  it("allows new data when the attachment supplies only a report format", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "已按指定范围检索" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    await processChatMessage(
+      {
+        ...createChatMessage(),
+        hasAttachment: true,
+        message:
+          "请参考附件格式，打开观象台，帮我找出有关示例集团的数据，监测时间为2026年10月20日9时到27日9时。\n\n以下是用户提供的附件内容，请结合附件作答：\n\n【附件 1：模板】\n仅依据附件中的数据",
+      },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+    expect(capturedMessage).toContain("按用户指定的数据源检索新数据");
+    expect(capturedMessage).not.toContain("请【仅依据附件中的数据】进行分析与撰写");
+  });
+
   it("keeps a report-writing request with an attachment in normal chat", async () => {
     // With an attachment the agent analyzes the supplied content directly and
     // must not enqueue an internal-DB report task.

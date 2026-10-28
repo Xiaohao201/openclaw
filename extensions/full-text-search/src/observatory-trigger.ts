@@ -1,14 +1,16 @@
+import { extractSearchTask, forbidsExternalSearch } from "./search-intent.js";
+
 export type ObservatorySearchIntent = {
   query: string;
 };
 
 const NEGATION_BEFORE_INVOCATION_PATTERN =
-  /(?:不要|不用|别|请勿|无需|不必|禁止|取消)(?:再)?\s*(?:使用|调用|通过|打开|用)?\s*$/u;
+  /(?:不要|不用|别|请勿|无需|不必|禁止|取消|不)(?:再)?\s*(?:使用|调用|通过|打开|用)?\s*$/u;
 
-const SEARCH_VERB = String.raw`(?:搜索|查询|检索|搜(?:索|一下)?|查(?:询|一下)?)`;
+const SEARCH_VERB = String.raw`(?:搜索|查询|检索|找出|搜(?:索|一下)?|查(?:询|一下)?)`;
 const INVOCATION_PATTERNS = [
   new RegExp(
-    String.raw`(?:帮我|请)?\s*(?:使用|调用|通过|打开|用)\s*观象台(?:来|帮我|进行)?\s*[,，:：]?\s*${SEARCH_VERB}\s*`,
+    String.raw`(?:帮我|请)?\s*(?:使用|调用|通过|打开|用)\s*观象台\s*[,，:：]?\s*(?:来|帮我|进行)?\s*${SEARCH_VERB}\s*`,
     "gu",
   ),
   new RegExp(String.raw`观象台\s*${SEARCH_VERB}\s*`, "gu"),
@@ -22,7 +24,14 @@ function extractQuery(remainder: string): string | null {
     .trim()
     .replace(/^(?:关于|有关)\s*/u, "");
   const quoted = normalized.match(/^[“"「『]([^”"」』]+)[”"」』]/u)?.[1];
-  const candidate = (quoted ?? normalized).trim().replace(/\s+/gu, " ");
+  const candidate = (
+    quoted ??
+    normalized
+      .split(/[,，;；。]\s*(?:监测时间|时间范围|检索范围|也要|并按|请生成|生成|制作|撰写)/u)[0]
+      .replace(/的(?:数据|信息|舆情)$/u, "")
+  )
+    .trim()
+    .replace(/\s+/gu, " ");
 
   if (!candidate || candidate.length > 500) {
     return null;
@@ -32,6 +41,10 @@ function extractQuery(remainder: string): string | null {
 
 /** Parse an explicit, non-negated natural-language invocation of “观象台”. */
 export function parseObservatorySearchIntent(prompt: string): ObservatorySearchIntent | null {
+  prompt = extractSearchTask(prompt);
+  if (forbidsExternalSearch(prompt)) {
+    return null;
+  }
   if (!prompt.includes("观象台")) {
     return null;
   }

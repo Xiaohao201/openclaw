@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   readResponseText,
-  withTrustedWebSearchEndpoint,
+  withTrustedWebToolsEndpoint,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
@@ -9,19 +9,37 @@ import {
   resolveFullTextSearchMaxContentChars,
   resolveFullTextSearchTimeoutSeconds,
 } from "./config.js";
+import {
+  normalizeHitFields,
+  normalizePlatforms,
+  normalizeQuery,
+  normalizeStringArray,
+  resolveDateRange,
+  resolveSearchWindow,
+  SEARCH_ORDERS,
+} from "./search-options.js";
+import {
+  createSearchTransport,
+  isRateLimited,
+  type SearchRequest,
+  type SearchResponse,
+} from "./search-transport.js";
 
 const DEFAULT_COUNT = 5;
 const MAX_COUNT = 20;
 const MAX_RESPONSE_BYTES = 8_000_000;
-const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
 export type FullTextSearchParams = {
   config?: OpenClawConfig;
-  query: string;
+  query: string | string[];
   excludeQueries?: string[];
   dateAfter?: string;
   dateBefore?: string;
   platforms?: string[];
+  hitFields?: string[];
+  merge?: boolean;
+  endExclusive?: boolean;
+  signal?: AbortSignal;
   sentiments?: string[];
   original?: number[];
   reduceNoise?: number;
@@ -33,70 +51,9 @@ export type FullTextSearchParams = {
   timeoutSeconds?: number;
 };
 
-type RequestResult = {
-  ok: boolean;
-  status: number;
-  statusText: string;
-  text: string;
-  truncated: boolean;
-};
-
 type FullTextSearchDeps = {
-  request: (params: {
-    url: string;
-    timeoutSeconds: number;
-    body: Record<string, unknown>;
-  }) => Promise<RequestResult>;
+  request: (params: SearchRequest) => Promise<SearchResponse>;
 };
-
-function formatLocalIsoDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function isValidIsoDate(value: string): boolean {
-  if (!ISO_DATE_PATTERN.test(value)) {
-    return false;
-  }
-  const [year, month, day] = value.split("-").map(Number);
-  const parsed = new Date(year, month - 1, day);
-  return (
-    parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day
-  );
-}
-
-function resolveDateRange(
-  params: Pick<FullTextSearchParams, "dateAfter" | "dateBefore">,
-  now = new Date(),
-): { dateAfter: string; dateBefore: string } {
-  const dateBefore = params.dateBefore?.trim() || formatLocalIsoDate(now);
-  const defaultAfter = new Date(now);
-  defaultAfter.setDate(defaultAfter.getDate() - 30);
-  const dateAfter = params.dateAfter?.trim() || formatLocalIsoDate(defaultAfter);
-  if (!isValidIsoDate(dateAfter)) {
-    throw new Error("dateAfter must use a valid YYYY-MM-DD date.");
-  }
-  if (!isValidIsoDate(dateBefore)) {
-    throw new Error("dateBefore must use a valid YYYY-MM-DD date.");
-  }
-  if (dateAfter > dateBefore) {
-    throw new Error("dateAfter must not be later than dateBefore.");
-  }
-  return { dateAfter, dateBefore };
-}
-
-function normalizeStringArray(value: string[] | undefined, maximum: number): string[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = value
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .slice(0, maximum);
-  return normalized.length > 0 ? normalized : undefined;
-}
 
 function resolveCount(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value)
@@ -109,22 +66,37 @@ function resolvePage(value: number | undefined): number {
 }
 
 function buildRequestBody(params: FullTextSearchParams): Record<string, unknown> {
-  const query = params.query.trim();
-  if (!query) {
-    throw new Error("query is required.");
+  const query = normalizeQuery(params.query);
+  const range = resolveSearchWindow(params);
+  if (params.order && !(SEARCH_ORDERS as readonly string[]).includes(params.order)) {
+    throw new Error("Unsupported result order.");
   }
-  const range = resolveDateRange(params);
+  if (params.order === "similarity_desc" && !params.merge) {
+    throw new Error("similarity_desc requires merge=true.");
+  }
+  if (params.original?.some((value) => ![0, 1, 2].includes(value))) {
+    throw new Error("original must contain only 0 (repost), 1 (original), or 2 (comment).");
+  }
+  if (params.reduceNoise !== undefined && ![0, 1, 2, 3].includes(params.reduceNoise)) {
+    throw new Error("reduceNoise must be 0, 1, 2, or 3.");
+  }
   const body: Record<string, unknown> = {
-    word: [query],
-    date: `${range.dateAfter} 00:00,${range.dateBefore} 23:59`,
+    word: query,
+    date: `${range.start},${range.end}`,
     page: resolvePage(params.page),
     page_size: resolveCount(params.count),
+    merge: params.merge ? 1 : 0,
+    save_filter: 0,
   };
   const optionalValues: Array<[string, unknown]> = [
     ["exclude_word", normalizeStringArray(params.excludeQueries, 100)],
-    ["platform", normalizeStringArray(params.platforms, 20)],
+    ["platform", normalizePlatforms(params.platforms)],
+    ["hit_field", normalizeHitFields(params.hitFields)],
     ["sentiment", normalizeStringArray(params.sentiments, 3)],
-    ["original", params.original?.slice(0, 3)],
+    [
+      "original",
+      params.original ? [...new Set(params.original)].toSorted((a, b) => a - b) : undefined,
+    ],
     ["reduce_noise", params.reduceNoise],
     ["order", params.order?.trim() || undefined],
   ];
@@ -195,10 +167,10 @@ function normalizeResult(
   const boundedContent = content ? truncate(content, options.maxContentChars) : undefined;
   const result: Record<string, unknown> = {
     id: readString(value, "unique_id") ?? readString(value, "post_id"),
-    title: wrapWebContent(title, "web_search"),
+    title: wrapWebContent(truncate(title, 300).text, "web_search"),
     url,
     ...(description
-      ? { snippet: wrapWebContent(truncate(description, 1_000).text, "web_search") }
+      ? { snippet: wrapWebContent(truncate(description, 360).text, "web_search") }
       : {}),
     ...(readString(value, "nickname")
       ? { author: wrapWebContent(readString(value, "nickname")!, "web_search") }
@@ -213,12 +185,12 @@ function normalizeResult(
       ? { publishedAt: readString(value, "post_create_time") }
       : {}),
     metrics: {
-      likes: readNumber(value, "like_count") ?? 0,
-      comments: readNumber(value, "comment_count") ?? 0,
-      shares: readNumber(value, "share_count") ?? 0,
-      views: readNumber(value, "view_count") ?? 0,
-      collects: readNumber(value, "collect_count") ?? 0,
-      reposts: readNumber(value, "repost_count") ?? 0,
+      likes: readNumber(value, "like_count") ?? null,
+      comments: readNumber(value, "comment_count") ?? null,
+      shares: readNumber(value, "share_count") ?? null,
+      views: readNumber(value, "view_count") ?? null,
+      collects: readNumber(value, "collect_count") ?? null,
+      reposts: readNumber(value, "repost_count") ?? null,
     },
   };
   if (options.includeContent && boundedContent) {
@@ -242,22 +214,19 @@ function normalizePlatformCounts(value: unknown): Record<string, number> {
   );
 }
 
-async function requestFullTextSearch(params: {
-  url: string;
-  timeoutSeconds: number;
-  body: Record<string, unknown>;
-}): Promise<RequestResult> {
-  return await withTrustedWebSearchEndpoint(
+async function requestNative(params: SearchRequest): Promise<SearchResponse> {
+  return await withTrustedWebToolsEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify(params.body),
       },
     },
-    async (response) => {
+    async ({ response }) => {
       const result = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
       return {
         ok: response.ok,
@@ -265,10 +234,25 @@ async function requestFullTextSearch(params: {
         statusText: response.statusText,
         text: result.text,
         truncated: result.truncated,
+        retryAfterMs: parseRetryAfter(response.headers.get("Retry-After")),
       };
     },
   );
 }
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : undefined;
+}
+
+const requestFullTextSearch = createSearchTransport(requestNative);
 
 export async function runFullTextSearch(
   params: FullTextSearchParams,
@@ -282,8 +266,19 @@ export async function runFullTextSearch(
     url: endpoint,
     timeoutSeconds: resolveFullTextSearchTimeoutSeconds(params.config, params.timeoutSeconds),
     body,
+    signal: params.signal,
   });
   if (!response.ok) {
+    if (isRateLimited(response)) {
+      return {
+        status: "error",
+        errorCode: "RATE_LIMITED",
+        retryable: false,
+        results: [],
+        guidance:
+          "Automatic rate-limit recovery is exhausted or Retry-After is too long. Do not immediately repeat this query; report the unavailable evidence and preserve successful results.",
+      };
+    }
     const detail = response.text
       ? wrapWebContent(response.text.slice(0, 1_000), "web_search")
       : response.statusText;
@@ -316,17 +311,56 @@ export async function runFullTextSearch(
     params.maxContentChars,
   );
   const includeContent = params.includeContent !== false;
-  const rawResults = Array.isArray(data.list) ? data.list : [];
+  if (!Array.isArray(data.list)) {
+    throw new Error("Full text search API response is missing a valid result list.");
+  }
+  const rawResults = data.list;
   const results = rawResults
+    .slice(0, resolveCount(params.count))
     .map((entry) => normalizeResult(entry, { includeContent, maxContentChars }))
     .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const totalValue = readNumber(data, "total");
+  const total =
+    totalValue !== undefined && Number.isSafeInteger(totalValue) && totalValue >= 0
+      ? totalValue
+      : null;
+  const mergedValue = readNumber(data, "total_merge");
+  const totalMerged =
+    params.merge &&
+    mergedValue !== undefined &&
+    Number.isSafeInteger(mergedValue) &&
+    mergedValue >= 0
+      ? mergedValue
+      : null;
+  const totalStatus =
+    total === null ? "unavailable" : total >= 5000 ? "possibly_capped" : "reported";
+  const page = readNumber(data, "page") ?? resolvePage(params.page);
+  const coverage =
+    total === null
+      ? "unknown"
+      : !params.merge &&
+          totalStatus === "reported" &&
+          page === 1 &&
+          results.length === total &&
+          rawResults.length === results.length
+        ? "complete"
+        : "partial";
   return {
-    query: params.query.trim(),
+    status: "ok",
+    query: typeof params.query === "string" ? params.query.trim() : normalizeQuery(params.query),
     provider: "full-text-search",
     dateRange: range,
+    effectiveDateRange: resolveSearchWindow({ ...params, ...range }),
+    queryScope: body,
+    totalStatus,
+    totalMerged,
+    coverage,
+    platformCountsScope: "all-platform-facets",
+    guidance:
+      "Reuse complete records for calculations when fields are available. Partial results are samples, not a trend. total may be capped at 5000; platformCounts are all-platform facets, not the selected-platform total. Merged counts and pagination limits have different scopes. Indexed counts are not verified relevant-event counts. No daily aggregation is provided.",
     page: readNumber(data, "page") ?? resolvePage(params.page),
     pageSize: readNumber(data, "page_size") ?? resolveCount(params.count),
-    total: readNumber(data, "total") ?? results.length,
+    total,
     maxPage: readNumber(data, "max_page") ?? 1,
     count: results.length,
     externalContent: {

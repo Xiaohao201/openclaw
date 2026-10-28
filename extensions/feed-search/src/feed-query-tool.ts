@@ -94,7 +94,10 @@ const FeedQueryToolSchema = Type.Object(
           Object.keys(AGGREGATION_DIMENSIONS) as unknown as readonly string[],
           "Aggregation dimension.",
         ),
-        { description: "Stats mode only: dimensions to group counts by." },
+        {
+          description:
+            'Stats mode: request needed dimensions together, e.g. ["day","platform","emotion"]. Do not split one report into per-day/per-platform tool calls.',
+        },
       ),
     ),
     limit: Type.Optional(
@@ -171,21 +174,19 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
       name: "feed_query",
       label: "Feed Query",
       description:
-        "Query the sentiment-monitoring (舆情) database for your authorized monitoring topics. " +
-        "First separate the monitoring PROJECT from the CONTENT FILTER. Use mode=topics with topicName to discover projects even when no topic context was injected. " +
-        "Selection priority: explicitly named project, then this conversation's confirmed project, then the sole authorized project. " +
-        "When no project is named and no project is confirmed in this conversation, automatically select the sole authorized project without asking and pass its topicId to search/stats. " +
-        "An explicit project reference always overrides this default: if it does not match, discover/clarify and never substitute the sole project. Multiple authorized projects have no first/primary default; ask only when the intended project remains ambiguous. " +
-        "For '今天莱州一中的舆情如何', discover 莱州一中, then use its topicId for stats and representative search WITHOUT keyword. " +
-        "For '华泰联合证券的监测里有没有提到莱州一中', select 华泰联合证券 and use keyword=莱州一中. " +
-        "For follow-ups like '那昨天呢' or '只看负面的', reuse the last confirmed project and filters from THIS conversation and change only what was requested. " +
-        "A named project switch requires fresh matching and clears old content filters unless explicitly retained. If context is missing, discover authorized projects and apply the selection priority above; never reuse another conversation's project. " +
-        "State the queried project and date/filter scope in the answer. Zero articles means no matches within that scope, not no authorization or no monitoring coverage. " +
-        "Do not substitute public web search for requested internal monitoring data when project selection is unresolved. " +
-        'Use mode="search" for matching items plus an exact total count (title, summary, platform, risk level, ' +
-        'sentiment, link) and mode="stats" for aggregate counts over the full filtered set. ' +
-        `Search reads all results up to ${FULL_READ_THRESHOLD}; larger sets return a stable mixed sample. ` +
-        "Access is automatically restricted to topics owned by the current user.",
+        "Query authorized INTERNAL monitoring projects, not the public 观象台 corpus (use full_text_search for that). " +
+        "Select the data source before the project; an entity name alone is not a monitoring project. " +
+        "Project priority: explicit project, then this conversation's confirmed project, then the sole authorized project for an unnamed internal-monitoring request. " +
+        "When appropriate, automatically select the sole authorized project without asking. An explicit project reference always overrides this default. " +
+        "Reuse a confirmed project and filters in this conversation; discover with mode=topics only when needed. A project switch clears old content filters unless retained explicitly. " +
+        "No matching project: refine the name or inspect candidates if useful, then clarify unresolved ambiguity; do not search unrelated projects or substitute public results for internal monitoring statistics. " +
+        "Separate project selection from keyword: a whole-project overview omits keyword; mentions of another entity within a project use keyword. " +
+        "Use stats for full-set counts/distributions/trends, combining required groupBy dimensions in one call. Use search for evidence and its exact filtered total. " +
+        "Reuse an existing total or complete records with sufficient fields instead of re-querying. Every extra call must resolve a specific evidence or scope gap; stop when the deliverable is supported. " +
+        `Search returns all matching records up to ${FULL_READ_THRESHOLD}; above that it returns a stable sample. limit=1 is not a cheap probe of a small set. ` +
+        "Read sampled/readMode/fieldsTruncated; never infer population proportions or trends from a partial sample. " +
+        "Dates are inclusive calendar days (Asia/Shanghai); do not claim minute-precision coverage. State project and date/filter scope. " +
+        "Zero matches only describes that scope, not lack of authorization or universal absence. Failed queries are not zero results. Access remains restricted to the current user's authorized projects.",
       parameters: FeedQueryToolSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         const mode = rawParams.mode ?? "search";
@@ -251,7 +252,7 @@ export function createFeedQueryToolFactory(api: OpenClawPluginApi) {
             defaultTopic: !name && offset === 0 && topics.length === 1 ? page[0] : null,
             nextOffset: offset + page.length < matches.length ? offset + page.length : null,
             guidance:
-              "These are authorized project candidates, not article results. Use defaultTopic automatically without asking only if the user named no project and this conversation has no confirmed project. Explicit project references must match; never default after a mismatch. Clarify ambiguous candidates. No name match does not establish nonexistence or lack of permission; try a shorter name or list projects.",
+              "These are authorized project candidates, not article results. Use defaultTopic automatically without asking only if the user named no project and this conversation has no confirmed project. Explicit project references must match; never default after a mismatch. Clarify ambiguous candidates. No name match does not establish nonexistence or lack of permission. Refine the name or list candidates when useful, then clarify unresolved ambiguity; never search unrelated projects to guess.",
           });
         }
         if (topics.length === 0) {

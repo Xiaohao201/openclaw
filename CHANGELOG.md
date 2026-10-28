@@ -91,6 +91,8 @@ Docs: https://docs.openclaw.ai
 
 - Scheduled tasks/email: validate generated download links against successful uploads in the current session before delivery, matching chat reply link correction instead of forwarding model-rewritten artifact paths.
 
+- Suheng/search: align internal-project and public-corpus tool guidance around evidence reuse, preserve minute-level monitoring windows and explicit data sources, distinguish capped and incomplete counts, and bound full-text throttling retries with cancellation support.
+
 ## 2026.4.15
 
 ### Changes
