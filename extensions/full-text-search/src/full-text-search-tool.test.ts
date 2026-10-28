@@ -64,7 +64,7 @@ describe("full_text_search tool", () => {
     });
     expect((fresh as { prependContext: string }).prependContext).toContain('order="time_desc"');
     expect((fresh as { prependContext: string }).prependContext).toContain(
-      "set dateAfter and dateBefore to today's local YYYY-MM-DD date",
+      "set dateAfter and dateBefore to today's Asia/Shanghai YYYY-MM-DD date",
     );
 
     const local = hooks[0]?.({
@@ -73,7 +73,9 @@ describe("full_text_search tool", () => {
     expect((local as { prependContext: string }).prependContext).toContain(
       'query="深圳赛百味维修人员穿鞋踩踏出餐区"',
     );
-    expect((local as { prependContext: string }).prependContext).toContain("Then use web_search");
+    expect((local as { prependContext: string }).prependContext).toContain(
+      "Use web_search for specific missing",
+    );
   });
 
   it("does not auto-route ordinary or no-network prompts", () => {
@@ -113,6 +115,10 @@ describe("full_text_search tool", () => {
 
     expect(runFullTextSearch).toHaveBeenCalledWith({
       config: { plugins: { entries: { "full-text-search": { enabled: true } } } },
+      signal: undefined,
+      hitFields: undefined,
+      merge: false,
+      endExclusive: false,
       query: "OpenClaw",
       excludeQueries: ["spam"],
       dateAfter: "2026-08-01",
@@ -137,5 +143,35 @@ describe("full_text_search tool", () => {
     expect(tool.description).toContain("fresh or local social events");
     expect(tool.description).toContain("before web_search");
     expect(tool.description).toContain("web_fetch");
+  });
+
+  it("passes grouped queries, minute boundaries and cancellation to the client", async () => {
+    const tool = createFullTextSearchTool({ config: {} } as never);
+    const controller = new AbortController();
+    await tool.execute(
+      "grouped",
+      {
+        query: ["Example debt", "Alias"],
+        dateAfter: "2026-10-20 09:00",
+        dateBefore: "2026-10-27 09:00",
+        endExclusive: true,
+        hitFields: ["title"],
+        merge: true,
+      },
+      controller.signal,
+    );
+    expect(runFullTextSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: ["Alias", "Example debt"],
+        dateAfter: "2026-10-20 09:00",
+        dateBefore: "2026-10-27 09:00",
+        endExclusive: true,
+        hitFields: ["title"],
+        merge: true,
+        signal: controller.signal,
+      }),
+    );
+    await expect(tool.execute("missing-query", {})).rejects.toThrow("query is required");
+    expect(runFullTextSearch).toHaveBeenCalledTimes(1);
   });
 });

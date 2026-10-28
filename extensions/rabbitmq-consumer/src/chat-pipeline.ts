@@ -6,6 +6,7 @@ import {
   type SessionTurnCurrencyPolicy,
 } from "../api.js";
 import { ArtifactLinks } from "./artifact-links.js";
+import { buildAttachmentDataPolicy } from "./attachment-data-policy.js";
 import { materializeAttachments } from "./attachment-materializer.js";
 import { inferBuiltinSkillName, validateBuiltinSkillSelection } from "./builtin-skill-routing.js";
 import { notifyChatFailure } from "./chat-failure.js";
@@ -1300,8 +1301,7 @@ export async function processChatMessage(
       const attachmentDirective =
         chatMsg.hasAttachment && !pendingReport
           ? "[analyze-attachment] 用户本轮上传了附件，正文里已包含附件内容。" +
-            "请【仅依据附件中的数据】进行分析与撰写，不要查询或编造系统内部舆情库的数据；" +
-            "若附件数据不足以回答某一点，如实说明而非以内部数据补足。" +
+            buildAttachmentDataPolicy(intentText) +
             largeSheetDirective +
             originalDocumentDirective +
             reportOutputDirective +

@@ -1,13 +1,13 @@
+import { extractSearchTask, forbidsExternalSearch } from "./search-intent.js";
+
 export type FullTextPriorityReason = "fresh-event" | "local-social-event";
 
 export type FullTextPriorityIntent = {
   reason: FullTextPriorityReason;
   query: string;
-  dateScope: "today" | "recent";
+  dateScope: "today" | "recent" | "explicit";
 };
 
-const NO_NETWORK_PATTERN =
-  /(?:不要|不用|别|请勿|无需|不必|禁止)(?:再)?(?:联网|上网|搜索|检索|调用|使用)|只(?:根据|用).{0,16}(?:附件|材料|原文)/u;
 const FRESH_PATTERN = /(?:今天|今日|刚刚|刚才|最新|突发|刚发生|刚通报)/u;
 const TASK_PATTERN =
   /(?:搜索|查询|检索|搜一下|查一下|核验|核实|舆情|速报|快报|专报|报告|研判|分析|怎么回事|新闻|通报)/u;
@@ -54,8 +54,13 @@ export function parseFullTextPriorityIntent(
   prompt: string,
   _now: Date = new Date(),
 ): FullTextPriorityIntent | null {
-  const normalized = stripInternalContext(prompt);
-  if (!normalized || NO_NETWORK_PATTERN.test(normalized)) {
+  const normalized = stripInternalContext(extractSearchTask(prompt));
+  if (
+    !normalized ||
+    forbidsExternalSearch(normalized) ||
+    /(?:我的|内部)(?:监测|舆情)|(?:监测项目|监测方案)/u.test(normalized) ||
+    /(?:不要|不用|别|请勿)\s*(?:使用|调用|用)?观象台/u.test(normalized)
+  ) {
     return null;
   }
 
@@ -73,7 +78,14 @@ export function parseFullTextPriorityIntent(
   }
   return {
     reason: isFreshEvent ? "fresh-event" : "local-social-event",
-    dateScope: isFreshEvent ? "today" : "recent",
+    dateScope:
+      /\d{4}[-年/]\d{1,2}[-月/]|\d{1,2}月\d{1,2}|昨天|昨日|前天|上周|本周|近\d+天|过去\d+天/u.test(
+        normalized,
+      )
+        ? "explicit"
+        : /今天|今日/u.test(normalized)
+          ? "today"
+          : "recent",
     query,
   };
 }
