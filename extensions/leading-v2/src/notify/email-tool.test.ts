@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../api.js";
 import type { SmtpConfig } from "./email-client.js";
+import * as emailLinks from "./email-links.js";
 import { createEmailSendToolFactory, type EmailSender } from "./email-tool.js";
 
 const smtp: SmtpConfig = {
@@ -31,80 +32,73 @@ function parse(result: unknown): Record<string, unknown> {
 }
 
 describe("send_email", () => {
-  it("withholds unsupported URLs without borrowing another session's evidence", async () => {
-    const url = "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/10/27/123_abcd.xlsx";
-    const getSessionMessages = vi.fn(async ({ sessionKey }: { sessionKey: string }) => ({
-      messages:
-        sessionKey === "first"
-          ? [{ role: "toolResult", toolName: "file_share", details: { ok: true, url } }]
-          : [{ role: "assistant", content: url }],
-    }));
-    const api = createApi();
-    api.runtime = { subagent: { getSessionMessages } } as unknown as OpenClawPluginApi["runtime"];
-    const sender = vi.fn<EmailSender>();
-    const factory = createEmailSendToolFactory(api, smtp, sender);
-    const params = { to: "user@example.com", subject: "report", content: url, confirmed: true };
-    await factory({ agentId: "rabbitmq-1749", sessionKey: "first" })!.execute("one", params);
-    await factory({ agentId: "rabbitmq-1749", sessionKey: "second" })!.execute("two", params);
-    await factory({ agentId: "rabbitmq-1749" })!.execute("three", params);
-    expect(sender.mock.calls.map((call) => call[1].text)).toEqual([
-      url,
-      "（下载链接未核验）",
-      "（下载链接未核验）",
-    ]);
-  });
+  it.each([undefined, "agent:rabbitmq-1749:test:sched"])(
+    "normalizes download links without a session runtime (%s)",
+    async (sessionKey) => {
+      const api = createApi();
+      const getSessionMessages = vi.fn(() => {
+        throw Object.assign(new Error("unavailable"), {
+          code: "OPENCLAW_SUBAGENT_RUNTIME_REQUEST_SCOPE",
+        });
+      });
+      api.runtime = { subagent: { getSessionMessages } } as unknown as OpenClawPluginApi["runtime"];
+      const sender = vi.fn<EmailSender>().mockResolvedValue(undefined);
+      const tool = createEmailSendToolFactory(
+        api,
+        smtp,
+        sender,
+      )({ agentId: "rabbitmq-1749", sessionKey })!;
+      const url =
+        "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026-10-29/1793236261_27d0a59f.pdf";
+      const content = `[report](${url})\nhttps://example.com/news`;
+      const result = parse(
+        await tool.execute("mail-links", {
+          to: "user@example.com",
+          subject: "report",
+          content,
+          confirmed: true,
+        }),
+      );
+      expect(result.success).toBe(true);
+      expect(sender).toHaveBeenCalledExactlyOnceWith(smtp, {
+        to: "user@example.com",
+        subject: "report",
+        text: content.replace("2026-10-29", "2026/10/29"),
+      });
+      expect(getSessionMessages).not.toHaveBeenCalled();
+    },
+  );
 
-  it("repairs artifact URLs from the current session before sending", async () => {
-    const url = "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/10/27/123_abcd.xlsx";
-    const wrong = url.replace("2026/10/27", "2026-10-27");
-    const getSessionMessages = vi.fn(async () => ({
-      messages: [{ role: "toolResult", toolName: "file_share", details: { ok: true, url } }],
-    }));
+  it("separates content processing failures from SMTP failures", async () => {
     const api = createApi();
-    api.runtime = { subagent: { getSessionMessages } } as unknown as OpenClawPluginApi["runtime"];
     const sender = vi.fn<EmailSender>();
-    const tool = createEmailSendToolFactory(
-      api,
-      smtp,
-      sender,
-    )({
-      agentId: "rabbitmq-1749",
-      sessionKey: "agent:rabbitmq-1749:test:sched",
-    })!;
-    await tool.execute("mail", {
-      to: "user@example.com",
-      subject: "report",
-      content: `[${wrong}](${wrong})`,
-      confirmed: true,
-    });
-    expect(getSessionMessages).toHaveBeenCalledWith({
-      sessionKey: "agent:rabbitmq-1749:test:sched",
-    });
-    expect(sender).toHaveBeenCalledWith(smtp, {
-      to: "user@example.com",
-      subject: "report",
-      text: `[${url}](${url})`,
-    });
-  });
-
-  it("does not send unchecked artifact URLs when the transcript cannot be read", async () => {
-    const api = createApi();
-    api.runtime = {
-      subagent: { getSessionMessages: vi.fn().mockRejectedValue(new Error("unavailable")) },
-    } as unknown as OpenClawPluginApi["runtime"];
-    const sender = vi.fn<EmailSender>();
-    const tool = createEmailSendToolFactory(
-      api,
-      smtp,
-      sender,
-    )({ agentId: "rabbitmq-1749", sessionKey: "current" })!;
-    await tool.execute("mail", {
-      to: "user@example.com",
-      subject: "report",
-      content: "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026-10-27/123_abcd.xlsx",
-      confirmed: true,
-    });
-    expect(sender).not.toHaveBeenCalled();
+    const normalize = vi
+      .spyOn(emailLinks, "normalizeEmailDownloadLinks")
+      .mockImplementationOnce(() => {
+        throw new Error("private body");
+      });
+    try {
+      const tool = createEmailSendToolFactory(api, smtp, sender)({ agentId: "rabbitmq-1749" })!;
+      const result = parse(
+        await tool.execute("content-test", {
+          to: "user@example.com",
+          subject: "test",
+          content: "body",
+          confirmed: true,
+        }),
+      );
+      expect(result).toMatchObject({
+        success: false,
+        code: "email_content_processing_failed",
+        stage: "content_processing",
+      });
+      expect(sender).not.toHaveBeenCalled();
+      expect(api.logger.error).toHaveBeenCalledExactlyOnceWith(
+        "[SEND_EMAIL] stage=content_processing callId=content-test",
+      );
+    } finally {
+      normalize.mockRestore();
+    }
   });
 
   it("is available only to rabbitmq chat agents when SMTP is configured", () => {
@@ -229,8 +223,30 @@ describe("send_email", () => {
       success: true,
       to: "user@qq.com",
       subject: "舆情报告",
-      message: "邮件已发送。",
+      message: "SMTP服务器已接受邮件，请以收件箱实际到达为准。",
     });
+  });
+
+  it("reports uncertain SMTP timeouts without retrying", async () => {
+    const sender = vi
+      .fn<EmailSender>()
+      .mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }));
+    const tool = createEmailSendToolFactory(
+      createApi(),
+      smtp,
+      sender,
+    )({ agentId: "rabbitmq-1749" })!;
+    const result = parse(
+      await tool.execute("timeout", {
+        to: "user@example.com",
+        subject: "test",
+        content: "body",
+        confirmed: true,
+      }),
+    );
+    expect(result).toMatchObject({ code: "smtp_send_failed", stage: "smtp" });
+    expect(result.error).toContain("投递结果暂无法确认");
+    expect(sender).toHaveBeenCalledTimes(1);
   });
 
   it("limits repeated sends per user", async () => {
@@ -275,9 +291,11 @@ describe("send_email", () => {
       }),
     );
 
-    expect(result).toEqual({ success: false, error: "邮件发送失败，请稍后重试。" });
+    expect(result).toMatchObject({ success: false, code: "smtp_send_failed", stage: "smtp" });
     const logged = vi.mocked(api.logger.error).mock.calls.flat().join(" ");
     expect(logged).not.toContain("user@qq.com");
     expect(logged).not.toContain("secret detail");
+    expect(logged).toContain("stage=smtp");
+    expect(logged).toContain("mail-3");
   });
 });
