@@ -266,6 +266,13 @@ export default definePluginEntry({
         // inside one conversation stay strictly ordered.
         const messageConsumer = createMessageConsumer({
           logger: ctx.logger,
+          isCancellationRequested: (chatMsg) => historyRef!.isCancellationRequested(chatMsg),
+          onCancellationObserved: (chatMsg) =>
+            historyRef!.updateMetadata(
+              chatMsg.historyId,
+              { cancelObservedAt: new Date().toISOString() },
+              { userId: chatMsg.userId, logger: ctx.logger },
+            ),
           runWarmup: (userId) => warmupAgent(userId, api.runtime, ctx.logger),
           runChat: (chatMsg, abortSignal) =>
             processChatMessage(

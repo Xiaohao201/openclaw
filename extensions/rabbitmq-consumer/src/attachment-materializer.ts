@@ -44,11 +44,13 @@ const sanitizeFilename = (name: string): string =>
   path.basename(name).replace(/[\\/]/g, "_").replace(/\.\.+/g, ".").trim() || "file";
 
 /** Download an OSS public link into a buffer, bounded by size and time. */
-async function downloadToBuffer(url: string): Promise<Buffer> {
+async function downloadToBuffer(url: string, signal?: AbortSignal): Promise<Buffer> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, {
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} ${res.statusText}`);
     }
@@ -73,6 +75,7 @@ export async function materializeAttachments(
   agentId: string,
   config: OpenClawConfig,
   logger: PluginLogger,
+  signal?: AbortSignal,
 ): Promise<MaterializedAttachment[]> {
   if (!attachments.length) {
     return [];
@@ -90,6 +93,9 @@ export async function materializeAttachments(
 
   const results: MaterializedAttachment[] = [];
   for (const att of attachments) {
+    if (signal?.aborted) {
+      break;
+    }
     // Spreadsheets, original documents, and images all land in the workspace;
     // anything else / non-OSS is skipped.
     if (
@@ -102,7 +108,10 @@ export async function materializeAttachments(
     const destName = `${att.fileId}-${sanitizeFilename(att.filename)}`;
     const dest = path.join(uploadsDir, destName);
     try {
-      const buf = await downloadToBuffer(att.ref);
+      const buf = await downloadToBuffer(att.ref, signal);
+      if (signal?.aborted) {
+        break;
+      }
       await writeFile(dest, buf);
       results.push({
         kind: att.kind,

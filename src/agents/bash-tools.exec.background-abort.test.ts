@@ -132,6 +132,27 @@ test("background exec is not killed when tool signal aborts", async () => {
   });
 });
 
+test("explicit user cancellation kills the background process owned by that run", async () => {
+  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+  const controller = new AbortController();
+  const result = await tool.execute(
+    "user-stop",
+    // Longer than the exit assertion deadline: natural completion must not
+    // accidentally pass this cancellation regression.
+    { command: 'node -e "setTimeout(() => {}, 30000)"', background: true },
+    controller.signal,
+  );
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  try {
+    controller.abort("user_abort");
+    const finished = await waitForFinishedSession(sessionId);
+    expect(finished).toBeTruthy();
+    expect(getSession(sessionId)).toBeUndefined();
+  } finally {
+    cleanupRunningSession(sessionId);
+  }
+});
+
 test("pty background exec is not killed when tool signal aborts", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
   await expectBackgroundSessionSurvivesAbort({

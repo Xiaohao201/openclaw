@@ -1,0 +1,1490 @@
+diff --git a/extensions/rabbitmq-consumer/index.ts b/extensions/rabbitmq-consumer/index.ts
+index ae32d1df42..8963217308 100644
+--- a/extensions/rabbitmq-consumer/index.ts
++++ b/extensions/rabbitmq-consumer/index.ts
+@@ -266,6 +266,13 @@ export default definePluginEntry({
+         // inside one conversation stay strictly ordered.
+         const messageConsumer = createMessageConsumer({
+           logger: ctx.logger,
++          isCancellationRequested: (chatMsg) => historyRef!.isCancellationRequested(chatMsg),
++          onCancellationObserved: (chatMsg) =>
++            historyRef!.updateMetadata(
++              chatMsg.historyId,
++              { cancelObservedAt: new Date().toISOString() },
++              { userId: chatMsg.userId, logger: ctx.logger },
++            ),
+           runWarmup: (userId) => warmupAgent(userId, api.runtime, ctx.logger),
+           runChat: (chatMsg, abortSignal) =>
+             processChatMessage(
+diff --git a/extensions/rabbitmq-consumer/src/attachment-materializer.ts b/extensions/rabbitmq-consumer/src/attachment-materializer.ts
+index 7b4456cf19..0b595f4850 100644
+--- a/extensions/rabbitmq-consumer/src/attachment-materializer.ts
++++ b/extensions/rabbitmq-consumer/src/attachment-materializer.ts
+@@ -44,11 +44,13 @@ const sanitizeFilename = (name: string): string =>
+   path.basename(name).replace(/[\\/]/g, "_").replace(/\.\.+/g, ".").trim() || "file";
+ 
+ /** Download an OSS public link into a buffer, bounded by size and time. */
+-async function downloadToBuffer(url: string): Promise<Buffer> {
++async function downloadToBuffer(url: string, signal?: AbortSignal): Promise<Buffer> {
+   const controller = new AbortController();
+   const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+   try {
+-    const res = await fetch(url, { signal: controller.signal });
++    const res = await fetch(url, {
++      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
++    });
+     if (!res.ok) {
+       throw new Error(`HTTP ${res.status} ${res.statusText}`);
+     }
+@@ -73,6 +75,7 @@ export async function materializeAttachments(
+   agentId: string,
+   config: OpenClawConfig,
+   logger: PluginLogger,
++  signal?: AbortSignal,
+ ): Promise<MaterializedAttachment[]> {
+   if (!attachments.length) {
+     return [];
+@@ -90,6 +93,9 @@ export async function materializeAttachments(
+ 
+   const results: MaterializedAttachment[] = [];
+   for (const att of attachments) {
++    if (signal?.aborted) {
++      break;
++    }
+     // Spreadsheets, original documents, and images all land in the workspace;
+     // anything else / non-OSS is skipped.
+     if (
+@@ -102,7 +108,10 @@ export async function materializeAttachments(
+     const destName = `${att.fileId}-${sanitizeFilename(att.filename)}`;
+     const dest = path.join(uploadsDir, destName);
+     try {
+-      const buf = await downloadToBuffer(att.ref);
++      const buf = await downloadToBuffer(att.ref, signal);
++      if (signal?.aborted) {
++        break;
++      }
+       await writeFile(dest, buf);
+       results.push({
+         kind: att.kind,
+diff --git a/extensions/rabbitmq-consumer/src/chat-pipeline.test.ts b/extensions/rabbitmq-consumer/src/chat-pipeline.test.ts
+index 1176849f6e..f1a07ba8f2 100644
+--- a/extensions/rabbitmq-consumer/src/chat-pipeline.test.ts
++++ b/extensions/rabbitmq-consumer/src/chat-pipeline.test.ts
+@@ -501,6 +501,110 @@ describe("processChatMessage", () => {
+     );
+   });
+ 
++  it("confirms a settled cancellation even when saving partial output fails", async () => {
++    const controller = new AbortController();
++    const { historyManager, updateMetadata, updateResponse } = createHistoryManagerMock();
++    updateResponse.mockRejectedValue(new Error("response storage unavailable"));
++    const runtime = createRuntimeMock({
++      workspaceDir,
++      onRun: () => {},
++      onWait: () => controller.abort(),
++    });
++    await processChatMessage(
++      createChatMessage(),
++      historyManager,
++      mercureConfig,
++      runtime,
++      logger,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      { abortSignal: controller.signal, abortRun: vi.fn(() => true) },
++    );
++    expect(updateResponse).toHaveBeenCalled();
++    expect(updateMetadata).toHaveBeenCalledWith(
++      1,
++      expect.objectContaining({ cancellationStatus: "cancelled" }),
++      expect.anything(),
++    );
++  });
++
++  it("prevents agent startup when cancellation is already persisted", async () => {
++    const { historyManager, getRecord } = createHistoryManagerMock();
++    const record = await getRecord(1);
++    if (!record) {
++      throw new Error("Missing audit history fixture");
++    }
++    getRecord.mockResolvedValue({ ...record, metadata: JSON.stringify({ cancelRequested: true }) });
++    const onRun = vi.fn();
++    const runtime = createRuntimeMock({ workspaceDir, onRun });
++    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
++    expect(onRun).not.toHaveBeenCalled();
++  });
++
++  it("cancels preparation without starting the model after a template lookup abort", async () => {
++    const controller = new AbortController();
++    const { historyManager, updateMetadata } = createHistoryManagerMock();
++    let release!: () => void;
++    const blocked = new Promise<void>((resolve) => {
++      release = resolve;
++    });
++    const resolveTemplate = vi.fn(
++      async (_id: number, _user: string, _logger: PluginLogger, signal?: AbortSignal) => {
++        await Promise.race([
++          blocked,
++          new Promise<void>((resolve) =>
++            signal?.addEventListener("abort", () => resolve(), { once: true }),
++          ),
++        ]);
++        return null;
++      },
++    );
++    const templateLookup = { resolve: resolveTemplate } as unknown as ReportTemplateLookup;
++    const onRun = vi.fn();
++    const abortRun = vi.fn(() => true);
++    const runtime = createRuntimeMock({ workspaceDir, onRun });
++    const running = processChatMessage(
++      { ...createChatMessage(), templateId: 1 },
++      historyManager,
++      mercureConfig,
++      runtime,
++      logger,
++      undefined,
++      undefined,
++      undefined,
++      undefined,
++      templateLookup,
++      undefined,
++      undefined,
++      undefined,
++      { abortSignal: controller.signal, abortRun },
++    );
++    try {
++      await vi.waitFor(() => expect(resolveTemplate).toHaveBeenCalledTimes(1));
++      controller.abort();
++      await running;
++      expect(abortRun).not.toHaveBeenCalled();
++      expect(
++        updateMetadata.mock.calls.some(([, patch]) => patch.cancellationStatus === "cancelled"),
++      ).toBe(true);
++    } finally {
++      release();
++      await running;
++    }
++    expect(onRun).not.toHaveBeenCalled();
++    expect(updateMetadata).toHaveBeenCalledWith(
++      1,
++      expect.objectContaining({ cancellationStatus: "cancelled" }),
++      expect.anything(),
++    );
++  });
++
+   it("persists cancellation without starting an already cancelled turn", async () => {
+     const controller = new AbortController();
+     controller.abort();
+diff --git a/extensions/rabbitmq-consumer/src/chat-pipeline.ts b/extensions/rabbitmq-consumer/src/chat-pipeline.ts
+index 3cc408b428..69c3f8e8d6 100644
+--- a/extensions/rabbitmq-consumer/src/chat-pipeline.ts
++++ b/extensions/rabbitmq-consumer/src/chat-pipeline.ts
+@@ -191,6 +191,7 @@ async function matchRequirementTopic(
+   userId: string,
+   runtime?: PluginRuntime,
+   token?: string | number,
++  cancellation?: Pick<ChatTurnOptions, "abortSignal" | "abortRun">,
+ ): Promise<TopicInfo | null> {
+   if (runtime && token !== undefined) {
+     const llmMatch = await pickTopicByLlm({
+@@ -200,6 +201,7 @@ async function matchRequirementTopic(
+       userId,
+       token,
+       logger,
++      ...cancellation,
+     });
+     if (llmMatch) {
+       logger.info(
+@@ -231,12 +233,16 @@ async function resolveReportTopic(args: {
+   runtime?: PluginRuntime;
+   /** Uniqueness token for the picker's isolated session (e.g. historyId). */
+   token?: string | number;
++  cancellation?: Pick<ChatTurnOptions, "abortSignal" | "abortRun">;
+ }): Promise<{ topicId: number; useSlaveTopic: boolean; masterId: number }> {
+   const { userId, topicResolver, logger, requirement, runtime, token } = args;
+   if (!topicResolver) {
+     return { topicId: 0, useSlaveTopic: false, masterId: 0 };
+   }
+-  const resolution = await topicResolver.getTopicIdsByUser(userId);
++  const resolution = await topicResolver.getTopicIdsByUser(
++    userId,
++    ...(args.cancellation?.abortSignal ? [args.cancellation.abortSignal] : []),
++  );
+ 
+   // Default: the user's primary (most recently granted) topic.
+   let chosen = {
+@@ -254,6 +260,7 @@ async function resolveReportTopic(args: {
+       userId,
+       runtime,
+       token,
++      args.cancellation,
+     );
+     if (match && match.topicId !== chosen.topicId) {
+       logger.info(
+@@ -288,6 +295,9 @@ async function resolveReportTopic(args: {
+  * Always emits a Mercure `done` so the frontend unlocks.
+  */
+ interface EnqueueReportTaskArgs {
++  onCreated?: (taskId: number) => Promise<void>;
++  onCreating?: () => Promise<void>;
++  abortSignal?: AbortSignal;
+   period: ReportPeriod;
+   requirement: string;
+   dateScope: { start: string; end: string };
+@@ -332,6 +342,9 @@ async function enqueueReportTask(args: EnqueueReportTaskArgs): Promise<number> {
+   } = args;
+ 
+   const uid = parseInt(chatMsg.userId, 10) || 0;
++  args.abortSignal?.throwIfAborted();
++  // Register before making the task visible to the independent report poller.
++  await args.onCreating?.();
+   const taskId = await downloadManager.createReportTask({
+     uid,
+     topicId,
+@@ -350,6 +363,7 @@ async function enqueueReportTask(args: EnqueueReportTaskArgs): Promise<number> {
+     // inherits its workspace, DB skills, and schema knowledge.
+     agentId: `rabbitmq-${chatMsg.userId}`,
+   });
++  await args.onCreated?.(taskId);
+   logger.info(`[CHAT_PIPELINE] Created report task #${taskId} for user ${uid}`);
+ 
+   // Let the frontend open a report card for this taskId right away; progress
+@@ -548,6 +562,12 @@ export async function processChatMessage(
+       `[CHAT_PIPELINE] Cancellation confirmed: historyId=${chatMsg.historyId}, runId=${runId ?? "not-started"}`,
+     );
+   };
++  const finishCancelledBeforeRun = async () => {
++    await confirmCancellation();
++    await saveResponse("输出已暂停。");
++    await mercure.pushDone(mercureTopic, chatMsg.historyId);
++    return "输出已暂停。";
++  };
+   let failureNotification: Promise<void> | undefined;
+   const notifyFailure = (message: string) =>
+     (failureNotification ??= notifyChatFailure({
+@@ -691,6 +711,28 @@ export async function processChatMessage(
+     }
+     stage = "prepare";
+ 
++    let storedMetadata: unknown = record.metadata;
++    if (typeof storedMetadata === "string") {
++      try {
++        storedMetadata = JSON.parse(storedMetadata);
++      } catch {
++        storedMetadata = null;
++      }
++    }
++    if (
++      storedMetadata &&
++      typeof storedMetadata === "object" &&
++      (storedMetadata as Record<string, unknown>).cancelRequested === true
++    ) {
++      options = { ...options, abortSignal: AbortSignal.abort() };
++    }
++    if (options?.abortSignal?.aborted) {
++      await confirmCancellation();
++      await saveResponse("输出已暂停。");
++      await mercure.pushDone(mercureTopic, chatMsg.historyId);
++      return "输出已暂停。";
++    }
++
+     // Step 2: Idempotency check
+     if (record.response) {
+       logger.info(`[CHAT_PIPELINE] Record ${chatMsg.historyId} already has response, skipping`);
+@@ -777,7 +819,15 @@ export async function processChatMessage(
+       dateScope: { start: string; end: string };
+     } | null = null;
+     if (chatMsg.templateId && templateLookup) {
+-      const tpl = await templateLookup.resolve(chatMsg.templateId, userId, logger);
++      const tpl = await templateLookup.resolve(
++        chatMsg.templateId,
++        userId,
++        logger,
++        ...(options?.abortSignal ? [options.abortSignal] : []),
++      );
++      if (options?.abortSignal?.aborted) {
++        return await finishCancelledBeforeRun();
++      }
+       if (tpl && chatMsg.hasAttachment) {
+         // Attachment overrides the internal-DB report: the user uploaded the
+         // data to analyze, so we keep the template as a FORMAT guide (injected
+@@ -800,7 +850,11 @@ export async function processChatMessage(
+           requirement: intentText,
+           runtime,
+           token: chatMsg.historyId,
++          cancellation: options,
+         });
++        if (options?.abortSignal?.aborted) {
++          return await finishCancelledBeforeRun();
++        }
+         selectedTemplate = tpl;
+         pendingReport = { tpl, topic, dateScope: computeDateScope(tpl.period) };
+       } else if (tpl) {
+@@ -825,7 +879,15 @@ export async function processChatMessage(
+     // are simply dropped. Failure degrades to an ordinary turn (no skills).
+     let selectedSkills: ResolvedSkill[] = [];
+     if (!chatMsg.builtinSkillName && chatMsg.skillIds?.length && skillLookup) {
+-      selectedSkills = await skillLookup.resolveMany(chatMsg.skillIds, userId, logger);
++      selectedSkills = await skillLookup.resolveMany(
++        chatMsg.skillIds,
++        userId,
++        logger,
++        ...(options?.abortSignal ? [options.abortSignal] : []),
++      );
++      if (options?.abortSignal?.aborted) {
++        return await finishCancelledBeforeRun();
++      }
+       options?.onSkillsResolved?.(selectedSkills);
+       if (selectedSkills.length) {
+         logger.info(
+@@ -850,7 +912,10 @@ export async function processChatMessage(
+     auditIntent("monitoring-topic", needsTopicContext, topicReason);
+     if (topicResolver && needsTopicContext) {
+       try {
+-        const resolution = await topicResolver.getTopicIdsByUser(userId);
++        const resolution = await topicResolver.getTopicIdsByUser(
++          userId,
++          ...(options?.abortSignal ? [options.abortSignal] : []),
++        );
+         if (resolution.topicId && resolution.topicId > 0) {
+           // JSON.stringify keeps the quoting deterministic even when the
+           // title itself contains quotes or brackets (prompt-cache friendly).
+@@ -885,9 +950,9 @@ export async function processChatMessage(
+ 
+     if (options?.abortSignal?.aborted) {
+       const stopped = "输出已暂停。";
++      await confirmCancellation();
+       stage = "updateResponse";
+       await saveResponse(stopped);
+-      await confirmCancellation();
+       stage = "notifyFrontend";
+       await mercure.pushDone(mercureTopic, chatMsg.historyId);
+       return stopped;
+@@ -907,6 +972,7 @@ export async function processChatMessage(
+           agentId,
+           attachmentConfig,
+           logger,
++          options?.abortSignal,
+         );
+       } else {
+         logger.warn("[ATTACHMENT] No config available; cannot resolve workspace, skipping");
+@@ -1369,9 +1435,9 @@ export async function processChatMessage(
+       // Cancellation can arrive during attachment/history preparation.
+       if (options?.abortSignal?.aborted) {
+         const stopped = "输出已暂停。";
++        await confirmCancellation();
+         await saveResponse(stopped);
+         await persistTimeline("completed");
+-        await confirmCancellation();
+         await streamPusherCtx.streamPusher.finish();
+         return stopped;
+       }
+@@ -1425,11 +1491,14 @@ export async function processChatMessage(
+           const partialText = streamPusherCtx.streamPusher.getFullText().trim();
+           const stopped =
+             artifactLinks.sanitize(partialText || "输出已暂停。") + artifactLinks.deliveryLinks();
++          // Settlement is authoritative. Persist it before optional output/timeline
++          // cleanup: a failed write must not leave Stop polling forever after this
++          // consumer unregisters the turn and can no longer handle a retry.
++          await confirmCancellation(runResult.runId);
+           stage = "updateResponse";
+           await saveResponse(stopped);
+           stage = "finalize";
+           await persistTimeline("completed");
+-          await confirmCancellation(runResult.runId);
+           await persistUsage();
+           stage = "notifyFrontend";
+           await streamPusherCtx.streamPusher.finish();
+@@ -1575,9 +1644,22 @@ export async function processChatMessage(
+       // report. This opens the frontend report card (`report_created`) before the
+       // `done` below, and the report itself streams in later as a `report` event.
+       // Enqueue is a fast INSERT + publish; it never blocks on the data COUNT.
+-      if (pendingReport && downloadManager) {
++      if (pendingReport && downloadManager && !options?.abortSignal?.aborted) {
+         try {
+           await enqueueReportTask({
++            abortSignal: options?.abortSignal,
++            onCreating: () =>
++              historyManager.updateMetadata(
++                chatMsg.historyId,
++                { cancelChildReportState: "running" },
++                historyDbContext,
++              ),
++            onCreated: (taskId) =>
++              historyManager.updateMetadata(
++                chatMsg.historyId,
++                { cancelChildReportTaskId: taskId },
++                historyDbContext,
++              ),
+             period: pendingReport.tpl.period,
+             // The user's typed text becomes the requirement; it may just be the
+             // template name when they only clicked the template without editing.
+@@ -1635,6 +1717,9 @@ export async function processChatMessage(
+   } catch (error) {
+     // A socket reset can originate in MySQL, an agent RPC or another dependency;
+     // its code alone says nothing about the browser's connection.
++    if (stage === "prepare" && options?.abortSignal?.aborted) {
++      return await finishCancelledBeforeRun();
++    }
+     logger.error(`[CHAT_PIPELINE] Turn failed: ${failureContext(error)}`);
+     const failedStage = stage;
+     const message =
+diff --git a/extensions/rabbitmq-consumer/src/history-manager.ts b/extensions/rabbitmq-consumer/src/history-manager.ts
+index 029e83c653..950061bf9b 100644
+--- a/extensions/rabbitmq-consumer/src/history-manager.ts
++++ b/extensions/rabbitmq-consumer/src/history-manager.ts
+@@ -127,6 +127,16 @@ export class HistoryManager {
+     );
+   }
+ 
++  /** Read durable intent from the writer, scoped to the exact task owner. */
++  async isCancellationRequested(chatMsg: ChatMessage): Promise<boolean> {
++    const [rows] = await this.getWriterPool().execute<mysql.RowDataPacket[]>({
++      sql: `SELECT JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID(metadata) THEN metadata ELSE JSON_OBJECT() END, '$.cancelRequested')) AS requested FROM ${this.tableSql} WHERE id = ? AND user_id = ? AND session_id = ? LIMIT 1`,
++      values: [chatMsg.historyId, chatMsg.userId, chatMsg.sessionId],
++      timeout: 3_000,
++    });
++    return rows[0]?.requested === "true";
++  }
++
+   /** Fetch a history record by ID. Returns null if not found. */
+   async getRecord(historyId: number, context?: HistoryDbContext): Promise<HistoryRecord | null> {
+     const [rows] = await retryHistoryDbOperation(
+diff --git a/extensions/rabbitmq-consumer/src/message-consumer.ts b/extensions/rabbitmq-consumer/src/message-consumer.ts
+index f43609b5e8..4c6f559453 100644
+--- a/extensions/rabbitmq-consumer/src/message-consumer.ts
++++ b/extensions/rabbitmq-consumer/src/message-consumer.ts
+@@ -10,11 +10,16 @@ export interface MessageConsumerDeps {
+   runWarmup: (userId: string) => Promise<unknown>;
+   /** Full chat pipeline for one parsed message (chat-pipeline.processChatMessage). */
+   runChat: (chatMsg: ChatMessage, abortSignal: AbortSignal) => Promise<unknown>;
++  /** Authoritative writer-DB check; independent of control-queue delivery. */
++  isCancellationRequested?: (chatMsg: ChatMessage) => Promise<boolean>;
++  cancellationPollMs?: number;
++  onCancellationObserved?: (chatMsg: ChatMessage) => Promise<void>;
+ }
+ 
+ type RegisteredTurn = {
+   chatMsg: ChatMessage;
+   controller: AbortController;
++  completion: Promise<void>;
+ };
+ 
+ function matchesTurn(cancel: ChatCancelMessage, chatMsg: ChatMessage): boolean {
+@@ -102,6 +107,15 @@ export function createMessageConsumer(
+       return Promise.resolve();
+     }
+ 
++    const existing = registeredTurns.get(chatMsg.historyId);
++    if (existing) {
++      if (!matchesTurn({ ...chatMsg }, existing.chatMsg)) {
++        return Promise.reject(new Error("Conflicting identity for active history id"));
++      }
++      // A redelivery must share both execution and cancellation with its original.
++      return existing.completion;
++    }
++
+     deps.logger.info(
+       `[RABBITMQ_CONSUMER] Received message: historyId=${chatMsg.historyId}, ` +
+         `userId=${chatMsg.userId}`,
+@@ -111,7 +125,40 @@ export function createMessageConsumer(
+       ? `user:${chatMsg.userId}:session:${chatMsg.sessionId}`
+       : `user:${chatMsg.userId}:history:${chatMsg.historyId}`;
+     const controller = new AbortController();
+-    registeredTurns.set(chatMsg.historyId, { chatMsg, controller });
++    controller.signal.addEventListener(
++      "abort",
++      () => {
++        void deps.onCancellationObserved?.(chatMsg).catch(() => {
++          deps.logger.warn(
++            `[RABBITMQ_CONSUMER] Cannot persist cancellation receipt: historyId=${chatMsg.historyId}`,
++          );
++        });
++      },
++      { once: true },
++    );
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    let settled = false;
++    const poll = async (): Promise<void> => {
++      if (settled || controller.signal.aborted || !deps.isCancellationRequested) {
++        return;
++      }
++      try {
++        if (await deps.isCancellationRequested(chatMsg)) {
++          controller.abort();
++        }
++      } catch {
++        deps.logger.warn(
++          `[RABBITMQ_CONSUMER] Cancellation check unavailable: historyId=${chatMsg.historyId}; retrying`,
++        );
++      } finally {
++        if (!settled && !controller.signal.aborted) {
++          timer = setTimeout(() => {
++            void poll();
++          }, deps.cancellationPollMs ?? 2_000);
++          timer.unref?.();
++        }
++      }
++    };
+     const pendingCancel = pendingCancels.get(chatMsg.historyId);
+     if (pendingCancel) {
+       pendingCancels.delete(chatMsg.historyId);
+@@ -124,14 +171,40 @@ export function createMessageConsumer(
+         );
+       }
+     }
+-    return enqueue(lane, async () => {
++    const completion = enqueue(lane, async () => {
+       try {
++        // Fail closed before startup. A DB outage must not launch a turn whose
++        // cancellation intent cannot be checked. Runtime checks keep retrying.
++        while (!controller.signal.aborted && deps.isCancellationRequested) {
++          try {
++            if (await deps.isCancellationRequested(chatMsg)) {
++              controller.abort();
++            }
++            break;
++          } catch {
++            deps.logger.warn(
++              `[RABBITMQ_CONSUMER] Waiting for cancellation state before startup: historyId=${chatMsg.historyId}`,
++            );
++            await new Promise<void>((resolve) =>
++              setTimeout(resolve, deps.cancellationPollMs ?? 2_000),
++            );
++          }
++        }
+         await deps.runChat(chatMsg, controller.signal);
+       } finally {
++        settled = true;
++        if (timer) {
++          clearTimeout(timer);
++        }
+         if (registeredTurns.get(chatMsg.historyId)?.controller === controller) {
+           registeredTurns.delete(chatMsg.historyId);
+         }
+       }
+     });
++    registeredTurns.set(chatMsg.historyId, { chatMsg, controller, completion });
++    if (deps.isCancellationRequested) {
++      void poll();
++    }
++    return completion;
+   };
+ }
+diff --git a/extensions/rabbitmq-consumer/src/report-template-lookup.ts b/extensions/rabbitmq-consumer/src/report-template-lookup.ts
+index 96dfcc6ba2..a5a8bf40fd 100644
+--- a/extensions/rabbitmq-consumer/src/report-template-lookup.ts
++++ b/extensions/rabbitmq-consumer/src/report-template-lookup.ts
+@@ -1,6 +1,7 @@
+ import type mysql from "mysql2/promise";
+ import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
+ import type { PluginLogger } from "../api.js";
++import { cancellableRead } from "./cancellable-read.js";
+ import type { ReportPeriod } from "./report-period.js";
+ import type { HistoryDbConfig } from "./types.js";
+ 
+@@ -63,10 +64,12 @@ export class ReportTemplateLookup {
+     templateId: number,
+     userId: string,
+     logger: PluginLogger,
++    signal?: AbortSignal,
+   ): Promise<ResolvedTemplate | null> {
+     try {
+       const pool = await this.getPool();
+-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
++      const [rows] = await cancellableRead(
++        pool,
+         `SELECT id, period, name, content, description
+          FROM report_template
+          WHERE id = ?
+@@ -74,6 +77,7 @@ export class ReportTemplateLookup {
+            AND (user_id = ? OR user_id IS NULL)
+          LIMIT 1`,
+         [templateId, userId],
++        signal,
+       );
+ 
+       const row = rows[0];
+diff --git a/extensions/rabbitmq-consumer/src/skill-lookup.ts b/extensions/rabbitmq-consumer/src/skill-lookup.ts
+index be796b2791..f87232c813 100644
+--- a/extensions/rabbitmq-consumer/src/skill-lookup.ts
++++ b/extensions/rabbitmq-consumer/src/skill-lookup.ts
+@@ -1,6 +1,7 @@
+ import type mysql from "mysql2/promise";
+ import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
+ import type { PluginLogger } from "../api.js";
++import { cancellableRead } from "./cancellable-read.js";
+ import type { HistoryDbConfig } from "./types.js";
+ 
+ /** Minimal skills projection needed to inject a custom skill into the chat agent. */
+@@ -99,6 +100,7 @@ export class SkillLookup {
+     skillIds: number[],
+     userId: string,
+     logger: PluginLogger,
++    signal?: AbortSignal,
+   ): Promise<ResolvedSkill[]> {
+     // De-dupe + cap defensively; the producer already bounds this, but the
+     // lookup must never build an unbounded IN(...) list from a rogue message.
+@@ -113,13 +115,15 @@ export class SkillLookup {
+     try {
+       const pool = await this.getPool();
+       const placeholders = ids.map(() => "?").join(", ");
+-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
++      const [rows] = await cancellableRead(
++        pool,
+         `SELECT id, name, content, description
+            FROM skills
+           WHERE id IN (${placeholders})
+             AND is_enable = 1
+             AND user_id = ?`,
+         [...ids, userId],
++        signal,
+       );
+ 
+       // Index resolved rows by id, then emit in the caller's requested order.
+diff --git a/extensions/rabbitmq-consumer/src/topic-llm-picker.ts b/extensions/rabbitmq-consumer/src/topic-llm-picker.ts
+index f5b91429e6..2089c2d82d 100644
+--- a/extensions/rabbitmq-consumer/src/topic-llm-picker.ts
++++ b/extensions/rabbitmq-consumer/src/topic-llm-picker.ts
+@@ -26,6 +26,8 @@ export interface LlmTopicPickDeps {
+   logger: PluginLogger;
+   /** Wait budget for the classification run. */
+   timeoutMs?: number;
++  abortSignal?: AbortSignal;
++  abortRun?: (sessionKey: string) => boolean | Promise<boolean>;
+ }
+ 
+ const DEFAULT_TIMEOUT_MS = 30_000;
+@@ -111,7 +113,21 @@ export async function pickTopicByLlm(deps: LlmTopicPickDeps): Promise<TopicInfo
+   }
+ 
+   const sessionKey = `agent:rabbitmq-${userId}:topic-pick:${userId}:${token}`;
++  let started = false;
++  const stop = () => {
++    if (started) {
++      void Promise.resolve()
++        .then(() => deps.abortRun?.(sessionKey))
++        .catch(() => {
++          logger.warn("[TOPIC_LLM] Cancellation unavailable; waiting for classifier cleanup");
++        });
++    }
++  };
++  deps.abortSignal?.addEventListener("abort", stop, { once: true });
+   try {
++    if (deps.abortSignal?.aborted) {
++      return null;
++    }
+     const { runId } = await subagent.run({
+       sessionKey,
+       message: buildMessage(requirement, candidates),
+@@ -119,10 +135,23 @@ export async function pickTopicByLlm(deps: LlmTopicPickDeps): Promise<TopicInfo
+       deliver: false,
+       idempotencyKey: `topic-pick:${userId}:${token}`,
+     });
+-    const wait = await subagent.waitForRun({
++    started = true;
++    if (deps.abortSignal?.aborted) {
++      stop();
++    }
++    let wait = await subagent.waitForRun({
+       runId,
+       timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+     });
++    // A timeout is not proof of termination. Keep the parent pending while its
++    // classifier is still alive, and retry cancellation if registration raced.
++    while (deps.abortSignal?.aborted && wait.status === "timeout" && wait.endedAt === undefined) {
++      stop();
++      wait = await subagent.waitForRun({ runId, timeoutMs: 2_000 });
++    }
++    if (deps.abortSignal?.aborted) {
++      return null;
++    }
+     if (wait.status !== "ok") {
+       logger.warn(
+         `[TOPIC_LLM] pick run ${wait.status} for user ${userId}; falling back to substring match`,
+@@ -146,6 +175,7 @@ export async function pickTopicByLlm(deps: LlmTopicPickDeps): Promise<TopicInfo
+     logger.warn(`[TOPIC_LLM] pick failed for user ${userId}: ${String(err)}; falling back`);
+     return null;
+   } finally {
++    deps.abortSignal?.removeEventListener("abort", stop);
+     // Best-effort cleanup; a leftover throwaway session is harmless.
+     try {
+       await subagent.deleteSession?.({ sessionKey, deleteTranscript: true });
+diff --git a/extensions/rabbitmq-consumer/src/topic-resolver.ts b/extensions/rabbitmq-consumer/src/topic-resolver.ts
+index 1aca9bfffe..6a2d9c3fd6 100644
+--- a/extensions/rabbitmq-consumer/src/topic-resolver.ts
++++ b/extensions/rabbitmq-consumer/src/topic-resolver.ts
+@@ -1,5 +1,6 @@
+ import type mysql from "mysql2/promise";
+ import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
++import { cancellableRead } from "./cancellable-read.js";
+ import type { HistoryDbConfig } from "./types.js";
+ 
+ /** One topic the user is authorized to view. */
+@@ -120,7 +121,8 @@ export class TopicResolver {
+    * mapping. Results are cached per uid for CACHE_TTL_MS; on a DB failure a
+    * stale entry (if any) is served instead of throwing.
+    */
+-  async getTopicIdsByUser(userId: string): Promise<TopicResolution> {
++  async getTopicIdsByUser(userId: string, signal?: AbortSignal): Promise<TopicResolution> {
++    signal?.throwIfAborted();
+     if (!userId) {
+       return EMPTY_RESOLUTION;
+     }
+@@ -138,12 +140,13 @@ export class TopicResolver {
+       // else is scoped to their entity_auth ownership. Keep this branch in
+       // sync with extensions/feed-search/src/auth-topic-resolver.ts so the
+       // injected chat prefix and the feed_query tool agree on topic scope.
+-      const mappings = (await this.isSuperUser(pool, userId))
+-        ? await this.resolveSuperUserMappings(pool)
+-        : await this.resolveEntityAuthMappings(pool, userId);
++      const mappings = (await this.isSuperUser(pool, userId, signal))
++        ? await this.resolveSuperUserMappings(pool, signal)
++        : await this.resolveEntityAuthMappings(pool, userId, signal);
+       const names = await this.lookupTopicNames(
+         pool,
+         mappings.map((m) => m.topicId),
++        signal,
+       );
+       // A transient feed_topic blip must not blank previously known titles:
+       // that would flip the injected prefix shape for 5 minutes and
+@@ -174,10 +177,16 @@ export class TopicResolver {
+   }
+ 
+   /** True when legal_user_role.su = 1 for this user (missing row => not super). */
+-  private async isSuperUser(pool: mysql.Pool, userId: string): Promise<boolean> {
+-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
++  private async isSuperUser(
++    pool: mysql.Pool,
++    userId: string,
++    signal?: AbortSignal,
++  ): Promise<boolean> {
++    const [rows] = await cancellableRead(
++      pool,
+       "SELECT su FROM legal_user_role WHERE id = ?",
+       [userId],
++      signal,
+     );
+     return Number(rows?.[0]?.su) === 1;
+   }
+@@ -186,12 +195,15 @@ export class TopicResolver {
+   private async resolveEntityAuthMappings(
+     pool: mysql.Pool,
+     userId: string,
++    signal?: AbortSignal,
+   ): Promise<Omit<TopicInfo, "topicName">[]> {
+     // id DESC = grant order, newest first, so mappings[0] is the user's
+     // most recent (current) project.
+-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
++    const [rows] = await cancellableRead(
++      pool,
+       "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC",
+       [userId],
++      signal,
+     );
+     return dedupeMappings(rows ?? []);
+   }
+@@ -205,9 +217,13 @@ export class TopicResolver {
+    */
+   private async resolveSuperUserMappings(
+     pool: mysql.Pool,
++    signal?: AbortSignal,
+   ): Promise<Omit<TopicInfo, "topicName">[]> {
+-    const [reportRows] = await pool.execute<mysql.RowDataPacket[]>(
++    const [reportRows] = await cancellableRead(
++      pool,
+       "SELECT id FROM research_report WHERE status = 'Running' AND category = 'DailyMonitoring' AND deleted = 0",
++      [],
++      signal,
+     );
+     const reportIds = (reportRows ?? []).map((r) => Number(r.id)).filter((id) => id > 0);
+     if (reportIds.length === 0) {
+@@ -215,9 +231,11 @@ export class TopicResolver {
+     }
+ 
+     const placeholders = reportIds.map(() => "?").join(",");
+-    const [topicRows] = await pool.execute<mysql.RowDataPacket[]>(
++    const [topicRows] = await cancellableRead(
++      pool,
+       `SELECT id FROM feed_topic WHERE master = 1 AND reportId IN (${placeholders}) ORDER BY id ASC`,
+       reportIds,
++      signal,
+     );
+ 
+     const seen = new Set<number>();
+@@ -241,15 +259,18 @@ export class TopicResolver {
+   private async lookupTopicNames(
+     pool: mysql.Pool,
+     topicIds: number[],
++    signal?: AbortSignal,
+   ): Promise<Map<number, string>> {
+     if (topicIds.length === 0) {
+       return new Map();
+     }
+     try {
+       const placeholders = topicIds.map(() => "?").join(",");
+-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
++      const [rows] = await cancellableRead(
++        pool,
+         `SELECT id, title FROM feed_topic WHERE id IN (${placeholders})`,
+         topicIds,
++        signal,
+       );
+       const names = new Map<number, string>();
+       for (const row of rows ?? []) {
+diff --git a/extensions/report-generator/api.ts b/extensions/report-generator/api.ts
+index 042b28d15f..a8da6d0d12 100644
+--- a/extensions/report-generator/api.ts
++++ b/extensions/report-generator/api.ts
+@@ -4,7 +4,8 @@ export {
+   type PluginLogger,
+   type PluginRuntime,
+ } from "openclaw/plugin-sdk/core";
+-export { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
++export { resolveDefaultAgentId, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
++export { abortAgentHarnessRun } from "openclaw/plugin-sdk/agent-harness";
+ export {
+   collectSessionTurnUsage,
+   convertSessionTurnCost,
+diff --git a/extensions/report-generator/index.ts b/extensions/report-generator/index.ts
+index f192d07e27..1e051ec2b1 100644
+--- a/extensions/report-generator/index.ts
++++ b/extensions/report-generator/index.ts
+@@ -204,6 +204,32 @@ export default definePluginEntry({
+           const agentId =
+             typeof params.agentId === "string" && params.agentId ? params.agentId : undefined;
+           const streamPusher = new StreamingMercurePusher(mercurePusher, streamTopic, task.id);
++          const reportHistoryId = Number(params.historyId) || 0;
++          const cancellation = new AbortController();
++          let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
++          let finished = false;
++          const checkCancellation = async () => {
++            if (
++              reportHistoryId > 0 &&
++              (await reportHistoryWriter.isCancellationRequested(reportHistoryId, String(task.uid)))
++            ) {
++              cancellation.abort("user_abort");
++            }
++          };
++          const pollCancellation = async () => {
++            try {
++              await checkCancellation();
++            } catch {
++              logger.warn("[REPORT_GENERATOR] Cancellation check unavailable; retrying");
++            } finally {
++              if (!finished && !cancellation.signal.aborted) {
++                cancellationTimer = setTimeout(() => {
++                  void pollCancellation();
++                }, 2_000);
++                cancellationTimer.unref();
++              }
++            }
++          };
+ 
+           // First-byte ack: the user sees a reaction the moment the task is
+           // claimed, before template loading / query planning emit their
+@@ -215,6 +241,9 @@ export default definePluginEntry({
+           );
+ 
+           try {
++            await checkCancellation();
++            cancellation.signal.throwIfAborted();
++            void pollCancellation();
+             if (!dateScope.start || !dateScope.end) {
+               throw new Error(`Invalid dateScope in task params: ${task.params}`);
+             }
+@@ -291,6 +320,7 @@ export default definePluginEntry({
+             // collectStats runs the validated plan with full-set aggregation.
+             const report: GeneratedReport = await reportGenerator.generate(
+               {
++                abortSignal: cancellation.signal,
+                 period: task.period,
+                 requirement: task.requirement,
+                 dateScope: `${dateScope.start} ~ ${dateScope.end}`,
+@@ -324,6 +354,8 @@ export default definePluginEntry({
+               logger,
+             );
+ 
++            cancellation.signal.throwIfAborted();
++
+             // Update download record
+             await taskPoller.updateTaskResult(task.id, report.title, report.content, "Done");
+ 
+@@ -332,12 +364,6 @@ export default definePluginEntry({
+             // report + its work-process, not just the "正在生成中..." ack. The
+             // historyId was stored in params by the rabbitmq-consumer. Keyword
+             // / scheduled tasks without one simply skip this. Best-effort.
+-            const reportHistoryId =
+-              typeof params.historyId === "number"
+-                ? params.historyId
+-                : typeof params.historyId === "string"
+-                  ? parseInt(params.historyId, 10) || 0
+-                  : 0;
+             if (reportHistoryId > 0) {
+               try {
+                 // Coerce any leftover running step to "completed" before
+@@ -371,6 +397,7 @@ export default definePluginEntry({
+ 
+             // Flush any buffered stream text, then deliver the final report
+             // event and unlock the frontend.
++            cancellation.signal.throwIfAborted();
+             await streamPusher.flush();
+             await mercurePusher.push({
+               topic: String(task.uid),
+@@ -393,7 +420,7 @@ export default definePluginEntry({
+             if (emailSenderRef) {
+               try {
+                 const recipient = await taskPoller.resolveEmailRecipient(task);
+-                if (recipient) {
++                if (recipient && !cancellation.signal.aborted) {
+                   const htmlContent = emailSenderRef.markdownToHtml(report.content, report.title);
+                   await emailSenderRef.sendEmail(
+                     {
+@@ -413,6 +440,9 @@ export default definePluginEntry({
+               }
+             }
+ 
++            if (reportHistoryId > 0) {
++              await reportHistoryWriter.settleChild(reportHistoryId, "completed");
++            }
+             logger.info(`[REPORT_GENERATOR] Task #${task.id} completed`);
+           } catch (error) {
+             logger.error(`[REPORT_GENERATOR] Task #${task.id} failed: ${String(error)}`);
+@@ -422,8 +452,21 @@ export default definePluginEntry({
+             // pushError already emits a taskId-scoped report_error; the
+             // report_done lets the card stop its spinner even if the error
+             // event was missed (e.g. SSE reconnect).
+-            await streamPusher.pushError("报告生成失败，请稍后重试。");
++            if (reportHistoryId > 0) {
++              await reportHistoryWriter.settleChild(
++                reportHistoryId,
++                cancellation.signal.aborted ? "cancelled" : "failed",
++              );
++            }
++            await streamPusher.pushError(
++              cancellation.signal.aborted ? "报告已停止。" : "报告生成失败，请稍后重试。",
++            );
+             await mercurePusher.pushReportDone(streamTopic, task.id);
++          } finally {
++            finished = true;
++            if (cancellationTimer) {
++              clearTimeout(cancellationTimer);
++            }
+           }
+         };
+ 
+diff --git a/extensions/report-generator/src/generator.test.ts b/extensions/report-generator/src/generator.test.ts
+index fb73edc3cc..89706c4f5a 100644
+--- a/extensions/report-generator/src/generator.test.ts
++++ b/extensions/report-generator/src/generator.test.ts
+@@ -1,3 +1,4 @@
++import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness";
+ import { describe, expect, it, vi } from "vitest";
+ import type { PluginLogger, PluginRuntime } from "../api.js";
+ import { ReportGenerator, salvageStreamedReport } from "./generator.js";
+@@ -57,6 +58,109 @@ const baseOptions = {
+ };
+ 
+ describe("ReportGenerator.generate report extraction", () => {
++  it("routes report cancellation to the canonical executing session", async () => {
++    const runtime = runtimeWith([]);
++    const controller = new AbortController();
++    const cancel = vi.fn();
++    const handle = {
++      cancel,
++      abort: vi.fn(),
++      queueMessage: async () => {},
++      isStreaming: () => true,
++      isCompacting: () => false,
++    };
++    const sessionId = "probe-report-stop";
++    let sessionKey = "";
++    vi.spyOn(runtime.subagent, "run").mockImplementation(async (params) => {
++      sessionKey = params.sessionKey;
++      expect(sessionKey).toMatch(/^agent:report-default:report-plan:/);
++      setActiveEmbeddedRun(sessionId, handle, sessionKey);
++      return { runId: "report-stop-run" };
++    });
++    vi.spyOn(runtime.subagent, "waitForRun").mockImplementation(async () => {
++      controller.abort();
++      return { status: "ok" };
++    });
++    try {
++      const generator = new ReportGenerator(runtime, {
++        agents: { list: [{ id: "report-default", default: true }] },
++      });
++      await expect(
++        generator.generate({ ...baseOptions, abortSignal: controller.signal }, logger),
++      ).rejects.toBeDefined();
++      expect(cancel).toHaveBeenCalledWith("user_abort");
++    } finally {
++      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
++    }
++  });
++
++  it("keeps cancellation pending until the planning run confirms its exit", async () => {
++    const runtime = runtimeWith([]);
++    const controller = new AbortController();
++    let settle!: () => void;
++    const terminal = new Promise<{ status: "ok" }>((resolve) => {
++      settle = () => resolve({ status: "ok" });
++    });
++    const wait = vi
++      .spyOn(runtime.subagent, "waitForRun")
++      .mockImplementationOnce(async () => {
++        controller.abort();
++        return { status: "timeout" };
++      })
++      .mockImplementationOnce(() => terminal);
++    const collectStats = vi.fn(async () => nonEmptyStats);
++    let settled = false;
++    const generation = new ReportGenerator(runtime).generate(
++      { ...baseOptions, collectStats, abortSignal: controller.signal },
++      logger,
++    );
++    const observed = generation.then(
++      () => {
++        settled = true;
++      },
++      () => {
++        settled = true;
++      },
++    );
++    await vi.waitFor(() => expect(wait).toHaveBeenCalledTimes(2), { timeout: 3_000 });
++    expect(settled).toBe(false);
++    expect(collectStats).not.toHaveBeenCalled();
++    settle();
++    await observed;
++    await expect(generation).rejects.toBeDefined();
++  });
++
++  it("does not start a report after cancellation", async () => {
++    const runtime = runtimeWith([]);
++    const run = vi.spyOn(runtime.subagent, "run");
++    const generator = new ReportGenerator(runtime);
++    await expect(
++      generator.generate({ ...baseOptions, abortSignal: AbortSignal.abort() }, logger),
++    ).rejects.toBeDefined();
++    expect(run).not.toHaveBeenCalled();
++  });
++
++  it("does not launch writing when cancelled during statistics collection", async () => {
++    const runtime = runtimeWith([]);
++    const run = vi.spyOn(runtime.subagent, "run");
++    const controller = new AbortController();
++    const generator = new ReportGenerator(runtime);
++    await expect(
++      generator.generate(
++        {
++          ...baseOptions,
++          abortSignal: controller.signal,
++          collectStats: async () => {
++            controller.abort();
++            return nonEmptyStats;
++          },
++        },
++        logger,
++      ),
++    ).rejects.toBeDefined();
++    expect(run).toHaveBeenCalledTimes(1);
++  });
++
+   it("stores the report body even when a newer closing remark follows it", async () => {
+     // Regression: download.content used to receive the agent's trailing
+     // conversational remark instead of the report, because the report opened
+diff --git a/extensions/report-generator/src/generator.ts b/extensions/report-generator/src/generator.ts
+index b028de8b0f..2b007423c2 100644
+--- a/extensions/report-generator/src/generator.ts
++++ b/extensions/report-generator/src/generator.ts
+@@ -1,4 +1,6 @@
+ import {
++  abortAgentHarnessRun,
++  resolveDefaultAgentId,
+   collectSessionTurnUsage,
+   mergeSessionTurnUsage,
+   type OpenClawConfig,
+@@ -19,6 +21,7 @@ import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./to
+ import type { GeneratedReport, ReportPeriod } from "./types.js";
+ 
+ interface GenerateOptions {
++  abortSignal?: AbortSignal;
+   period: ReportPeriod;
+   requirement: string;
+   dateScope: string;
+@@ -184,6 +187,7 @@ export class ReportGenerator {
+    * writes the report from the real results.
+    */
+   async generate(options: GenerateOptions, logger: PluginLogger): Promise<GeneratedReport> {
++    options.abortSignal?.throwIfAborted();
+     const {
+       period,
+       requirement,
+@@ -225,13 +229,20 @@ export class ReportGenerator {
+     // (validated against whitelists; falls back to the default plan).
+     onActivity?.("正在分析模板数据需求…");
+     const endPlanStep = beginStep("正在分析模板数据需求", "read");
+-    const { plan, usage: planUsage } = await this.planQueries(template, userId, logger);
++    const { plan, usage: planUsage } = await this.planQueries(
++      template,
++      userId,
++      logger,
++      options.abortSignal,
++    );
++    options.abortSignal?.throwIfAborted();
+     endPlanStep("completed");
+ 
+     // Step 2: code executes the plan — full-set SQL aggregation, real rows.
+     onActivity?.("正在统计舆情数据…");
+     const endStatsStep = beginStep("正在统计舆情数据", "query");
+     const stats = await collectStats(plan);
++    options.abortSignal?.throwIfAborted();
+     endStatsStep("completed");
+ 
+     // Empty-data short-circuit. When the topic has no rows for the period there
+@@ -262,7 +273,7 @@ export class ReportGenerator {
+     // the same workspace persona and templates as the chat session.
+     const sessionKey = agentId
+       ? `agent:${agentId}:report-gen:${userId}:${Date.now()}`
+-      : `report-gen:${userId}:${Date.now()}`;
++      : `agent:${resolveDefaultAgentId(this.config ?? {})}:report-gen:${userId}:${Date.now()}`;
+ 
+     // Sanitized tool-activity narration: tool phases emit no assistant
+     // deltas, leaving the frontend stream dead. Tool starts surface as
+@@ -282,6 +293,9 @@ export class ReportGenerator {
+     let streamedText = "";
+     let currentRunId: string | null = null;
+     const unsubscribe = this.runtime.events.onAgentEvent((evt) => {
++      if (options.abortSignal?.aborted) {
++        return;
++      }
+       if (evt.runId !== currentRunId && evt.sessionKey !== sessionKey) {
+         return;
+       }
+@@ -327,11 +341,12 @@ export class ReportGenerator {
+       // agent's tool/assistant events fire during waitForRun below.
+       currentRunId = runResult.runId;
+ 
+-      const waitResult = await this.runtime.subagent.waitForRun({
+-        runId: runResult.runId,
+-        // Per-user agents may run tools (template/workspace reads); allow more time.
+-        timeoutMs: agentId ? 300_000 : 120_000,
+-      });
++      const waitResult = await this.waitForOwnedRun(
++        runResult.runId,
++        sessionKey,
++        agentId ? 300_000 : 120_000,
++        options.abortSignal,
++      );
+ 
+       if (waitResult.status === "error") {
+         throw new Error(waitResult.error ?? "Report generation failed");
+@@ -442,8 +457,9 @@ export class ReportGenerator {
+     template: string,
+     userId: string,
+     logger: PluginLogger,
++    signal?: AbortSignal,
+   ): Promise<{ plan: QueryPlan; usage: SessionTurnUsage | null }> {
+-    const sessionKey = `report-plan:${userId}:${Date.now()}`;
++    const sessionKey = `agent:${resolveDefaultAgentId(this.config ?? {})}:report-plan:${userId}:${Date.now()}`;
+     const sinceMs = Date.now();
+     // The planning run's own tokens count toward the report's cost, including
+     // when the plan is unusable and we fall back to the default — the call was
+@@ -456,10 +472,7 @@ export class ReportGenerator {
+         deliver: false,
+         extraSystemPrompt: PURE_PLANNING_SYSTEM_PROMPT,
+       });
+-      const waitResult = await this.runtime.subagent.waitForRun({
+-        runId: runResult.runId,
+-        timeoutMs: 60_000,
+-      });
++      const waitResult = await this.waitForOwnedRun(runResult.runId, sessionKey, 60_000, signal);
+       usage = await this.runUsage({ sessionKey, sinceMs, logger });
+       if (waitResult.status !== "ok") {
+         throw new Error(`plan run ended with status ${waitResult.status}`);
+@@ -486,6 +499,45 @@ export class ReportGenerator {
+     }
+   }
+ 
++  /** Keep cancellation pending until the owned run really settles. */
++  private async waitForOwnedRun(
++    runId: string,
++    sessionKey: string,
++    timeoutMs: number,
++    signal?: AbortSignal,
++  ) {
++    if (!signal) {
++      return this.runtime.subagent.waitForRun({ runId, timeoutMs });
++    }
++    const stop = () => {
++      abortAgentHarnessRun(sessionKey);
++    };
++    signal.addEventListener("abort", stop);
++    const deadline = Date.now() + timeoutMs;
++    try {
++      while (true) {
++        const startedAt = Date.now();
++        if (signal.aborted) {
++          stop();
++        }
++        const result = await this.runtime.subagent.waitForRun({ runId, timeoutMs: 2_000 });
++        if (result.status !== "timeout" || result.endedAt !== undefined) {
++          signal.throwIfAborted();
++          return result;
++        }
++        if (!signal.aborted && Date.now() >= deadline) {
++          return result;
++        }
++        const remainingMs = Math.max(0, 2_000 - (Date.now() - startedAt));
++        if (remainingMs > 0) {
++          await new Promise<void>((resolve) => setTimeout(resolve, remainingMs));
++        }
++      }
++    } finally {
++      signal.removeEventListener("abort", stop);
++    }
++  }
++
+   private buildReportPrompt(data: {
+     period: ReportPeriod;
+     requirement: string;
+diff --git a/extensions/report-generator/src/report-history-writer.ts b/extensions/report-generator/src/report-history-writer.ts
+index d0b465160f..4964949814 100644
+--- a/extensions/report-generator/src/report-history-writer.ts
++++ b/extensions/report-generator/src/report-history-writer.ts
+@@ -60,8 +60,21 @@ export class ReportHistoryWriter {
+     return this.pool;
+   }
+ 
++  async isCancellationRequested(historyId: number, userId: string): Promise<boolean> {
++    const [rows] = await this.getPool().execute<mysql.RowDataPacket[]>({
++      sql: "SELECT JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID(metadata) THEN metadata ELSE JSON_OBJECT() END, '$.cancelRequested')) AS requested FROM history_messages WHERE id = ? AND user_id = ? LIMIT 1",
++      values: [historyId, userId],
++      timeout: 3_000,
++    });
++    return rows[0]?.requested === "true";
++  }
++
++  async settleChild(historyId: number, state: "cancelled" | "completed" | "failed"): Promise<void> {
++    await this.mergeMetadata(historyId, { cancelChildReportState: state });
++  }
++
+   /**
+-   * Read-modify-write a patch into the row's `metadata` JSON, preserving keys
++   * Atomically merge a patch into the row's `metadata` JSON, preserving keys
+    * other writers own (the chat pipeline's `steps`/`citations`/`usage`).
+    * Returns false when the row does not exist.
+    */
+@@ -77,24 +90,20 @@ export class ReportHistoryWriter {
+       return false;
+     }
+ 
+-    // mysql2 returns a JSON column as a parsed object (or null). Tolerate a
+-    // legacy string value too, falling back to {} on any parse failure.
+-    let metadata: Record<string, unknown> = {};
+-    const raw = rows[0].metadata;
+-    if (raw && typeof raw === "object") {
+-      metadata = raw as Record<string, unknown>;
+-    } else if (typeof raw === "string" && raw.trim()) {
+-      try {
+-        metadata = JSON.parse(raw) as Record<string, unknown>;
+-      } catch {
+-        metadata = {};
+-      }
++    // Assign only owned fields atomically; never overwrite a concurrently
++    // committed cancellation intent with a stale read-modify-write snapshot.
++    const entries = Object.entries(patch).toSorted(([a], [b]) => a.localeCompare(b));
++    if (entries.length === 0) {
++      return true;
+     }
+-
+-    await execWithRetry(pool, "UPDATE history_messages SET metadata = ? WHERE id = ?", [
+-      JSON.stringify({ ...metadata, ...patch }),
+-      historyId,
+-    ]);
++    await execWithRetry(
++      pool,
++      `UPDATE history_messages SET metadata = JSON_SET(CASE WHEN JSON_VALID(metadata) THEN CASE WHEN JSON_TYPE(metadata) = 'OBJECT' THEN metadata ELSE JSON_OBJECT() END ELSE JSON_OBJECT() END, ${entries.map(() => "?, CAST(? AS JSON)").join(", ")}) WHERE id = ?`,
++      [
++        ...entries.flatMap(([key, value]) => [`$.${JSON.stringify(key)}`, JSON.stringify(value)]),
++        historyId,
++      ],
++    );
+     return true;
+   }
+ 
+diff --git a/src/agents/bash-tools.exec.background-abort.test.ts b/src/agents/bash-tools.exec.background-abort.test.ts
+index 95020c8912..f23e7a389a 100644
+--- a/src/agents/bash-tools.exec.background-abort.test.ts
++++ b/src/agents/bash-tools.exec.background-abort.test.ts
+@@ -132,6 +132,27 @@ test("background exec is not killed when tool signal aborts", async () => {
+   });
+ });
+ 
++test("explicit user cancellation kills the background process owned by that run", async () => {
++  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
++  const controller = new AbortController();
++  const result = await tool.execute(
++    "user-stop",
++    // Longer than the exit assertion deadline: natural completion must not
++    // accidentally pass this cancellation regression.
++    { command: 'node -e "setTimeout(() => {}, 30000)"', background: true },
++    controller.signal,
++  );
++  const sessionId = (result.details as { sessionId: string }).sessionId;
++  try {
++    controller.abort("user_abort");
++    const finished = await waitForFinishedSession(sessionId);
++    expect(finished).toBeTruthy();
++    expect(getSession(sessionId)).toBeUndefined();
++  } finally {
++    cleanupRunningSession(sessionId);
++  }
++});
++
+ test("pty background exec is not killed when tool signal aborts", async () => {
+   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+   await expectBackgroundSessionSurvivesAbort({
+diff --git a/src/agents/bash-tools.exec.ts b/src/agents/bash-tools.exec.ts
+index 76ee948dbd..12d3fa7cab 100644
+--- a/src/agents/bash-tools.exec.ts
++++ b/src/agents/bash-tools.exec.ts
+@@ -52,6 +52,7 @@ import {
+   resolveWorkdir,
+   truncateMiddle,
+ } from "./bash-tools.shared.js";
++import { registerRunAbortResource } from "./run-abort-resources.js";
+ import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+ import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
+ 
+@@ -1680,10 +1681,14 @@ export function createExecTool(
+         onUpdate,
+       });
+ 
++      if (signal) {
++        registerRunAbortResource(signal, run.promise, () => run.kill());
++      }
+       let yielded = false;
+       let yieldTimer: NodeJS.Timeout | null = null;
+ 
+-      // Tool-call abort should not kill backgrounded sessions; timeouts still must.
++      // Routine tool abort preserves background jobs; explicit user Stop owns
++      // and terminates this run's jobs, including their supervised process trees.
+       const onAbortSignal = () => {
+         // Immediately suppress onUpdate calls so that any late stdout/stderr
+         // from the still-running process cannot push a rejected Promise into
+@@ -1693,7 +1698,7 @@ export function createExecTool(
+         // tool_execution_update events even for backgrounded sessions (which
+         // retrieve output via process poll/log instead of onUpdate callbacks).
+         run.disableUpdates();
+-        if (yielded || run.session.backgrounded) {
++        if ((yielded || run.session.backgrounded) && signal?.reason !== "user_abort") {
+           return;
+         }
+         run.kill();
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index d3ad9ae27a..3b781a8f59 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -99,6 +99,7 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../..
+ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+ import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
+ import { registerProviderStreamForModel } from "../../provider-stream.js";
++import { waitForRunAbortResources } from "../../run-abort-resources.js";
+ import { resolveSandboxContext } from "../../sandbox.js";
+ import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+ import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
+@@ -1584,6 +1585,7 @@ export async function runEmbeddedAttempt(
+           }
+         }
+       };
++      let userAbortSettlement: Promise<void> | undefined;
+       const abortRun = (isTimeout = false, reason?: unknown) => {
+         aborted = true;
+         if (isTimeout) {
+@@ -1595,7 +1597,13 @@ export async function runEmbeddedAttempt(
+           runAbortController.abort(reason);
+         }
+         abortCompaction();
+-        void activeSession.abort();
++        const settlement = activeSession.abort();
++        if (reason === "user_abort") {
++          userAbortSettlement = settlement;
++        }
++        void settlement.catch((error) =>
++          log.warn(`agent abort settlement failed: ${String(error)}`),
++        );
+       };
+       idleTimeoutTrigger = (error) => {
+         idleTimedOut = true;
+@@ -1686,8 +1694,8 @@ export async function runEmbeddedAttempt(
+         },
+         isStreaming: () => activeSession.isStreaming,
+         isCompacting: () => subscription.isCompacting(),
+-        cancel: () => {
+-          abortRun();
++        cancel: (reason) => {
++          abortRun(false, reason);
+         },
+         abort: abortRun,
+       };
+@@ -2441,6 +2449,15 @@ export async function runEmbeddedAttempt(
+             });
+         }
+       } finally {
++        // Do not publish a terminal run while its tools are still unwinding.
++        if (userAbortSettlement) {
++          await waitForRunAbortResources(runAbortController.signal);
++          try {
++            await userAbortSettlement;
++          } catch (error) {
++            promptError ??= error;
++          }
++        }
+         clearTimeout(abortTimer);
+         if (abortWarnTimer) {
+           clearTimeout(abortWarnTimer);
+diff --git a/src/agents/pi-embedded-runner/runs.ts b/src/agents/pi-embedded-runner/runs.ts
+index c64dcdfb60..943cade1bd 100644
+--- a/src/agents/pi-embedded-runner/runs.ts
++++ b/src/agents/pi-embedded-runner/runs.ts
+@@ -149,7 +149,11 @@ export function abortEmbeddedPiRun(
+     }
+     diag.debug(`aborting run: sessionId=${resolvedSessionId}`);
+     try {
+-      handle.abort();
++      if (handle.cancel) {
++        handle.cancel("user_abort");
++      } else {
++        handle.abort();
++      }
+     } catch (err) {
+       diag.warn(`abort failed: sessionId=${resolvedSessionId} err=${String(err)}`);
+       return false;
+diff --git a/src/agents/pi-tools.abort.ts b/src/agents/pi-tools.abort.ts
+index 887cb64e7d..f7e37017f4 100644
+--- a/src/agents/pi-tools.abort.ts
++++ b/src/agents/pi-tools.abort.ts
+@@ -2,6 +2,7 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
+ import { bindAbortRelay } from "../utils/fetch-timeout.js";
+ import { copyChannelAgentToolMeta } from "./channel-tools.js";
+ import type { AnyAgentTool } from "./pi-tools.types.js";
++import { linkRunAbortResources } from "./run-abort-resources.js";
+ 
+ function throwAbortError(): never {
+   const err = new Error("Aborted");
+@@ -60,6 +61,9 @@ export function wrapToolWithAbortSignal(
+     ...tool,
+     execute: async (toolCallId, params, signal, onUpdate) => {
+       const combined = combineAbortSignals(signal, abortSignal);
++      if (combined) {
++        linkRunAbortResources(combined, abortSignal);
++      }
+       if (combined?.aborted) {
+         throwAbortError();
+       }

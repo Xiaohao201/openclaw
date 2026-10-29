@@ -501,6 +501,110 @@ describe("processChatMessage", () => {
     );
   });
 
+  it("confirms a settled cancellation even when saving partial output fails", async () => {
+    const controller = new AbortController();
+    const { historyManager, updateMetadata, updateResponse } = createHistoryManagerMock();
+    updateResponse.mockRejectedValue(new Error("response storage unavailable"));
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: () => controller.abort(),
+    });
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { abortSignal: controller.signal, abortRun: vi.fn(() => true) },
+    );
+    expect(updateResponse).toHaveBeenCalled();
+    expect(updateMetadata).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ cancellationStatus: "cancelled" }),
+      expect.anything(),
+    );
+  });
+
+  it("prevents agent startup when cancellation is already persisted", async () => {
+    const { historyManager, getRecord } = createHistoryManagerMock();
+    const record = await getRecord(1);
+    if (!record) {
+      throw new Error("Missing audit history fixture");
+    }
+    getRecord.mockResolvedValue({ ...record, metadata: JSON.stringify({ cancelRequested: true }) });
+    const onRun = vi.fn();
+    const runtime = createRuntimeMock({ workspaceDir, onRun });
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("cancels preparation without starting the model after a template lookup abort", async () => {
+    const controller = new AbortController();
+    const { historyManager, updateMetadata } = createHistoryManagerMock();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const resolveTemplate = vi.fn(
+      async (_id: number, _user: string, _logger: PluginLogger, signal?: AbortSignal) => {
+        await Promise.race([
+          blocked,
+          new Promise<void>((resolve) =>
+            signal?.addEventListener("abort", () => resolve(), { once: true }),
+          ),
+        ]);
+        return null;
+      },
+    );
+    const templateLookup = { resolve: resolveTemplate } as unknown as ReportTemplateLookup;
+    const onRun = vi.fn();
+    const abortRun = vi.fn(() => true);
+    const runtime = createRuntimeMock({ workspaceDir, onRun });
+    const running = processChatMessage(
+      { ...createChatMessage(), templateId: 1 },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      templateLookup,
+      undefined,
+      undefined,
+      undefined,
+      { abortSignal: controller.signal, abortRun },
+    );
+    try {
+      await vi.waitFor(() => expect(resolveTemplate).toHaveBeenCalledTimes(1));
+      controller.abort();
+      await running;
+      expect(abortRun).not.toHaveBeenCalled();
+      expect(
+        updateMetadata.mock.calls.some(([, patch]) => patch.cancellationStatus === "cancelled"),
+      ).toBe(true);
+    } finally {
+      release();
+      await running;
+    }
+    expect(onRun).not.toHaveBeenCalled();
+    expect(updateMetadata).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ cancellationStatus: "cancelled" }),
+      expect.anything(),
+    );
+  });
+
   it("persists cancellation without starting an already cancelled turn", async () => {
     const controller = new AbortController();
     controller.abort();

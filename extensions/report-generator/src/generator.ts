@@ -1,4 +1,6 @@
 import {
+  abortAgentHarnessRun,
+  resolveDefaultAgentId,
   collectSessionTurnUsage,
   mergeSessionTurnUsage,
   type OpenClawConfig,
@@ -19,6 +21,7 @@ import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./to
 import type { GeneratedReport, ReportPeriod } from "./types.js";
 
 interface GenerateOptions {
+  abortSignal?: AbortSignal;
   period: ReportPeriod;
   requirement: string;
   dateScope: string;
@@ -184,6 +187,7 @@ export class ReportGenerator {
    * writes the report from the real results.
    */
   async generate(options: GenerateOptions, logger: PluginLogger): Promise<GeneratedReport> {
+    options.abortSignal?.throwIfAborted();
     const {
       period,
       requirement,
@@ -225,13 +229,20 @@ export class ReportGenerator {
     // (validated against whitelists; falls back to the default plan).
     onActivity?.("正在分析模板数据需求…");
     const endPlanStep = beginStep("正在分析模板数据需求", "read");
-    const { plan, usage: planUsage } = await this.planQueries(template, userId, logger);
+    const { plan, usage: planUsage } = await this.planQueries(
+      template,
+      userId,
+      logger,
+      options.abortSignal,
+    );
+    options.abortSignal?.throwIfAborted();
     endPlanStep("completed");
 
     // Step 2: code executes the plan — full-set SQL aggregation, real rows.
     onActivity?.("正在统计舆情数据…");
     const endStatsStep = beginStep("正在统计舆情数据", "query");
     const stats = await collectStats(plan);
+    options.abortSignal?.throwIfAborted();
     endStatsStep("completed");
 
     // Empty-data short-circuit. When the topic has no rows for the period there
@@ -262,7 +273,7 @@ export class ReportGenerator {
     // the same workspace persona and templates as the chat session.
     const sessionKey = agentId
       ? `agent:${agentId}:report-gen:${userId}:${Date.now()}`
-      : `report-gen:${userId}:${Date.now()}`;
+      : `agent:${resolveDefaultAgentId(this.config ?? {})}:report-gen:${userId}:${Date.now()}`;
 
     // Sanitized tool-activity narration: tool phases emit no assistant
     // deltas, leaving the frontend stream dead. Tool starts surface as
@@ -282,6 +293,9 @@ export class ReportGenerator {
     let streamedText = "";
     let currentRunId: string | null = null;
     const unsubscribe = this.runtime.events.onAgentEvent((evt) => {
+      if (options.abortSignal?.aborted) {
+        return;
+      }
       if (evt.runId !== currentRunId && evt.sessionKey !== sessionKey) {
         return;
       }
@@ -327,11 +341,12 @@ export class ReportGenerator {
       // agent's tool/assistant events fire during waitForRun below.
       currentRunId = runResult.runId;
 
-      const waitResult = await this.runtime.subagent.waitForRun({
-        runId: runResult.runId,
-        // Per-user agents may run tools (template/workspace reads); allow more time.
-        timeoutMs: agentId ? 300_000 : 120_000,
-      });
+      const waitResult = await this.waitForOwnedRun(
+        runResult.runId,
+        sessionKey,
+        agentId ? 300_000 : 120_000,
+        options.abortSignal,
+      );
 
       if (waitResult.status === "error") {
         throw new Error(waitResult.error ?? "Report generation failed");
@@ -442,8 +457,9 @@ export class ReportGenerator {
     template: string,
     userId: string,
     logger: PluginLogger,
+    signal?: AbortSignal,
   ): Promise<{ plan: QueryPlan; usage: SessionTurnUsage | null }> {
-    const sessionKey = `report-plan:${userId}:${Date.now()}`;
+    const sessionKey = `agent:${resolveDefaultAgentId(this.config ?? {})}:report-plan:${userId}:${Date.now()}`;
     const sinceMs = Date.now();
     // The planning run's own tokens count toward the report's cost, including
     // when the plan is unusable and we fall back to the default — the call was
@@ -456,10 +472,7 @@ export class ReportGenerator {
         deliver: false,
         extraSystemPrompt: PURE_PLANNING_SYSTEM_PROMPT,
       });
-      const waitResult = await this.runtime.subagent.waitForRun({
-        runId: runResult.runId,
-        timeoutMs: 60_000,
-      });
+      const waitResult = await this.waitForOwnedRun(runResult.runId, sessionKey, 60_000, signal);
       usage = await this.runUsage({ sessionKey, sinceMs, logger });
       if (waitResult.status !== "ok") {
         throw new Error(`plan run ended with status ${waitResult.status}`);
@@ -483,6 +496,45 @@ export class ReportGenerator {
     } catch (error) {
       logger.warn(`[REPORT_GENERATOR] Query planning failed, using default plan: ${String(error)}`);
       return { plan: DEFAULT_QUERY_PLAN, usage };
+    }
+  }
+
+  /** Keep cancellation pending until the owned run really settles. */
+  private async waitForOwnedRun(
+    runId: string,
+    sessionKey: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) {
+    if (!signal) {
+      return this.runtime.subagent.waitForRun({ runId, timeoutMs });
+    }
+    const stop = () => {
+      abortAgentHarnessRun(sessionKey);
+    };
+    signal.addEventListener("abort", stop);
+    const deadline = Date.now() + timeoutMs;
+    try {
+      while (true) {
+        const startedAt = Date.now();
+        if (signal.aborted) {
+          stop();
+        }
+        const result = await this.runtime.subagent.waitForRun({ runId, timeoutMs: 2_000 });
+        if (result.status !== "timeout" || result.endedAt !== undefined) {
+          signal.throwIfAborted();
+          return result;
+        }
+        if (!signal.aborted && Date.now() >= deadline) {
+          return result;
+        }
+        const remainingMs = Math.max(0, 2_000 - (Date.now() - startedAt));
+        if (remainingMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, remainingMs));
+        }
+      }
+    } finally {
+      signal.removeEventListener("abort", stop);
     }
   }
 

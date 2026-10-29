@@ -149,7 +149,11 @@ export function abortEmbeddedPiRun(
     }
     diag.debug(`aborting run: sessionId=${resolvedSessionId}`);
     try {
-      handle.abort();
+      if (handle.cancel) {
+        handle.cancel("user_abort");
+      } else {
+        handle.abort();
+      }
     } catch (err) {
       diag.warn(`abort failed: sessionId=${resolvedSessionId} err=${String(err)}`);
       return false;

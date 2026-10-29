@@ -1,5 +1,6 @@
 import type mysql from "mysql2/promise";
 import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
+import { cancellableRead } from "./cancellable-read.js";
 import type { HistoryDbConfig } from "./types.js";
 
 /** One topic the user is authorized to view. */
@@ -120,7 +121,8 @@ export class TopicResolver {
    * mapping. Results are cached per uid for CACHE_TTL_MS; on a DB failure a
    * stale entry (if any) is served instead of throwing.
    */
-  async getTopicIdsByUser(userId: string): Promise<TopicResolution> {
+  async getTopicIdsByUser(userId: string, signal?: AbortSignal): Promise<TopicResolution> {
+    signal?.throwIfAborted();
     if (!userId) {
       return EMPTY_RESOLUTION;
     }
@@ -138,12 +140,13 @@ export class TopicResolver {
       // else is scoped to their entity_auth ownership. Keep this branch in
       // sync with extensions/feed-search/src/auth-topic-resolver.ts so the
       // injected chat prefix and the feed_query tool agree on topic scope.
-      const mappings = (await this.isSuperUser(pool, userId))
-        ? await this.resolveSuperUserMappings(pool)
-        : await this.resolveEntityAuthMappings(pool, userId);
+      const mappings = (await this.isSuperUser(pool, userId, signal))
+        ? await this.resolveSuperUserMappings(pool, signal)
+        : await this.resolveEntityAuthMappings(pool, userId, signal);
       const names = await this.lookupTopicNames(
         pool,
         mappings.map((m) => m.topicId),
+        signal,
       );
       // A transient feed_topic blip must not blank previously known titles:
       // that would flip the injected prefix shape for 5 minutes and
@@ -174,10 +177,16 @@ export class TopicResolver {
   }
 
   /** True when legal_user_role.su = 1 for this user (missing row => not super). */
-  private async isSuperUser(pool: mysql.Pool, userId: string): Promise<boolean> {
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+  private async isSuperUser(
+    pool: mysql.Pool,
+    userId: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const [rows] = await cancellableRead(
+      pool,
       "SELECT su FROM legal_user_role WHERE id = ?",
       [userId],
+      signal,
     );
     return Number(rows?.[0]?.su) === 1;
   }
@@ -186,12 +195,15 @@ export class TopicResolver {
   private async resolveEntityAuthMappings(
     pool: mysql.Pool,
     userId: string,
+    signal?: AbortSignal,
   ): Promise<Omit<TopicInfo, "topicName">[]> {
     // id DESC = grant order, newest first, so mappings[0] is the user's
     // most recent (current) project.
-    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+    const [rows] = await cancellableRead(
+      pool,
       "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC",
       [userId],
+      signal,
     );
     return dedupeMappings(rows ?? []);
   }
@@ -205,9 +217,13 @@ export class TopicResolver {
    */
   private async resolveSuperUserMappings(
     pool: mysql.Pool,
+    signal?: AbortSignal,
   ): Promise<Omit<TopicInfo, "topicName">[]> {
-    const [reportRows] = await pool.execute<mysql.RowDataPacket[]>(
+    const [reportRows] = await cancellableRead(
+      pool,
       "SELECT id FROM research_report WHERE status = 'Running' AND category = 'DailyMonitoring' AND deleted = 0",
+      [],
+      signal,
     );
     const reportIds = (reportRows ?? []).map((r) => Number(r.id)).filter((id) => id > 0);
     if (reportIds.length === 0) {
@@ -215,9 +231,11 @@ export class TopicResolver {
     }
 
     const placeholders = reportIds.map(() => "?").join(",");
-    const [topicRows] = await pool.execute<mysql.RowDataPacket[]>(
+    const [topicRows] = await cancellableRead(
+      pool,
       `SELECT id FROM feed_topic WHERE master = 1 AND reportId IN (${placeholders}) ORDER BY id ASC`,
       reportIds,
+      signal,
     );
 
     const seen = new Set<number>();
@@ -241,15 +259,18 @@ export class TopicResolver {
   private async lookupTopicNames(
     pool: mysql.Pool,
     topicIds: number[],
+    signal?: AbortSignal,
   ): Promise<Map<number, string>> {
     if (topicIds.length === 0) {
       return new Map();
     }
     try {
       const placeholders = topicIds.map(() => "?").join(",");
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      const [rows] = await cancellableRead(
+        pool,
         `SELECT id, title FROM feed_topic WHERE id IN (${placeholders})`,
         topicIds,
+        signal,
       );
       const names = new Map<number, string>();
       for (const row of rows ?? []) {

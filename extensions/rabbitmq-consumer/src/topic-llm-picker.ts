@@ -26,6 +26,8 @@ export interface LlmTopicPickDeps {
   logger: PluginLogger;
   /** Wait budget for the classification run. */
   timeoutMs?: number;
+  abortSignal?: AbortSignal;
+  abortRun?: (sessionKey: string) => boolean | Promise<boolean>;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -111,7 +113,21 @@ export async function pickTopicByLlm(deps: LlmTopicPickDeps): Promise<TopicInfo 
   }
 
   const sessionKey = `agent:rabbitmq-${userId}:topic-pick:${userId}:${token}`;
+  let started = false;
+  const stop = () => {
+    if (started) {
+      void Promise.resolve()
+        .then(() => deps.abortRun?.(sessionKey))
+        .catch(() => {
+          logger.warn("[TOPIC_LLM] Cancellation unavailable; waiting for classifier cleanup");
+        });
+    }
+  };
+  deps.abortSignal?.addEventListener("abort", stop, { once: true });
   try {
+    if (deps.abortSignal?.aborted) {
+      return null;
+    }
     const { runId } = await subagent.run({
       sessionKey,
       message: buildMessage(requirement, candidates),
@@ -119,10 +135,23 @@ export async function pickTopicByLlm(deps: LlmTopicPickDeps): Promise<TopicInfo 
       deliver: false,
       idempotencyKey: `topic-pick:${userId}:${token}`,
     });
-    const wait = await subagent.waitForRun({
+    started = true;
+    if (deps.abortSignal?.aborted) {
+      stop();
+    }
+    let wait = await subagent.waitForRun({
       runId,
       timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });
+    // A timeout is not proof of termination. Keep the parent pending while its
+    // classifier is still alive, and retry cancellation if registration raced.
+    while (deps.abortSignal?.aborted && wait.status === "timeout" && wait.endedAt === undefined) {
+      stop();
+      wait = await subagent.waitForRun({ runId, timeoutMs: 2_000 });
+    }
+    if (deps.abortSignal?.aborted) {
+      return null;
+    }
     if (wait.status !== "ok") {
       logger.warn(
         `[TOPIC_LLM] pick run ${wait.status} for user ${userId}; falling back to substring match`,
@@ -146,6 +175,7 @@ export async function pickTopicByLlm(deps: LlmTopicPickDeps): Promise<TopicInfo 
     logger.warn(`[TOPIC_LLM] pick failed for user ${userId}: ${String(err)}; falling back`);
     return null;
   } finally {
+    deps.abortSignal?.removeEventListener("abort", stop);
     // Best-effort cleanup; a leftover throwaway session is harmless.
     try {
       await subagent.deleteSession?.({ sessionKey, deleteTranscript: true });

@@ -204,6 +204,32 @@ export default definePluginEntry({
           const agentId =
             typeof params.agentId === "string" && params.agentId ? params.agentId : undefined;
           const streamPusher = new StreamingMercurePusher(mercurePusher, streamTopic, task.id);
+          const reportHistoryId = Number(params.historyId) || 0;
+          const cancellation = new AbortController();
+          let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
+          let finished = false;
+          const checkCancellation = async () => {
+            if (
+              reportHistoryId > 0 &&
+              (await reportHistoryWriter.isCancellationRequested(reportHistoryId, String(task.uid)))
+            ) {
+              cancellation.abort("user_abort");
+            }
+          };
+          const pollCancellation = async () => {
+            try {
+              await checkCancellation();
+            } catch {
+              logger.warn("[REPORT_GENERATOR] Cancellation check unavailable; retrying");
+            } finally {
+              if (!finished && !cancellation.signal.aborted) {
+                cancellationTimer = setTimeout(() => {
+                  void pollCancellation();
+                }, 2_000);
+                cancellationTimer.unref();
+              }
+            }
+          };
 
           // First-byte ack: the user sees a reaction the moment the task is
           // claimed, before template loading / query planning emit their
@@ -215,6 +241,9 @@ export default definePluginEntry({
           );
 
           try {
+            await checkCancellation();
+            cancellation.signal.throwIfAborted();
+            void pollCancellation();
             if (!dateScope.start || !dateScope.end) {
               throw new Error(`Invalid dateScope in task params: ${task.params}`);
             }
@@ -291,6 +320,7 @@ export default definePluginEntry({
             // collectStats runs the validated plan with full-set aggregation.
             const report: GeneratedReport = await reportGenerator.generate(
               {
+                abortSignal: cancellation.signal,
                 period: task.period,
                 requirement: task.requirement,
                 dateScope: `${dateScope.start} ~ ${dateScope.end}`,
@@ -324,6 +354,8 @@ export default definePluginEntry({
               logger,
             );
 
+            cancellation.signal.throwIfAborted();
+
             // Update download record
             await taskPoller.updateTaskResult(task.id, report.title, report.content, "Done");
 
@@ -332,12 +364,6 @@ export default definePluginEntry({
             // report + its work-process, not just the "正在生成中..." ack. The
             // historyId was stored in params by the rabbitmq-consumer. Keyword
             // / scheduled tasks without one simply skip this. Best-effort.
-            const reportHistoryId =
-              typeof params.historyId === "number"
-                ? params.historyId
-                : typeof params.historyId === "string"
-                  ? parseInt(params.historyId, 10) || 0
-                  : 0;
             if (reportHistoryId > 0) {
               try {
                 // Coerce any leftover running step to "completed" before
@@ -371,6 +397,7 @@ export default definePluginEntry({
 
             // Flush any buffered stream text, then deliver the final report
             // event and unlock the frontend.
+            cancellation.signal.throwIfAborted();
             await streamPusher.flush();
             await mercurePusher.push({
               topic: String(task.uid),
@@ -393,7 +420,7 @@ export default definePluginEntry({
             if (emailSenderRef) {
               try {
                 const recipient = await taskPoller.resolveEmailRecipient(task);
-                if (recipient) {
+                if (recipient && !cancellation.signal.aborted) {
                   const htmlContent = emailSenderRef.markdownToHtml(report.content, report.title);
                   await emailSenderRef.sendEmail(
                     {
@@ -413,6 +440,9 @@ export default definePluginEntry({
               }
             }
 
+            if (reportHistoryId > 0) {
+              await reportHistoryWriter.settleChild(reportHistoryId, "completed");
+            }
             logger.info(`[REPORT_GENERATOR] Task #${task.id} completed`);
           } catch (error) {
             logger.error(`[REPORT_GENERATOR] Task #${task.id} failed: ${String(error)}`);
@@ -422,8 +452,21 @@ export default definePluginEntry({
             // pushError already emits a taskId-scoped report_error; the
             // report_done lets the card stop its spinner even if the error
             // event was missed (e.g. SSE reconnect).
-            await streamPusher.pushError("报告生成失败，请稍后重试。");
+            if (reportHistoryId > 0) {
+              await reportHistoryWriter.settleChild(
+                reportHistoryId,
+                cancellation.signal.aborted ? "cancelled" : "failed",
+              );
+            }
+            await streamPusher.pushError(
+              cancellation.signal.aborted ? "报告已停止。" : "报告生成失败，请稍后重试。",
+            );
             await mercurePusher.pushReportDone(streamTopic, task.id);
+          } finally {
+            finished = true;
+            if (cancellationTimer) {
+              clearTimeout(cancellationTimer);
+            }
           }
         };
 

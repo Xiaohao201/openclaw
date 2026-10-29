@@ -10,11 +10,16 @@ export interface MessageConsumerDeps {
   runWarmup: (userId: string) => Promise<unknown>;
   /** Full chat pipeline for one parsed message (chat-pipeline.processChatMessage). */
   runChat: (chatMsg: ChatMessage, abortSignal: AbortSignal) => Promise<unknown>;
+  /** Authoritative writer-DB check; independent of control-queue delivery. */
+  isCancellationRequested?: (chatMsg: ChatMessage) => Promise<boolean>;
+  cancellationPollMs?: number;
+  onCancellationObserved?: (chatMsg: ChatMessage) => Promise<void>;
 }
 
 type RegisteredTurn = {
   chatMsg: ChatMessage;
   controller: AbortController;
+  completion: Promise<void>;
 };
 
 function matchesTurn(cancel: ChatCancelMessage, chatMsg: ChatMessage): boolean {
@@ -102,6 +107,15 @@ export function createMessageConsumer(
       return Promise.resolve();
     }
 
+    const existing = registeredTurns.get(chatMsg.historyId);
+    if (existing) {
+      if (!matchesTurn({ ...chatMsg }, existing.chatMsg)) {
+        return Promise.reject(new Error("Conflicting identity for active history id"));
+      }
+      // A redelivery must share both execution and cancellation with its original.
+      return existing.completion;
+    }
+
     deps.logger.info(
       `[RABBITMQ_CONSUMER] Received message: historyId=${chatMsg.historyId}, ` +
         `userId=${chatMsg.userId}`,
@@ -111,7 +125,40 @@ export function createMessageConsumer(
       ? `user:${chatMsg.userId}:session:${chatMsg.sessionId}`
       : `user:${chatMsg.userId}:history:${chatMsg.historyId}`;
     const controller = new AbortController();
-    registeredTurns.set(chatMsg.historyId, { chatMsg, controller });
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        void deps.onCancellationObserved?.(chatMsg).catch(() => {
+          deps.logger.warn(
+            `[RABBITMQ_CONSUMER] Cannot persist cancellation receipt: historyId=${chatMsg.historyId}`,
+          );
+        });
+      },
+      { once: true },
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const poll = async (): Promise<void> => {
+      if (settled || controller.signal.aborted || !deps.isCancellationRequested) {
+        return;
+      }
+      try {
+        if (await deps.isCancellationRequested(chatMsg)) {
+          controller.abort();
+        }
+      } catch {
+        deps.logger.warn(
+          `[RABBITMQ_CONSUMER] Cancellation check unavailable: historyId=${chatMsg.historyId}; retrying`,
+        );
+      } finally {
+        if (!settled && !controller.signal.aborted) {
+          timer = setTimeout(() => {
+            void poll();
+          }, deps.cancellationPollMs ?? 2_000);
+          timer.unref?.();
+        }
+      }
+    };
     const pendingCancel = pendingCancels.get(chatMsg.historyId);
     if (pendingCancel) {
       pendingCancels.delete(chatMsg.historyId);
@@ -124,14 +171,40 @@ export function createMessageConsumer(
         );
       }
     }
-    return enqueue(lane, async () => {
+    const completion = enqueue(lane, async () => {
       try {
+        // Fail closed before startup. A DB outage must not launch a turn whose
+        // cancellation intent cannot be checked. Runtime checks keep retrying.
+        while (!controller.signal.aborted && deps.isCancellationRequested) {
+          try {
+            if (await deps.isCancellationRequested(chatMsg)) {
+              controller.abort();
+            }
+            break;
+          } catch {
+            deps.logger.warn(
+              `[RABBITMQ_CONSUMER] Waiting for cancellation state before startup: historyId=${chatMsg.historyId}`,
+            );
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, deps.cancellationPollMs ?? 2_000),
+            );
+          }
+        }
         await deps.runChat(chatMsg, controller.signal);
       } finally {
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
         if (registeredTurns.get(chatMsg.historyId)?.controller === controller) {
           registeredTurns.delete(chatMsg.historyId);
         }
       }
     });
+    registeredTurns.set(chatMsg.historyId, { chatMsg, controller, completion });
+    if (deps.isCancellationRequested) {
+      void poll();
+    }
+    return completion;
   };
 }

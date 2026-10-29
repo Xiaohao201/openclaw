@@ -1,3 +1,4 @@
+import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginLogger, PluginRuntime } from "../api.js";
 import { ReportGenerator, salvageStreamedReport } from "./generator.js";
@@ -57,6 +58,109 @@ const baseOptions = {
 };
 
 describe("ReportGenerator.generate report extraction", () => {
+  it("routes report cancellation to the canonical executing session", async () => {
+    const runtime = runtimeWith([]);
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    const handle = {
+      cancel,
+      abort: vi.fn(),
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+    };
+    const sessionId = "probe-report-stop";
+    let sessionKey = "";
+    vi.spyOn(runtime.subagent, "run").mockImplementation(async (params) => {
+      sessionKey = params.sessionKey;
+      expect(sessionKey).toMatch(/^agent:report-default:report-plan:/);
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      return { runId: "report-stop-run" };
+    });
+    vi.spyOn(runtime.subagent, "waitForRun").mockImplementation(async () => {
+      controller.abort();
+      return { status: "ok" };
+    });
+    try {
+      const generator = new ReportGenerator(runtime, {
+        agents: { list: [{ id: "report-default", default: true }] },
+      });
+      await expect(
+        generator.generate({ ...baseOptions, abortSignal: controller.signal }, logger),
+      ).rejects.toBeDefined();
+      expect(cancel).toHaveBeenCalledWith("user_abort");
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+
+  it("keeps cancellation pending until the planning run confirms its exit", async () => {
+    const runtime = runtimeWith([]);
+    const controller = new AbortController();
+    let settle!: () => void;
+    const terminal = new Promise<{ status: "ok" }>((resolve) => {
+      settle = () => resolve({ status: "ok" });
+    });
+    const wait = vi
+      .spyOn(runtime.subagent, "waitForRun")
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        return { status: "timeout" };
+      })
+      .mockImplementationOnce(() => terminal);
+    const collectStats = vi.fn(async () => nonEmptyStats);
+    let settled = false;
+    const generation = new ReportGenerator(runtime).generate(
+      { ...baseOptions, collectStats, abortSignal: controller.signal },
+      logger,
+    );
+    const observed = generation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => expect(wait).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    expect(settled).toBe(false);
+    expect(collectStats).not.toHaveBeenCalled();
+    settle();
+    await observed;
+    await expect(generation).rejects.toBeDefined();
+  });
+
+  it("does not start a report after cancellation", async () => {
+    const runtime = runtimeWith([]);
+    const run = vi.spyOn(runtime.subagent, "run");
+    const generator = new ReportGenerator(runtime);
+    await expect(
+      generator.generate({ ...baseOptions, abortSignal: AbortSignal.abort() }, logger),
+    ).rejects.toBeDefined();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("does not launch writing when cancelled during statistics collection", async () => {
+    const runtime = runtimeWith([]);
+    const run = vi.spyOn(runtime.subagent, "run");
+    const controller = new AbortController();
+    const generator = new ReportGenerator(runtime);
+    await expect(
+      generator.generate(
+        {
+          ...baseOptions,
+          abortSignal: controller.signal,
+          collectStats: async () => {
+            controller.abort();
+            return nonEmptyStats;
+          },
+        },
+        logger,
+      ),
+    ).rejects.toBeDefined();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("stores the report body even when a newer closing remark follows it", async () => {
     // Regression: download.content used to receive the agent's trailing
     // conversational remark instead of the report, because the report opened

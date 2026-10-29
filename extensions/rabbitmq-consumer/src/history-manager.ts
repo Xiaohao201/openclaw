@@ -127,6 +127,16 @@ export class HistoryManager {
     );
   }
 
+  /** Read durable intent from the writer, scoped to the exact task owner. */
+  async isCancellationRequested(chatMsg: ChatMessage): Promise<boolean> {
+    const [rows] = await this.getWriterPool().execute<mysql.RowDataPacket[]>({
+      sql: `SELECT JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID(metadata) THEN metadata ELSE JSON_OBJECT() END, '$.cancelRequested')) AS requested FROM ${this.tableSql} WHERE id = ? AND user_id = ? AND session_id = ? LIMIT 1`,
+      values: [chatMsg.historyId, chatMsg.userId, chatMsg.sessionId],
+      timeout: 3_000,
+    });
+    return rows[0]?.requested === "true";
+  }
+
   /** Fetch a history record by ID. Returns null if not found. */
   async getRecord(historyId: number, context?: HistoryDbContext): Promise<HistoryRecord | null> {
     const [rows] = await retryHistoryDbOperation(

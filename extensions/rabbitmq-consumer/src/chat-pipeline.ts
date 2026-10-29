@@ -191,6 +191,7 @@ async function matchRequirementTopic(
   userId: string,
   runtime?: PluginRuntime,
   token?: string | number,
+  cancellation?: Pick<ChatTurnOptions, "abortSignal" | "abortRun">,
 ): Promise<TopicInfo | null> {
   if (runtime && token !== undefined) {
     const llmMatch = await pickTopicByLlm({
@@ -200,6 +201,7 @@ async function matchRequirementTopic(
       userId,
       token,
       logger,
+      ...cancellation,
     });
     if (llmMatch) {
       logger.info(
@@ -231,12 +233,16 @@ async function resolveReportTopic(args: {
   runtime?: PluginRuntime;
   /** Uniqueness token for the picker's isolated session (e.g. historyId). */
   token?: string | number;
+  cancellation?: Pick<ChatTurnOptions, "abortSignal" | "abortRun">;
 }): Promise<{ topicId: number; useSlaveTopic: boolean; masterId: number }> {
   const { userId, topicResolver, logger, requirement, runtime, token } = args;
   if (!topicResolver) {
     return { topicId: 0, useSlaveTopic: false, masterId: 0 };
   }
-  const resolution = await topicResolver.getTopicIdsByUser(userId);
+  const resolution = await topicResolver.getTopicIdsByUser(
+    userId,
+    ...(args.cancellation?.abortSignal ? [args.cancellation.abortSignal] : []),
+  );
 
   // Default: the user's primary (most recently granted) topic.
   let chosen = {
@@ -254,6 +260,7 @@ async function resolveReportTopic(args: {
       userId,
       runtime,
       token,
+      args.cancellation,
     );
     if (match && match.topicId !== chosen.topicId) {
       logger.info(
@@ -288,6 +295,9 @@ async function resolveReportTopic(args: {
  * Always emits a Mercure `done` so the frontend unlocks.
  */
 interface EnqueueReportTaskArgs {
+  onCreated?: (taskId: number) => Promise<void>;
+  onCreating?: () => Promise<void>;
+  abortSignal?: AbortSignal;
   period: ReportPeriod;
   requirement: string;
   dateScope: { start: string; end: string };
@@ -332,6 +342,9 @@ async function enqueueReportTask(args: EnqueueReportTaskArgs): Promise<number> {
   } = args;
 
   const uid = parseInt(chatMsg.userId, 10) || 0;
+  args.abortSignal?.throwIfAborted();
+  // Register before making the task visible to the independent report poller.
+  await args.onCreating?.();
   const taskId = await downloadManager.createReportTask({
     uid,
     topicId,
@@ -350,6 +363,7 @@ async function enqueueReportTask(args: EnqueueReportTaskArgs): Promise<number> {
     // inherits its workspace, DB skills, and schema knowledge.
     agentId: `rabbitmq-${chatMsg.userId}`,
   });
+  await args.onCreated?.(taskId);
   logger.info(`[CHAT_PIPELINE] Created report task #${taskId} for user ${uid}`);
 
   // Let the frontend open a report card for this taskId right away; progress
@@ -548,6 +562,12 @@ export async function processChatMessage(
       `[CHAT_PIPELINE] Cancellation confirmed: historyId=${chatMsg.historyId}, runId=${runId ?? "not-started"}`,
     );
   };
+  const finishCancelledBeforeRun = async () => {
+    await confirmCancellation();
+    await saveResponse("输出已暂停。");
+    await mercure.pushDone(mercureTopic, chatMsg.historyId);
+    return "输出已暂停。";
+  };
   let failureNotification: Promise<void> | undefined;
   const notifyFailure = (message: string) =>
     (failureNotification ??= notifyChatFailure({
@@ -691,6 +711,28 @@ export async function processChatMessage(
     }
     stage = "prepare";
 
+    let storedMetadata: unknown = record.metadata;
+    if (typeof storedMetadata === "string") {
+      try {
+        storedMetadata = JSON.parse(storedMetadata);
+      } catch {
+        storedMetadata = null;
+      }
+    }
+    if (
+      storedMetadata &&
+      typeof storedMetadata === "object" &&
+      (storedMetadata as Record<string, unknown>).cancelRequested === true
+    ) {
+      options = { ...options, abortSignal: AbortSignal.abort() };
+    }
+    if (options?.abortSignal?.aborted) {
+      await confirmCancellation();
+      await saveResponse("输出已暂停。");
+      await mercure.pushDone(mercureTopic, chatMsg.historyId);
+      return "输出已暂停。";
+    }
+
     // Step 2: Idempotency check
     if (record.response) {
       logger.info(`[CHAT_PIPELINE] Record ${chatMsg.historyId} already has response, skipping`);
@@ -777,7 +819,15 @@ export async function processChatMessage(
       dateScope: { start: string; end: string };
     } | null = null;
     if (chatMsg.templateId && templateLookup) {
-      const tpl = await templateLookup.resolve(chatMsg.templateId, userId, logger);
+      const tpl = await templateLookup.resolve(
+        chatMsg.templateId,
+        userId,
+        logger,
+        ...(options?.abortSignal ? [options.abortSignal] : []),
+      );
+      if (options?.abortSignal?.aborted) {
+        return await finishCancelledBeforeRun();
+      }
       if (tpl && chatMsg.hasAttachment) {
         // Attachment overrides the internal-DB report: the user uploaded the
         // data to analyze, so we keep the template as a FORMAT guide (injected
@@ -800,7 +850,11 @@ export async function processChatMessage(
           requirement: intentText,
           runtime,
           token: chatMsg.historyId,
+          cancellation: options,
         });
+        if (options?.abortSignal?.aborted) {
+          return await finishCancelledBeforeRun();
+        }
         selectedTemplate = tpl;
         pendingReport = { tpl, topic, dateScope: computeDateScope(tpl.period) };
       } else if (tpl) {
@@ -825,7 +879,15 @@ export async function processChatMessage(
     // are simply dropped. Failure degrades to an ordinary turn (no skills).
     let selectedSkills: ResolvedSkill[] = [];
     if (!chatMsg.builtinSkillName && chatMsg.skillIds?.length && skillLookup) {
-      selectedSkills = await skillLookup.resolveMany(chatMsg.skillIds, userId, logger);
+      selectedSkills = await skillLookup.resolveMany(
+        chatMsg.skillIds,
+        userId,
+        logger,
+        ...(options?.abortSignal ? [options.abortSignal] : []),
+      );
+      if (options?.abortSignal?.aborted) {
+        return await finishCancelledBeforeRun();
+      }
       options?.onSkillsResolved?.(selectedSkills);
       if (selectedSkills.length) {
         logger.info(
@@ -850,7 +912,10 @@ export async function processChatMessage(
     auditIntent("monitoring-topic", needsTopicContext, topicReason);
     if (topicResolver && needsTopicContext) {
       try {
-        const resolution = await topicResolver.getTopicIdsByUser(userId);
+        const resolution = await topicResolver.getTopicIdsByUser(
+          userId,
+          ...(options?.abortSignal ? [options.abortSignal] : []),
+        );
         if (resolution.topicId && resolution.topicId > 0) {
           // JSON.stringify keeps the quoting deterministic even when the
           // title itself contains quotes or brackets (prompt-cache friendly).
@@ -885,9 +950,9 @@ export async function processChatMessage(
 
     if (options?.abortSignal?.aborted) {
       const stopped = "输出已暂停。";
+      await confirmCancellation();
       stage = "updateResponse";
       await saveResponse(stopped);
-      await confirmCancellation();
       stage = "notifyFrontend";
       await mercure.pushDone(mercureTopic, chatMsg.historyId);
       return stopped;
@@ -907,6 +972,7 @@ export async function processChatMessage(
           agentId,
           attachmentConfig,
           logger,
+          options?.abortSignal,
         );
       } else {
         logger.warn("[ATTACHMENT] No config available; cannot resolve workspace, skipping");
@@ -1369,9 +1435,9 @@ export async function processChatMessage(
       // Cancellation can arrive during attachment/history preparation.
       if (options?.abortSignal?.aborted) {
         const stopped = "输出已暂停。";
+        await confirmCancellation();
         await saveResponse(stopped);
         await persistTimeline("completed");
-        await confirmCancellation();
         await streamPusherCtx.streamPusher.finish();
         return stopped;
       }
@@ -1425,11 +1491,14 @@ export async function processChatMessage(
           const partialText = streamPusherCtx.streamPusher.getFullText().trim();
           const stopped =
             artifactLinks.sanitize(partialText || "输出已暂停。") + artifactLinks.deliveryLinks();
+          // Settlement is authoritative. Persist it before optional output/timeline
+          // cleanup: a failed write must not leave Stop polling forever after this
+          // consumer unregisters the turn and can no longer handle a retry.
+          await confirmCancellation(runResult.runId);
           stage = "updateResponse";
           await saveResponse(stopped);
           stage = "finalize";
           await persistTimeline("completed");
-          await confirmCancellation(runResult.runId);
           await persistUsage();
           stage = "notifyFrontend";
           await streamPusherCtx.streamPusher.finish();
@@ -1575,9 +1644,22 @@ export async function processChatMessage(
       // report. This opens the frontend report card (`report_created`) before the
       // `done` below, and the report itself streams in later as a `report` event.
       // Enqueue is a fast INSERT + publish; it never blocks on the data COUNT.
-      if (pendingReport && downloadManager) {
+      if (pendingReport && downloadManager && !options?.abortSignal?.aborted) {
         try {
           await enqueueReportTask({
+            abortSignal: options?.abortSignal,
+            onCreating: () =>
+              historyManager.updateMetadata(
+                chatMsg.historyId,
+                { cancelChildReportState: "running" },
+                historyDbContext,
+              ),
+            onCreated: (taskId) =>
+              historyManager.updateMetadata(
+                chatMsg.historyId,
+                { cancelChildReportTaskId: taskId },
+                historyDbContext,
+              ),
             period: pendingReport.tpl.period,
             // The user's typed text becomes the requirement; it may just be the
             // template name when they only clicked the template without editing.
@@ -1635,6 +1717,9 @@ export async function processChatMessage(
   } catch (error) {
     // A socket reset can originate in MySQL, an agent RPC or another dependency;
     // its code alone says nothing about the browser's connection.
+    if (stage === "prepare" && options?.abortSignal?.aborted) {
+      return await finishCancelledBeforeRun();
+    }
     logger.error(`[CHAT_PIPELINE] Turn failed: ${failureContext(error)}`);
     const failedStage = stage;
     const message =
