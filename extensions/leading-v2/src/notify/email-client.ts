@@ -26,6 +26,9 @@ function getTransport(cfg: SmtpConfig): nodemailer.Transporter {
       port: cfg.port,
       secure: cfg.port === 465, // implicit TLS on 465; STARTTLS otherwise
       auth: { user: cfg.user, pass: cfg.password },
+      connectionTimeout: 30_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 60_000,
     });
     cachedKey = key;
   }

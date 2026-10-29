@@ -93,6 +93,8 @@ Docs: https://docs.openclaw.ai
 
 - Suheng/search: align internal-project and public-corpus tool guidance around evidence reuse, preserve minute-level monitoring windows and explicit data sources, distinguish capped and incomplete counts, and bound full-text throttling retries with cancellation support.
 
+- Email: correct OSS output date directories without reading session history, preventing runtime-scope errors from blocking SMTP delivery; distinguish content and SMTP failures and bound SMTP timeouts.
+
 ## 2026.4.15
 
 ### Changes
