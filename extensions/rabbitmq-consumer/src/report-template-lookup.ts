@@ -1,6 +1,7 @@
 import type mysql from "mysql2/promise";
 import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type { PluginLogger } from "../api.js";
+import { cancellableRead } from "./cancellable-read.js";
 import type { ReportPeriod } from "./report-period.js";
 import type { HistoryDbConfig } from "./types.js";
 
@@ -63,10 +64,12 @@ export class ReportTemplateLookup {
     templateId: number,
     userId: string,
     logger: PluginLogger,
+    signal?: AbortSignal,
   ): Promise<ResolvedTemplate | null> {
     try {
       const pool = await this.getPool();
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      const [rows] = await cancellableRead(
+        pool,
         `SELECT id, period, name, content, description
          FROM report_template
          WHERE id = ?
@@ -74,6 +77,7 @@ export class ReportTemplateLookup {
            AND (user_id = ? OR user_id IS NULL)
          LIMIT 1`,
         [templateId, userId],
+        signal,
       );
 
       const row = rows[0];

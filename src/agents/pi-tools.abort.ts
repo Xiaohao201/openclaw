@@ -2,6 +2,7 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { linkRunAbortResources } from "./run-abort-resources.js";
 
 function throwAbortError(): never {
   const err = new Error("Aborted");
@@ -60,6 +61,9 @@ export function wrapToolWithAbortSignal(
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const combined = combineAbortSignals(signal, abortSignal);
+      if (combined) {
+        linkRunAbortResources(combined, abortSignal);
+      }
       if (combined?.aborted) {
         throwAbortError();
       }

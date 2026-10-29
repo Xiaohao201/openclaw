@@ -99,6 +99,7 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../..
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { waitForRunAbortResources } from "../../run-abort-resources.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -1584,6 +1585,7 @@ export async function runEmbeddedAttempt(
           }
         }
       };
+      let userAbortSettlement: Promise<void> | undefined;
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -1595,7 +1597,13 @@ export async function runEmbeddedAttempt(
           runAbortController.abort(reason);
         }
         abortCompaction();
-        void activeSession.abort();
+        const settlement = activeSession.abort();
+        if (reason === "user_abort") {
+          userAbortSettlement = settlement;
+        }
+        void settlement.catch((error) =>
+          log.warn(`agent abort settlement failed: ${String(error)}`),
+        );
       };
       idleTimeoutTrigger = (error) => {
         idleTimedOut = true;
@@ -1686,8 +1694,8 @@ export async function runEmbeddedAttempt(
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
-        cancel: () => {
-          abortRun();
+        cancel: (reason) => {
+          abortRun(false, reason);
         },
         abort: abortRun,
       };
@@ -2441,6 +2449,15 @@ export async function runEmbeddedAttempt(
             });
         }
       } finally {
+        // Do not publish a terminal run while its tools are still unwinding.
+        if (userAbortSettlement) {
+          await waitForRunAbortResources(runAbortController.signal);
+          try {
+            await userAbortSettlement;
+          } catch (error) {
+            promptError ??= error;
+          }
+        }
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);

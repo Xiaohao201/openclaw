@@ -1,0 +1,361 @@
+diff --git a/components/lobster/ChatPanel.vue b/components/lobster/ChatPanel.vue
+index 5f32c272..40213d3a 100644
+--- a/components/lobster/ChatPanel.vue
++++ b/components/lobster/ChatPanel.vue
+@@ -1339,7 +1339,7 @@ watch(() => messages.value.length, () => scrollToBottom())
+             class="send-btn"
+             :class="{ 'is-stopping': isLoading }"
+           >
+-            <template v-if="isLoading"><span class="stop-icon">■</span> {{ isStopping ? '正在停止…' : stopError ? '重试停止' : '暂停输出' }}</template>
++            <template v-if="isLoading"><span class="stop-icon">■</span> {{ isStopping ? '正在停止…' : stopError ? '自动跟进中' : '暂停输出' }}</template>
+             <template v-else>{{ hasUploading ? '解析中' : '发送' }}</template>
+           </el-button>
+           <span v-if="stopError" role="alert">{{ stopError }}</span>
+diff --git a/composables/useLobsterChat.ts b/composables/useLobsterChat.ts
+index f012af71..90467194 100644
+--- a/composables/useLobsterChat.ts
++++ b/composables/useLobsterChat.ts
+@@ -251,6 +251,7 @@ type ActiveTurn = {
+   stopPromise?: Promise<void>
+   stopResult?: { status?: string; response?: string; error?: string; steps?: ActivityStep[] }
+   checkingRestoredStop?: boolean
++  stopRetryTimer?: ReturnType<typeof setTimeout>
+ }
+ 
+ // POST 返回 historyId 后才能精确停止后端任务。因此暂停发生在 POST 阶段时，
+@@ -266,7 +267,7 @@ const stoppedHistoryIds = new Set<number>()
+ const turnTeardowns = new Map<number, Set<() => void>>()
+ 
+ const STOP_CONFIRMATION_TIMEOUT_MS = 30_000
+-const STOP_UNCONFIRMED_MESSAGE = '尚未确认任务中止，旧任务可能仍在运行，请点击“重试停止”。'
++const STOP_UNCONFIRMED_MESSAGE = '输出已暂停，尚未确认任务中止；系统正在自动跟进，无需重复点击。'
+ 
+ const stopBackendTurn = (turn: ActiveTurn): Promise<void> => {
+   if (turn.stopPromise) return turn.stopPromise
+@@ -298,6 +299,7 @@ const stopBackendTurn = (turn: ActiveTurn): Promise<void> => {
+         query: { historyId: turn.historyId }, timeout: 5_000, retry: 0, signal: controller.signal,
+       })
+       controller.signal.throwIfAborted()
++      turn.stopResult = status
+       if (status.status === 'cancelled' || status.status === 'completed' || status.status === 'failed') {
+         turn.stopResult = status
+         return
+@@ -466,6 +468,7 @@ export function useLobsterChat() {
+       return
+     }
+     if (turn.stopPromise) return
++    if (turn.stopRetryTimer) { clearTimeout(turn.stopRetryTimer); turn.stopRetryTimer = undefined }
+     isStopping.value = true
+     stopError.value = ''
+     try {
+@@ -477,7 +480,14 @@ export function useLobsterChat() {
+       }
+     } catch (error) {
+       console.error('[lobster] Failed to stop backend chat turn', error)
+-      if (activeTurn === turn) stopError.value = STOP_UNCONFIRMED_MESSAGE
++      if (activeTurn === turn) {
++        stopError.value = turn.stopResult?.error || STOP_UNCONFIRMED_MESSAGE
++        turn.stopRetryTimer = setTimeout(() => {
++          turn.stopRetryTimer = undefined
++          if (activeTurn === turn && turn.stopped) void completeStop(turn)
++        }, 5_000)
++        ;(turn.stopRetryTimer as unknown as { unref?: () => void }).unref?.()
++      }
+     } finally {
+       if (!activeTurn || activeTurn === turn) isStopping.value = false
+     }
+@@ -506,6 +516,13 @@ export function useLobsterChat() {
+       // Keep the explicit retry available; absence of confirmation is not success.
+     } finally {
+       turn.checkingRestoredStop = false
++      if (activeTurn === turn && !turn.stopPromise && !turn.stopRetryTimer) {
++        turn.stopRetryTimer = setTimeout(() => {
++          turn.stopRetryTimer = undefined
++          if (activeTurn === turn) void checkRestoredStop(turn)
++        }, 5_000)
++        ;(turn.stopRetryTimer as unknown as { unref?: () => void }).unref?.()
++      }
+     }
+   }
+   const sessionId = useState<string>('lobster-chat-session', () => '')
+@@ -824,8 +841,8 @@ export function useLobsterChat() {
+         target.stepsElapsedMs = target.steps.reduce((sum, s) => sum + (s.durationMs || 0), 0)
+       }
+ 
+-      // Finish the chat bubble and unlock the input. Idempotent — the
+-      // connection stays open so report events can still arrive afterwards.
++      // Finish the chat bubble. Keep Stop available while its report child
++      // or local report typewriter is still active.
+       const finishChat = () => {
+         if (chatFinished) return
+         chatFinished = true
+@@ -834,7 +851,7 @@ export function useLobsterChat() {
+         if (target) {
+           target.isStreaming = false
+         }
+-        resolve()
++        if (reportMsgId === null || reportFinalized) resolve()
+       }
+ 
+       // Lazily create the report-card message when the "report" event arrives
+@@ -900,6 +917,7 @@ export function useLobsterChat() {
+           target.isStreaming = false
+         }
+         reportQueue = ''
++        if (chatFinished) resolve()
+       }
+ 
+       // Allow the next sendMessage (or unmount) to dispose this connection:
+@@ -1133,12 +1151,14 @@ export function useLobsterChat() {
+               if (!matchesReportTask(data)) break
+               hasStreamActivity = true
+               bindReportTask(data)
+-              finishChat()
+               if (!data.content) {
++                finalizeReport()
++                finishChat()
+                 eventSource.close()
+                 break
+               }
+               const id = ensureReportMessage(data.title)
++              finishChat()
+               const target = messages.value.find((m) => m.id === id)
+               if (target) {
+                 // Generation finished — swap the activity label back while the
+diff --git a/server/api/lobster/chat/stop.post.ts b/server/api/lobster/chat/stop.post.ts
+index 28f950e3..4238aec8 100644
+--- a/server/api/lobster/chat/stop.post.ts
++++ b/server/api/lobster/chat/stop.post.ts
+@@ -1,6 +1,6 @@
+-import { enqueueLobsterChatCancel } from '~/server/utils/lobster-chat-queue'
++import { recordChatCancellation } from '~/server/utils/lobster-cancellation-store'
+ import { getAuthoritativeLobsterIdentity } from '~/server/utils/lobster-credits'
+-import { getHistoryMessageForUser, markHistoryCancellation } from '~/server/utils/mysql'
++import { getHistoryMessageForUser, useWriterMySQL } from '~/server/utils/mysql'
+ import { extractResponseText } from '~/server/utils/lobster-response'
+ 
+ export default defineEventHandler(async (event) => {
+@@ -35,24 +35,17 @@ export default defineEventHandler(async (event) => {
+   if (typeof metadata === 'string') {
+     try { metadata = JSON.parse(metadata) } catch { metadata = null }
+   }
+-  if (metadata?.cancellationStatus === 'cancelled') {
++  if (metadata?.cancelChildReportState !== 'running' && metadata?.cancellationStatus === 'cancelled') {
+     return { code: 'success', status: 'cancelled', historyId }
+   }
+-  if (metadata?.completionStatus === 'completed') {
++  if (metadata?.cancelChildReportState !== 'running' && metadata?.completionStatus === 'completed') {
+     return { code: 'success', status: 'completed', historyId, response: extractResponseText(row.response) }
+   }
+ 
+-  if (metadata?.completionStatus === 'failed') {
++  if (metadata?.cancelChildReportState !== 'running' && metadata?.completionStatus === 'failed') {
+     return { code: 'success', status: 'failed', historyId, response: extractResponseText(row.response), error: '本次任务执行失败，请稍后重试。' }
+   }
+ 
+-  await enqueueLobsterChatCancel({
+-    id: historyId,
+-    session_id: sessionId,
+-    user_id: userId,
+-  })
+-
+-  await markHistoryCancellation(historyId, userId)
+-
+-  return { code: 'success', status: 'cancelling', historyId }
++  const status = await recordChatCancellation(useWriterMySQL(), historyId, userId, sessionId)
++  return { code: 'success', status, historyId }
+ })
+diff --git a/server/api/lobster/deferred-chat-status.get.ts b/server/api/lobster/deferred-chat-status.get.ts
+index 19617e1d..983535b2 100644
+--- a/server/api/lobster/deferred-chat-status.get.ts
++++ b/server/api/lobster/deferred-chat-status.get.ts
+@@ -25,18 +25,24 @@ export default defineEventHandler(async (event) => {
+   if (typeof metadata === 'string') {
+     try { metadata = JSON.parse(metadata) } catch { metadata = null }
+   }
+-  if (metadata?.completionStatus === 'completed' && metadata?.cancellationStatus !== 'cancelled') {
++  if (metadata?.cancelChildReportState !== 'running' && metadata?.cancelChildReportState !== 'cancelled' && metadata?.completionStatus === 'completed' && metadata?.cancellationStatus !== 'cancelled') {
+     return { code: 'success', historyId, status: 'completed', response: extractResponseText(row.response), steps }
+   }
+   // A late cancellation intent cannot reopen a settled failed run.
+-  if (metadata?.completionStatus === 'failed' && metadata?.cancellationStatus !== 'cancelled') {
++  if (metadata?.cancelChildReportState !== 'running' && metadata?.cancelChildReportState !== 'cancelled' && metadata?.completionStatus === 'failed' && metadata?.cancellationStatus !== 'cancelled') {
+     return { code: 'success', historyId, status: 'failed', response: extractResponseText(row.response), error: '本次任务执行失败，请稍后重试。', steps: steps.map(step => ({ ...step, status: step.status === 'running' ? 'failed' : step.status })) }
+   }
+   if (metadata?.cancelRequested === true || metadata?.cancellationStatus === 'cancelled') {
+     const response = extractResponseText(row.response)
+-    const confirmed = metadata?.cancellationStatus === 'cancelled'
++    const confirmed = metadata?.cancelChildReportState !== 'running' && (metadata?.cancellationStatus === 'cancelled' || metadata?.cancelChildReportState === 'cancelled')
++    const requestedAt = Date.parse(metadata?.cancelRequestedAt || '')
++    const overdue = !confirmed && Number.isFinite(requestedAt) && Date.now() - requestedAt >= 30_000
++    const error = overdue
++      ? (metadata?.cancelObservedAt ? '输出已暂停，执行器已收到取消，正在等待运行或工具退出；系统会继续自动跟进。' : '输出已暂停，尚未收到执行器的停止确认，可能正在排队或连接中断；系统会继续自动跟进。')
++      : undefined
+     return {
+       code: 'success', historyId, status: confirmed ? 'cancelled' : 'cancelling', response,
++      ...(error ? { error } : {}),
+       steps: steps.map(step => ({ ...step, status: confirmed && step.status === 'running' ? 'cancelled' : step.status })),
+     }
+   }
+diff --git a/server/utils/lobster-chat-queue.ts b/server/utils/lobster-chat-queue.ts
+index 6ee5451c..910fc603 100644
+--- a/server/utils/lobster-chat-queue.ts
++++ b/server/utils/lobster-chat-queue.ts
+@@ -1,4 +1,5 @@
+ import { useRabbitMQ } from './rabbitmq'
++import { publishConfirmedCancellation } from './lobster-cancel-publisher'
+ 
+ export type LobsterChatQueuePayload = {
+   id: number
+@@ -48,5 +49,7 @@ export const enqueueLobsterChatPayload = async (
+ export const enqueueLobsterChatCancel = async (
+   payload: Omit<LobsterChatCancelPayload, 'type'>,
+ ): Promise<void> => {
+-  await publishLobsterPayload({ type: 'cancel', ...payload }, { control: true })
++  const config = useRuntimeConfig()
++  const queue = ((config.rabbitmqQueue as string) || 'MessageProxy') + '.control'
++  await publishConfirmedCancellation(queue, { type: 'cancel', ...payload })
+ }
+diff --git a/server/utils/lobster-session-stream.test.ts b/server/utils/lobster-session-stream.test.ts
+index 03844591..ff6a31fc 100644
+--- a/server/utils/lobster-session-stream.test.ts
++++ b/server/utils/lobster-session-stream.test.ts
+@@ -19,6 +19,7 @@ function setup(initialUrl?: string) {
+   const histories = new Map<string, any[]>()
+   const intervals = new Set<() => void>()
+   const deadlines = new Set<() => void>()
++  const retries = new Set<() => void>()
+   let fetchHistory = async (sid: string) => histories.get(sid) || []
+   let deferredStatus = async (): Promise<any> => ({ status: 'completed', response: '视频分析完成' })
+   let stop = async (): Promise<any> => ({ status: 'cancelled' })
+@@ -41,11 +42,12 @@ function setup(initialUrl?: string) {
+   const context = vm.createContext({
+     exports, console, EventSource, AbortController, computed,
+     setTimeout: (fn: () => void, ms: number) => {
++      if (ms === 5_000) { retries.add(fn); return fn }
+       if (ms === 30_000) { deadlines.add(fn); return fn }
+       return setTimeout(fn, ms)
+     },
+     clearTimeout: (timer: any) => {
+-      if (deadlines.delete(timer)) return
++      if (deadlines.delete(timer) || retries.delete(timer)) return
+       clearTimeout(timer)
+     },
+     window: { location, history: { state: {}, replaceState: (_state: unknown, _title: string, target: string) => replace(target) } },
+@@ -80,7 +82,7 @@ function setup(initialUrl?: string) {
+   const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+   const history = (id: number, role: string, content: string) => ({ id, role, content, createdAt: '2026-09-11T00:00:00Z' })
+   histories.set('B', [history(60, 'user', '另一个会话')])
+-  return { chat, streams, histories, tick, history, intervals, deadlines, location, currentRoute,
++  return { chat, streams, histories, tick, history, intervals, deadlines, retries, location, currentRoute,
+     setPost: (fn: typeof post) => { post = fn },
+     setStop: (fn: typeof stop) => { stop = fn },
+     setToken: (fn: typeof token) => { token = fn },
+@@ -733,3 +735,41 @@ test('restored cancellation accepts failed settlement without sending another st
+   assert.equal(bubble.cancelled, false)
+   assert.equal(bubble.pendingHistoryId, undefined)
+ })
++
++
++test('lost stop response retries automatically without a second click', async () => {
++  const { chat, tick, setStop, retries } = setup()
++  setStop(async () => { throw new Error('offline') })
++  const sending = chat.sendMessage('停止测试')
++  await tick()
++  chat.stopGeneration()
++  await sending
++  await tick()
++  assert.equal(chat.isLoading.value, true)
++  assert.equal(retries.size, 1)
++  setStop(async () => ({ status: 'cancelled' }))
++  for (const retry of [...retries]) { retries.delete(retry); retry() }
++  await tick()
++  assert.equal(chat.isLoading.value, false)
++  assert.equal(chat.stopError.value, '')
++})
++
++
++test('Stop remains available after chat done while its report child is running', async () => {
++  const { chat, streams, tick } = setup()
++  const sending = chat.sendMessage('生成报告')
++  await tick()
++  streams[0].emit({ type: 'report_created', taskId: 100 })
++  streams[0].emit({ type: 'done', historyId: 10 })
++  await tick()
++  assert.equal(chat.isLoading.value, true)
++  chat.stopGeneration()
++  await sending
++  await tick()
++  assert.equal(chat.isLoading.value, false)
++  const card = chat.messages.value.find((m: any) => m.kind === 'report')
++  assert.equal(card.isStreaming, false)
++  const before = card.content
++  streams[0].emit({ type: 'report', taskId: 100, content: '迟到的报告' })
++  assert.equal(card.content, before)
++})
+diff --git a/server/utils/lobster-stop-api.test.ts b/server/utils/lobster-stop-api.test.ts
+index e87e3418..64c7d4b2 100644
+--- a/server/utils/lobster-stop-api.test.ts
++++ b/server/utils/lobster-stop-api.test.ts
+@@ -15,7 +15,11 @@ function setup(row: any, failQueue = false) {
+     require: (id: string) => {
+       if (id.endsWith('/lobster-credits')) return { getAuthoritativeLobsterIdentity: async () => ({ userId: '1' }) }
+       if (id.endsWith('/lobster-response')) return { extractResponseText: (value: unknown) => typeof value === 'string' ? value : '' }
++      if (id.endsWith('/lobster-cancellation-store')) return {
++        recordChatCancellation: async (_pool: unknown, id: number, user: string, session: string) => { calls.push(['persist', id, user, session]); return 'cancelling' },
++      }
+       if (id.endsWith('/mysql')) return {
++        useWriterMySQL: () => ({}),
+         getHistoryMessageForUser: async (...args: any[]) => { calls.push(['read', ...args]); return row },
+         markHistoryCancellation: async (...args: any[]) => { calls.push(['mark', ...args]) },
+       }
+@@ -34,18 +38,18 @@ function setup(row: any, failQueue = false) {
+ test('stop authorizes the exact turn, dispatches cancellation and persists its terminal intent', async () => {
+   const { run, calls } = setup({ sessionId: 'A' })
+   assert.equal((await run()).status, 'cancelling')
+-  assert.deepEqual(calls, [['read', 10, '1'], ['cancel', 10, '1', 'A'], ['mark', 10, '1']])
++  assert.deepEqual(calls, [['read', 10, '1'], ['persist', 10, '1', 'A']])
+ })
+ 
+-test('stop cannot cancel another owner or session, nor persist a failed dispatch as stopped', async () => {
++test('stop rejects another owner or session and accepts durable intent while broker is offline', async () => {
+   for (const row of [null, { sessionId: 'B' }]) {
+     const { run, calls } = setup(row)
+     await assert.rejects(run, (error: any) => [403, 404].includes(error.statusCode))
+     assert.equal(calls.length, 1)
+   }
+   const { run, calls } = setup({ sessionId: 'A' }, true)
+-  await assert.rejects(run, /queue unavailable/)
+-  assert.equal(calls.length, 1)
++  assert.equal((await run()).status, 'cancelling')
++  assert.deepEqual(calls, [['read', 10, '1'], ['persist', 10, '1', 'A']])
+ })
+ 
+ test('confirmed cancellation is idempotent and is not dispatched again', async () => {
+diff --git a/server/utils/lobster-stop-sync-entry.test.ts b/server/utils/lobster-stop-sync-entry.test.ts
+index b9bf57bd..3064b28d 100644
+--- a/server/utils/lobster-stop-sync-entry.test.ts
++++ b/server/utils/lobster-stop-sync-entry.test.ts
+@@ -15,7 +15,7 @@ test('暂停输出同步停止夙衡后端任务', async () => {
+   assert.match(chatState, /await stopBackendTurn\(turn\)/)
+   assert.doesNotMatch(chatState, /signal: turn\.controller\.signal/)
+   assert.match(stopApi, /getHistoryMessageForUser/)
+-  assert.match(stopApi, /enqueueLobsterChatCancel/)
++  assert.match(stopApi, /recordChatCancellation/)
+   assert.match(queue, /type: 'cancel'/)
+   assert.match(queue, /`\$\{chatQueue\}\.control`/)
+ })
+diff --git a/server/utils/mysql.ts b/server/utils/mysql.ts
+index c3af6749..84e8b6fb 100644
+--- a/server/utils/mysql.ts
++++ b/server/utils/mysql.ts
+@@ -654,7 +654,8 @@ export async function insertHistoryMessage(params: {
+ 
+ /** Read one chat turn by id and owner; used by deferred media status polling. */
+ export async function getHistoryMessageForUser(id: number, userId: string | number) {
+-  const conn = useHistoryMySQL()
++  // Stop confirmation must not read stale metadata from a replica.
++  const conn = useWriterMySQL()
+   const [rows] = await conn.execute<mysql.RowDataPacket[]>(
+     `SELECT id, session_id AS sessionId, user_id AS userId, message, response, metadata, created_at AS createdAt
+      FROM history_messages

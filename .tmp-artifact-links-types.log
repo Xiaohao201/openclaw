@@ -1,0 +1,7 @@
+
+> openclaw@2026.4.16 tsgo D:\部署程序\ibtai\openclaw
+> node scripts/run-tsgo.mjs
+
+[tsgo] queued behind the local heavy-check lock held by test, pid 80772, cwd D:\部署程序\ibtai\openclaw...
+(node:101656) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)

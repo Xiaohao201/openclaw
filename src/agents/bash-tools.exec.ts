@@ -52,6 +52,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { registerRunAbortResource } from "./run-abort-resources.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
@@ -1680,10 +1681,14 @@ export function createExecTool(
         onUpdate,
       });
 
+      if (signal) {
+        registerRunAbortResource(signal, run.promise, () => run.kill());
+      }
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
 
-      // Tool-call abort should not kill backgrounded sessions; timeouts still must.
+      // Routine tool abort preserves background jobs; explicit user Stop owns
+      // and terminates this run's jobs, including their supervised process trees.
       const onAbortSignal = () => {
         // Immediately suppress onUpdate calls so that any late stdout/stderr
         // from the still-running process cannot push a rejected Promise into
@@ -1693,7 +1698,7 @@ export function createExecTool(
         // tool_execution_update events even for backgrounded sessions (which
         // retrieve output via process poll/log instead of onUpdate callbacks).
         run.disableUpdates();
-        if (yielded || run.session.backgrounded) {
+        if ((yielded || run.session.backgrounded) && signal?.reason !== "user_abort") {
           return;
         }
         run.kill();

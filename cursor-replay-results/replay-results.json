@@ -1,0 +1,774 @@
+{
+  "method": "Local replay fixture using real ActivityTimeline.vue, both component styles, and extracted applyStep/auto-scroll functions; not a recording of the deployed page. JSONL tool calls mapped to steps; no tool commands executed.",
+  "sourceLines": [
+    360,
+    402
+  ],
+  "toolCalls": 20,
+  "textChunks": 1,
+  "events": [
+    {
+      "type": "text",
+      "text": "明白——终版面向首次阅读的领导，所有\"过程痕迹\"（新增/移出/升档/v2v3修订等表述）全部抹平。逐项清理：\n\n",
+      "time": "2026-10-29T02:54:15.053Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_bc7300f7c5084a4d869af975",
+      "index": 1,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "running",
+      "time": "2026-10-29T02:54:15.053Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_bc7300f7c5084a4d869af975",
+      "index": 1,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "completed",
+      "time": "2026-10-29T02:54:24.744Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_29df78327ea24994a1b50a20",
+      "index": 2,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:54:51.183Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_29df78327ea24994a1b50a20",
+      "index": 2,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:55:01.497Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_be90fb3339b24a2bb379bc40",
+      "index": 3,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:55:21.504Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_be90fb3339b24a2bb379bc40",
+      "index": 3,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:55:30.261Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_1275348139db484c8901a680",
+      "index": 4,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "running",
+      "time": "2026-10-29T02:55:41.897Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_1275348139db484c8901a680",
+      "index": 4,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "completed",
+      "time": "2026-10-29T02:55:51.099Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_7704b71cec8d4575bff18240",
+      "index": 5,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:56:07.029Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_7704b71cec8d4575bff18240",
+      "index": 5,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:56:17.188Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_1a19952b511b48be8583737f",
+      "index": 6,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:56:29.724Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_1a19952b511b48be8583737f",
+      "index": 6,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:56:39.025Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_21834928917e4a63829b3ac0",
+      "index": 7,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "running",
+      "time": "2026-10-29T02:56:47.020Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_21834928917e4a63829b3ac0",
+      "index": 7,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "completed",
+      "time": "2026-10-29T02:56:56.608Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_ab3d8db1bcd44ec882fbaea2",
+      "index": 8,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:57:09.542Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_ab3d8db1bcd44ec882fbaea2",
+      "index": 8,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:57:19.763Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_516b6062c83b4e4d9e3fdee9",
+      "index": 9,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "running",
+      "time": "2026-10-29T02:57:30.446Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_516b6062c83b4e4d9e3fdee9",
+      "index": 9,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "completed",
+      "time": "2026-10-29T02:57:39.301Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_2777cf793bef413abc4a6104",
+      "index": 10,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:57:48.422Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_2777cf793bef413abc4a6104",
+      "index": 10,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:58:06.820Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_1f0c9b27c479488fa2831ff0",
+      "index": 11,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "running",
+      "time": "2026-10-29T02:58:51.354Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_1f0c9b27c479488fa2831ff0",
+      "index": 11,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "completed",
+      "time": "2026-10-29T02:59:00.367Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_8ccccfbd6961416f9d5ee9b8",
+      "index": 12,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T02:59:08.041Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_8ccccfbd6961416f9d5ee9b8",
+      "index": 12,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T02:59:35.061Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_8b99715f5e12459a8e097d87",
+      "index": 13,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "running",
+      "time": "2026-10-29T02:59:46.481Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_8b99715f5e12459a8e097d87",
+      "index": 13,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "completed",
+      "time": "2026-10-29T02:59:56.040Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_f02d51d204c94eceb8a69541",
+      "index": 14,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T03:00:08.435Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_f02d51d204c94eceb8a69541",
+      "index": 14,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T03:00:19.282Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_a428375fad244958bc6fccb8",
+      "index": 15,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "running",
+      "time": "2026-10-29T03:00:30.745Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_a428375fad244958bc6fccb8",
+      "index": 15,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "completed",
+      "time": "2026-10-29T03:00:49.083Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_71697ad3cbc64de0a77485aa",
+      "index": 16,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T03:00:59.501Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_71697ad3cbc64de0a77485aa",
+      "index": 16,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T03:01:09.638Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_38d9c7c9420240189fd88665",
+      "index": 17,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "running",
+      "time": "2026-10-29T03:01:20.625Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_38d9c7c9420240189fd88665",
+      "index": 17,
+      "label": "正在编辑文件",
+      "category": "write",
+      "tool": "edit",
+      "status": "completed",
+      "time": "2026-10-29T03:01:29.224Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_01f1b6ff8a984d1eaaef6433",
+      "index": 18,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T03:01:43.097Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_01f1b6ff8a984d1eaaef6433",
+      "index": 18,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "completed",
+      "time": "2026-10-29T03:01:54.136Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_6dc30620680d426ebf1b2d23",
+      "index": 19,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "running",
+      "time": "2026-10-29T03:02:08.618Z"
+    },
+    {
+      "type": "step",
+      "phase": "end",
+      "stepId": "call_6dc30620680d426ebf1b2d23",
+      "index": 19,
+      "label": "正在写入文件",
+      "category": "write",
+      "tool": "write",
+      "status": "completed",
+      "time": "2026-10-29T03:02:17.887Z"
+    },
+    {
+      "type": "step",
+      "phase": "start",
+      "stepId": "call_301a14c04ab84f7e95337952",
+      "index": 20,
+      "label": "正在执行任务",
+      "category": "default",
+      "tool": "exec",
+      "status": "running",
+      "time": "2026-10-29T03:02:31.174Z"
+    }
+  ],
+  "results": [
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "repeat": 1,
+      "firstHidden": {
+        "eventTime": "2026-10-29T03:00:59.501Z",
+        "tool": "exec",
+        "steps": 16,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": false,
+        "cursorTop": 564,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": false,
+        "cursorTop": 664,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 179,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 485,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "repeat": 2,
+      "firstHidden": {
+        "eventTime": "2026-10-29T03:00:59.501Z",
+        "tool": "exec",
+        "steps": 16,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": false,
+        "cursorTop": 564,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": false,
+        "cursorTop": 664,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 179,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 485,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "repeat": 3,
+      "firstHidden": {
+        "eventTime": "2026-10-29T03:00:59.501Z",
+        "tool": "exec",
+        "steps": 16,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": false,
+        "cursorTop": 564,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": false,
+        "cursorTop": 664,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 179,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 485,
+        "viewportBottom": 559,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "repeat": 1,
+      "firstHidden": null,
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 739,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 739,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "repeat": 2,
+      "firstHidden": null,
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 739,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 739,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "repeat": 3,
+      "firstHidden": null,
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 739,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 739,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "repeat": 1,
+      "firstHidden": null,
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 919,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 919,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "repeat": 2,
+      "firstHidden": null,
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 919,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 919,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    },
+    {
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "repeat": 3,
+      "firstHidden": null,
+      "final": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 1,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 919,
+        "animation": "blink",
+        "contentLength": 56
+      },
+      "afterScroll": {
+        "steps": 20,
+        "isStreaming": true,
+        "scrollCalls": 2,
+        "scrollTop": 0,
+        "cursorExists": true,
+        "cursorInView": true,
+        "cursorTop": 664,
+        "viewportBottom": 919,
+        "animation": "blink",
+        "contentLength": 56
+      }
+    }
+  ]
+}

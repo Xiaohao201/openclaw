@@ -60,8 +60,21 @@ export class ReportHistoryWriter {
     return this.pool;
   }
 
+  async isCancellationRequested(historyId: number, userId: string): Promise<boolean> {
+    const [rows] = await this.getPool().execute<mysql.RowDataPacket[]>({
+      sql: "SELECT JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID(metadata) THEN metadata ELSE JSON_OBJECT() END, '$.cancelRequested')) AS requested FROM history_messages WHERE id = ? AND user_id = ? LIMIT 1",
+      values: [historyId, userId],
+      timeout: 3_000,
+    });
+    return rows[0]?.requested === "true";
+  }
+
+  async settleChild(historyId: number, state: "cancelled" | "completed" | "failed"): Promise<void> {
+    await this.mergeMetadata(historyId, { cancelChildReportState: state });
+  }
+
   /**
-   * Read-modify-write a patch into the row's `metadata` JSON, preserving keys
+   * Atomically merge a patch into the row's `metadata` JSON, preserving keys
    * other writers own (the chat pipeline's `steps`/`citations`/`usage`).
    * Returns false when the row does not exist.
    */
@@ -77,24 +90,20 @@ export class ReportHistoryWriter {
       return false;
     }
 
-    // mysql2 returns a JSON column as a parsed object (or null). Tolerate a
-    // legacy string value too, falling back to {} on any parse failure.
-    let metadata: Record<string, unknown> = {};
-    const raw = rows[0].metadata;
-    if (raw && typeof raw === "object") {
-      metadata = raw as Record<string, unknown>;
-    } else if (typeof raw === "string" && raw.trim()) {
-      try {
-        metadata = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        metadata = {};
-      }
+    // Assign only owned fields atomically; never overwrite a concurrently
+    // committed cancellation intent with a stale read-modify-write snapshot.
+    const entries = Object.entries(patch).toSorted(([a], [b]) => a.localeCompare(b));
+    if (entries.length === 0) {
+      return true;
     }
-
-    await execWithRetry(pool, "UPDATE history_messages SET metadata = ? WHERE id = ?", [
-      JSON.stringify({ ...metadata, ...patch }),
-      historyId,
-    ]);
+    await execWithRetry(
+      pool,
+      `UPDATE history_messages SET metadata = JSON_SET(CASE WHEN JSON_VALID(metadata) THEN CASE WHEN JSON_TYPE(metadata) = 'OBJECT' THEN metadata ELSE JSON_OBJECT() END ELSE JSON_OBJECT() END, ${entries.map(() => "?, CAST(? AS JSON)").join(", ")}) WHERE id = ?`,
+      [
+        ...entries.flatMap(([key, value]) => [`$.${JSON.stringify(key)}`, JSON.stringify(value)]),
+        historyId,
+      ],
+    );
     return true;
   }
 

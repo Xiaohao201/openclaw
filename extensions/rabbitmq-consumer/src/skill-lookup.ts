@@ -1,6 +1,7 @@
 import type mysql from "mysql2/promise";
 import { acquireMysqlPool } from "openclaw/plugin-sdk/mysql-pool";
 import type { PluginLogger } from "../api.js";
+import { cancellableRead } from "./cancellable-read.js";
 import type { HistoryDbConfig } from "./types.js";
 
 /** Minimal skills projection needed to inject a custom skill into the chat agent. */
@@ -99,6 +100,7 @@ export class SkillLookup {
     skillIds: number[],
     userId: string,
     logger: PluginLogger,
+    signal?: AbortSignal,
   ): Promise<ResolvedSkill[]> {
     // De-dupe + cap defensively; the producer already bounds this, but the
     // lookup must never build an unbounded IN(...) list from a rogue message.
@@ -113,13 +115,15 @@ export class SkillLookup {
     try {
       const pool = await this.getPool();
       const placeholders = ids.map(() => "?").join(", ");
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      const [rows] = await cancellableRead(
+        pool,
         `SELECT id, name, content, description
            FROM skills
           WHERE id IN (${placeholders})
             AND is_enable = 1
             AND user_id = ?`,
         [...ids, userId],
+        signal,
       );
 
       // Index resolved rows by id, then emit in the caller's requested order.
