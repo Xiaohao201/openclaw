@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import * as transcriptReaders from "./session-utils.fs.js";
+import { buildGatewaySessionRow, listSessionsFromStore } from "./session-utils.js";
 
 function createModelDefaultsConfig(params: {
   primary: string;
@@ -117,6 +118,7 @@ function listSingleSession(params: {
 
 describe("listSessionsFromStore search", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -144,6 +146,127 @@ describe("listSessionsFromStore search", () => {
       label: "discord",
       subject: "Dev Team Discussion",
     } as SessionEntry,
+  });
+
+  test.each([undefined, "wanted"])(
+    "reads transcript details only for the requested page (search=%s)",
+    (search) => {
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = Object.fromEntries(
+        Array.from({ length: 1000 }, (_, i) => [
+          `agent:main:item-${i}`,
+          {
+            sessionId: `item-${i}`,
+            updatedAt: now - i * 1000,
+            displayName: i % 2 === 0 ? "wanted" : "other",
+          },
+        ]),
+      );
+      const usage = vi
+        .spyOn(transcriptReaders, "readLatestSessionUsageFromTranscript")
+        .mockReturnValue(null);
+      const titles = vi
+        .spyOn(transcriptReaders, "readSessionTitleFieldsFromTranscript")
+        .mockReturnValue({ firstUserMessage: "Hello", lastMessagePreview: "Reply" });
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: {
+          search,
+          activeMinutes: 1,
+          limit: 20,
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+        },
+      });
+      expect(result.sessions.map((row) => row.sessionId)).toEqual(
+        Array.from({ length: 20 }, (_, i) => `item-${search ? i * 2 : i}`),
+      );
+      expect(result.sessions.every((row) => row.lastMessagePreview === "Reply")).toBe(true);
+      expect(usage).toHaveBeenCalledTimes(20);
+      expect(titles).toHaveBeenCalledTimes(20);
+    },
+  );
+
+  test("keeps cross-agent children outside the page and stable timestamp ties", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:first": { sessionId: "first", updatedAt: 10 },
+      "agent:main:second": { sessionId: "second", updatedAt: 10 },
+      "agent:other:child": {
+        sessionId: "child",
+        updatedAt: 1,
+        parentSessionKey: "agent:main:first",
+      },
+    };
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { agentId: "main", limit: 1 },
+    });
+    expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:first"]);
+    expect(result.sessions[0].childSessions).toEqual(["agent:other:child"]);
+  });
+
+  test.each(["", "origin name", "team", "missing"])(
+    "matches detail-first search and pagination results for %s",
+    (search) => {
+      const store: Record<string, SessionEntry> = {
+        ...makeStore(),
+        "agent:main:origin": {
+          sessionId: "origin",
+          updatedAt: Date.now() - 3000,
+          origin: { label: "Origin Name" },
+        },
+        "agent:main:slack:channel:team": {
+          sessionId: "group",
+          updatedAt: Date.now() - 4000,
+          channel: "slack",
+          groupChannel: "team",
+        },
+      };
+      const now = Date.now();
+      const expected = Object.entries(store)
+        .map(([key, entry]) =>
+          buildGatewaySessionRow({
+            cfg: baseCfg,
+            storePath: "/tmp/sessions.json",
+            store,
+            key,
+            entry,
+            now,
+          }),
+        )
+        .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+        .filter((row) =>
+          [row.displayName, row.label, row.subject, row.sessionId, row.key].some(
+            (field) => typeof field === "string" && field.trim().toLowerCase().includes(search),
+          ),
+        )
+        .slice(0, 2);
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { search, limit: 2 },
+      });
+      expect(result.sessions).toEqual(expected);
+    },
+  );
+
+  test("does not read transcripts when the active filter excludes all candidates", () => {
+    const usage = vi
+      .spyOn(transcriptReaders, "readLatestSessionUsageFromTranscript")
+      .mockReturnValue(null);
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: { "agent:main:old": { sessionId: "old", updatedAt: 1 } },
+      opts: { activeMinutes: 1 },
+    });
+    expect(result.sessions).toEqual([]);
+    expect(usage).not.toHaveBeenCalled();
   });
 
   test("returns all sessions when search is empty or missing", () => {

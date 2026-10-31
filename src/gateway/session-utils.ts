@@ -1109,6 +1109,26 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+function resolveSessionDisplayName(key: string, entry?: SessionEntry): string | undefined {
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  return (
+    entry?.displayName ??
+    (channel
+      ? buildGroupDisplayName({
+          provider: channel,
+          subject: entry?.subject,
+          groupChannel: entry?.groupChannel,
+          space: entry?.space,
+          id: parsed?.id,
+          key,
+        })
+      : undefined) ??
+    entry?.label ??
+    entry?.origin?.label
+  );
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -1127,23 +1147,8 @@ export function buildGatewaySessionRow(params: {
   const subject = entry?.subject;
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
-  const id = parsed?.id;
   const origin = entry?.origin;
-  const originLabel = origin?.label;
-  const displayName =
-    entry?.displayName ??
-    (channel
-      ? buildGroupDisplayName({
-          provider: channel,
-          subject,
-          groupChannel,
-          space,
-          id,
-          key,
-        })
-      : undefined) ??
-    entry?.label ??
-    originLabel;
+  const displayName = resolveSessionDisplayName(key, entry);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
@@ -1347,7 +1352,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let candidates = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1391,24 +1396,17 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
-    })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    });
 
   if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+    candidates = candidates.filter(([key, entry]) => {
+      const fields = [
+        resolveSessionDisplayName(key, entry),
+        entry?.label,
+        entry?.subject,
+        entry?.sessionId,
+        key,
+      ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
@@ -1417,13 +1415,30 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    candidates = candidates.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
+  // Sort the lightweight index first. Stable sorting preserves insertion order for ties.
+  candidates = candidates.toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    candidates = candidates.slice(0, limit);
   }
+
+  // Usage fallback and previews may read transcripts. Only hydrate returned rows,
+  // keeping the full store available for child links outside the selected page/agent.
+  const sessions = candidates.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+    }),
+  );
 
   return {
     ts: now,
