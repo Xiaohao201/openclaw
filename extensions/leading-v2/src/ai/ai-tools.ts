@@ -133,6 +133,24 @@ function resolveDirectJudgment(
 const ComplaintSubmitSchema = Type.Object(
   {
     ...DirectJudgmentProperties,
+    sourceContents: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            link: Type.String({ description: "与 links 中的原始链接完全一致。" }),
+            title: Type.String({ maxLength: 1000 }),
+            author: Type.String({ maxLength: 255 }),
+            summary: Type.String({ maxLength: 6000 }),
+          },
+          { additionalProperties: false },
+        ),
+        {
+          maxItems: 1000,
+          description:
+            "直接研判应始终逐链接提供原文标题、作者和内容摘要；无法取得的字段明确传空字符串。传数组而非JSON字符串，不得将举报结论当原文摘要。",
+        },
+      ),
+    ),
     destination: Type.Optional(
       Type.Union([Type.Literal("ContentPlatform"), Type.Literal("Report12377")], {
         description:
@@ -471,6 +489,7 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         "向12377举报必须传destination=Report12377，查询和重试提交均保留该参数；使用12377目录，不能改投原平台。12377走匿名流程，每条事由最多500个UTF-16字符，网站名称使用原链接域名；验证码和最终提交由操作员完成。" +
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
         "批量举报必须提供 linkJudgments，为每条链接独立撰写事由；工具逐链接创建任务，不会把整批摘要填入每条举报。" +
+        "直接研判应同时传 sourceContents 数组，每条包含 link、title、author、summary，未知字段传空字符串；原文与举报事由分开，不要放进 linkJudgments，也不要把数组转成字符串。缺原文信息时补齐该参数，不要修改原始链接重试。" +
         "仅根据对应链接的真实证据和用户理由撰写，不得将未核实、AI标注或缺少来源直接认定为虚假事实。" +
         "直接研判首次调用不要猜分类、不要传 classifications；工具会返回当前平台分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
@@ -548,6 +567,58 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                 ? "直接使用夙衡研判举报时必须提供 links。"
                 : "未找到可举报的链接（该检测任务可能是纯文本/上传，没有原始链接）。请提供 links。",
           });
+        }
+
+        const sourceContents = new Map<
+          string,
+          { link: string; title: string; author: string; summary: string }
+        >();
+        if (rawParams.sourceContents !== undefined) {
+          const entries = rawParams.sourceContents;
+          let valid =
+            Array.isArray(entries) &&
+            entries.length === links.length &&
+            entries.length <= (direct.code === "valid" ? 1000 : 50);
+          if (valid && Array.isArray(entries)) {
+            for (const entry of entries) {
+              if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+                valid = false;
+                break;
+              }
+              const item = entry as Record<string, unknown>;
+              if (
+                typeof item.link !== "string" ||
+                !links.includes(item.link) ||
+                sourceContents.has(item.link) ||
+                Object.keys(item).some(
+                  (key) => !["link", "title", "author", "summary"].includes(key),
+                ) ||
+                typeof item.title !== "string" ||
+                Array.from(item.title).length > 1000 ||
+                typeof item.author !== "string" ||
+                Array.from(item.author).length > 255 ||
+                typeof item.summary !== "string" ||
+                Array.from(item.summary).length > 6000
+              ) {
+                valid = false;
+                break;
+              }
+              sourceContents.set(item.link, {
+                link: item.link,
+                title: item.title,
+                author: item.author,
+                summary: item.summary,
+              });
+            }
+          }
+          if (!valid) {
+            return jsonResult({
+              success: false,
+              code: "SOURCE_CONTENTS_INVALID",
+              error:
+                "sourceContents 必须为每条原始链接提供且仅提供一份 link、title、author、summary；未知字段传空字符串。标题/作者/摘要最多1000/255/6000字，传统检测模式最多50项。",
+            });
+          }
         }
 
         const linkJudgments = new Map<string, string>();
@@ -705,6 +776,9 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
           links: JSON.stringify(links),
           role,
           ...(destination === "Report12377" ? { destination } : {}),
+          ...(sourceContents.size > 0
+            ? { sourceContents: JSON.stringify([...sourceContents.values()]) }
+            : {}),
         };
         if (direct.code === "valid") {
           fields.basisSource = direct.basis.source;
@@ -721,6 +795,10 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                   ...fields,
                   links: JSON.stringify([link]),
                   judgment: linkJudgments.get(link)!,
+                  // Each backend request must contain snapshots for its own URLs only.
+                  ...(sourceContents.has(link)
+                    ? { sourceContents: JSON.stringify([sourceContents.get(link)]) }
+                    : {}),
                   classifications: JSON.stringify(
                     classifications.filter((item) => item.link === link),
                   ),

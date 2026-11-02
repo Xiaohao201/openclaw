@@ -24,6 +24,20 @@ unverified claims distinct from established facts; an AI label or missing source
 alone does not establish falsehood. The top-level `judgment` is a batch summary.
 Single-link calls may continue to use the top-level `judgment` alone.
 
+For direct submissions, always include `sourceContents` as an array (not a JSON
+string), with exactly one `{ link, title, author, summary }` per original URL.
+Use the original title, account, and content summary, not allegations or judgment
+conclusions. Explicitly use `""` for unavailable fields. Limits are 1000, 255,
+and 6000 Unicode characters respectively. Do not place these fields inside
+`linkJudgments`. The plugin validates the complete array before submitting,
+then sends only the matching snapshot in each single-link backend request as a
+JSON-encoded form field. The backend stores each snapshot in `sourceContent`.
+Omitting the array remains compatible with the backend's historical-data fallback;
+that fallback does not guarantee complete source content. A missing-source error
+requires supplying the snapshot, not changing URLs. Keep snapshots on category
+selection retries and submit only links that were not already accepted or unknown.
+Legacy detection submissions remain unsplit and accept at most 50 snapshots.
+
 The current backend takes one task-level judgment. The plugin therefore creates
 one task per link, sending only its own reason and classification. It validates
 all reasons and obtains missing classifications before any submission. Explicit

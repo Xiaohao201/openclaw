@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Value } from "@sinclair/typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../api.js";
 import { ApiKeyResolver } from "../client/key-resolver.js";
@@ -348,6 +349,75 @@ describe("complaint_submit", () => {
       categoryCode: "false_information",
     })),
   };
+
+  const sourceContents = batchLinks.map((link, index) => ({
+    link,
+    title: `原文标题${index}`,
+    author: "",
+    summary: `原文摘要${index}`,
+  }));
+
+  it("accepts source snapshots in the public tool schema", () => {
+    expect(Value.Check(tool().parameters, { ...batchParams, sourceContents })).toBe(true);
+    expect(
+      Value.Check(tool().parameters, {
+        ...batchParams,
+        sourceContents: JSON.stringify(sourceContents),
+      }),
+    ).toBe(false);
+  });
+
+  it("sends only the matching source snapshot with each link", async () => {
+    mockPostForm.mockResolvedValue({ code: "success" });
+    await tool().execute("source-batch", {
+      ...batchParams,
+      sourceContents: sourceContents.toReversed(),
+    });
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+    sourceContents.forEach((item, index) => {
+      expect(mockPostForm.mock.calls[index][2]).toMatchObject({
+        sourceContents: JSON.stringify([item]),
+      });
+    });
+  });
+
+  it("preserves explicitly unknown fields on a single-link submission", async () => {
+    mockPostForm.mockResolvedValue({ code: "success" });
+    const snapshot = { link: batchLinks[0], title: "", author: "", summary: "" };
+    await tool().execute("source-single", {
+      ...batchParams,
+      links: [batchLinks[0]],
+      linkJudgments: undefined,
+      classifications: [batchParams.classifications[0]],
+      sourceContents: [snapshot],
+    });
+    expect(mockPostForm.mock.calls[0][2]).toMatchObject({
+      sourceContents: JSON.stringify([snapshot]),
+    });
+  });
+
+  it.each(
+    [
+      null,
+      "[]",
+      [],
+      [sourceContents[0]],
+      [sourceContents[0], sourceContents[0]],
+      [sourceContents[0], { ...sourceContents[1], link: "https://example.com/other" }],
+      [sourceContents[0], { ...sourceContents[1], author: undefined }],
+      [sourceContents[0], { ...sourceContents[1], title: "字".repeat(1001) }],
+      [sourceContents[0], { ...sourceContents[1], sources: { title: "forged" } }],
+    ].map((snapshots) => ({ snapshots })),
+  )(
+    "rejects invalid or incomplete snapshots before any submission: $snapshots",
+    async ({ snapshots }) => {
+      const result = parse(
+        await tool().execute("source-invalid", { ...batchParams, sourceContents: snapshots }),
+      );
+      expect(result).toMatchObject({ success: false, code: "SOURCE_CONTENTS_INVALID" });
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
 
   it("submits each link with only its own judgment and classification", async () => {
     mockPostForm.mockResolvedValue({ code: "success" });
