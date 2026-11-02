@@ -1,6 +1,13 @@
 import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
+  sessionList: {
+    updated: "Last updated",
+    last30Days: "Last 30 days",
+    allTime: "All time",
+    custom: "Custom",
+    minutes: "Minutes since last update",
+  },
   common: {
     health: "Health",
     ok: "OK",

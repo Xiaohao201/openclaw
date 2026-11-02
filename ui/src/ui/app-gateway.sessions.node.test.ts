@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
+const handleChatEventMock = vi.fn(() => "idle");
 
 vi.mock("./app-chat.ts", () => ({
-  CHAT_SESSIONS_ACTIVE_MINUTES: 10,
+  clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
@@ -26,7 +27,7 @@ vi.mock("./controllers/assistant-identity.ts", () => ({
 }));
 vi.mock("./controllers/chat.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
-  handleChatEvent: vi.fn(() => "idle"),
+  handleChatEvent: handleChatEventMock,
 }));
 vi.mock("./controllers/devices.ts", () => ({
   loadDevices: vi.fn(),
@@ -109,6 +110,22 @@ function createHost() {
 }
 
 describe("handleGatewayEvent sessions.changed", () => {
+  it("refreshes after a completed chat without overriding the selected time window", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReturnValueOnce("final");
+    const host = createHost();
+    Object.assign(host, { toolStreamOrder: [], sessionsFilterActive: "129600" });
+    host.refreshSessionsAfterChat.add("completed-run");
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: { sessionKey: "main", runId: "completed-run", state: "final" },
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledExactlyOnceWith(host);
+  });
+
   it("reloads sessions when the gateway pushes a sessions.changed event", () => {
     loadSessionsMock.mockReset();
     const host = createHost();

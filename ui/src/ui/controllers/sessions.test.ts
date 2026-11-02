@@ -132,6 +132,25 @@ describe("deleteSessionsAndRefresh", () => {
 });
 
 describe("loadSessions", () => {
+  it.each([
+    ["43200", 43200],
+    ["129600", 129600],
+    ["", undefined],
+  ])("preserves the selected activity window %s across refreshes", async (filter, minutes) => {
+    const request = vi.fn(async () => undefined);
+    const state = createState(request, { sessionsFilterActive: filter });
+    await loadSessions(state);
+    await loadSessions(state);
+    const params = {
+      includeGlobal: true,
+      includeUnknown: true,
+      ...(minutes === undefined ? {} : { activeMinutes: minutes }),
+    };
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", params);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", params);
+    expect(state.sessionsFilterActive).toBe(filter);
+  });
+
   it("refreshes expanded checkpoint cards when the row summary changes", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {

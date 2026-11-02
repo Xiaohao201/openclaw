@@ -109,6 +109,32 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
+  it("keeps tree visibility lookups unbounded by activity time", async () => {
+    const callGateway = vi.fn(async () => ({
+      sessions: [{ key: "agent:main:subagent:old-child" }],
+    }));
+    sessionsResolutionTesting.setDepsForTest({ callGateway: callGateway as never });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "list",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({}),
+      });
+      expect(callGateway).toHaveBeenCalledWith({
+        method: "sessions.list",
+        params: {
+          includeGlobal: false,
+          includeUnknown: false,
+          spawnedBy: "agent:main:main",
+        },
+      });
+      expect(guard.check("agent:main:subagent:old-child")).toEqual({ allowed: true });
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
   it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {

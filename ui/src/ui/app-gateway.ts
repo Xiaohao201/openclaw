@@ -2,11 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  clearPendingQueueItemsForRun,
-  flushChatQueueForEvent,
-} from "./app-chat.ts";
+import { clearPendingQueueItemsForRun, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -372,9 +368,7 @@ function handleTerminalChatEvent(
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
-      void loadSessions(host as unknown as SessionsState, {
-        activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      });
+      void loadSessions(host as unknown as SessionsState);
     }
   }
   // Reload history when tools were used so the persisted tool results

@@ -1,11 +1,17 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-15T05:42:37.997Z",
+  "fallbackKeys": [
+    "sessionList.allTime",
+    "sessionList.custom",
+    "sessionList.last30Days",
+    "sessionList.minutes",
+    "sessionList.updated"
+  ],
+  "generatedAt": "2026-11-02T09:28:24.199Z",
   "locale": "zh-CN",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "34089e99b81e81139add4dca8eb47a80da365bd90534ac5e5e042474f3816ad6",
-  "totalKeys": 706,
+  "sourceHash": "63ff225c1ac2e95734df26abe38905cdd1c3ecd5a038f4f6ed06f82f1d4f6436",
+  "totalKeys": 711,
   "translatedKeys": 706,
   "workflow": 1
 }

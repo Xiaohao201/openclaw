@@ -572,7 +572,6 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,

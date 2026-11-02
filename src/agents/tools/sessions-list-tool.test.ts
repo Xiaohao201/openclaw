@@ -52,6 +52,51 @@ describe("sessions-list-tool", () => {
     });
   });
 
+  it.each([
+    [{}, 43200],
+    [{ allTime: false }, 43200],
+    [{ activeMinutes: 1440 }, 1440],
+    [{ activeMinutes: 129600 }, 129600],
+    [{ allTime: true }, undefined],
+  ])("uses the requested activity window for %j", async (args, activeMinutes) => {
+    mocks.gatewayCall.mockResolvedValue({ sessions: [] });
+    const tool = createSessionsListTool({ config: {} });
+
+    await tool.execute("window", args);
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: {
+        limit: undefined,
+        activeMinutes,
+        includeGlobal: true,
+        includeUnknown: true,
+        spawnedBy: undefined,
+      },
+    });
+  });
+
+  it("rejects conflicting time filters before querying the gateway", async () => {
+    const tool = createSessionsListTool({ config: {} });
+    await expect(tool.execute("conflict", { allTime: true, activeMinutes: 1440 })).rejects.toThrow(
+      "allTime cannot be combined with activeMinutes",
+    );
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
+  });
+
+  it("does not read forbidden history when allTime is requested", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      sessions: [{ key: "agent:other:main", kind: "direct" }],
+    });
+    mocks.createSessionVisibilityGuard.mockResolvedValue({ check: () => ({ allowed: false }) });
+    const tool = createSessionsListTool({ config: {} });
+
+    const result = await tool.execute("all-time", { allTime: true, messageLimit: 3 });
+
+    expect(result.details).toEqual({ count: 0, sessions: [] });
+    expect(mocks.gatewayCall).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps deliveryContext.threadId in sessions_list results", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

@@ -9,13 +9,14 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_SESSION_LIST_ACTIVE_MINUTES } from "../../shared/session-list-defaults.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam } from "./common.js";
+import { jsonResult, readStringArrayParam, ToolInputError } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -33,7 +34,15 @@ import {
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
   limit: Type.Optional(Type.Number({ minimum: 1 })),
-  activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
+  activeMinutes: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      description: "Only sessions updated within this many minutes. Defaults to 43200 (30 days).",
+    }),
+  ),
+  allTime: Type.Optional(
+    Type.Boolean({ description: "Include older sessions. Cannot be combined with activeMinutes." }),
+  ),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
@@ -63,6 +72,9 @@ export function createSessionsListTool(opts?: {
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      if (params.allTime === true && params.activeMinutes !== undefined) {
+        throw new ToolInputError("allTime cannot be combined with activeMinutes");
+      }
       const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
@@ -88,10 +100,14 @@ export function createSessionsListTool(opts?: {
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
-      const activeMinutes =
+      const requestedActiveMinutes =
         typeof params.activeMinutes === "number" && Number.isFinite(params.activeMinutes)
           ? Math.max(1, Math.floor(params.activeMinutes))
           : undefined;
+      const activeMinutes =
+        params.allTime === true
+          ? undefined
+          : (requestedActiveMinutes ?? DEFAULT_SESSION_LIST_ACTIVE_MINUTES);
       const messageLimitRaw =
         typeof params.messageLimit === "number" && Number.isFinite(params.messageLimit)
           ? Math.max(0, Math.floor(params.messageLimit))

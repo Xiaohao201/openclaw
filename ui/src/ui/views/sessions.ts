@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { DEFAULT_SESSION_LIST_ACTIVE_MINUTES } from "../../../../src/shared/session-list-defaults.js";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
@@ -272,9 +273,45 @@ export function renderSessions(props: SessionsProps) {
 
       <div class="filters" style="margin-bottom: 12px;">
         <label class="field-inline">
-          <span>Active</span>
+          <span>${t("sessionList.updated")}</span>
+          <select
+            data-session-time-range
+            @change=${(e: Event) => {
+              const value = (e.target as HTMLSelectElement).value;
+              props.onFiltersChange({
+                activeMinutes: value === "custom" ? "1440" : value,
+                limit: props.limit,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+              });
+            }}
+          >
+            <option
+              value=${String(DEFAULT_SESSION_LIST_ACTIVE_MINUTES)}
+              ?selected=${Number(props.activeMinutes) === DEFAULT_SESSION_LIST_ACTIVE_MINUTES}
+            >
+              ${t("sessionList.last30Days")}
+            </option>
+            <option value="" ?selected=${!(Number(props.activeMinutes) > 0)}>
+              ${t("sessionList.allTime")}
+            </option>
+            <option
+              value="custom"
+              ?selected=${Number(props.activeMinutes) > 0 &&
+              Number(props.activeMinutes) !== DEFAULT_SESSION_LIST_ACTIVE_MINUTES}
+            >
+              ${t("sessionList.custom")}
+            </option>
+          </select>
+        </label>
+        <label class="field-inline">
+          <span>${t("sessionList.minutes")}</span>
           <input
-            style="width: 72px;"
+            data-session-active-minutes
+            type="number"
+            min="1"
+            step="1"
+            style="width: 96px;"
             placeholder="min"
             .value=${props.activeMinutes}
             @input=${(e: Event) =>

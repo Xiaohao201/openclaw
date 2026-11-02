@@ -13,6 +13,7 @@ export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work p
 export function describeSessionsListTool(): string {
   return [
     "List visible sessions with optional filters for kind, recent activity, and last messages.",
+    "Defaults to sessions updated in the last 30 days; set activeMinutes for another window or allTime: true for any age.",
     "Use this to discover a target session before calling sessions_history or sessions_send.",
   ].join(" ");
 }
