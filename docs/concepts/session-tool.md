@@ -30,6 +30,18 @@ orchestrate sub-agents.
 counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 `node`) or recency (`activeMinutes`).
 
+By default, the tool lists sessions updated in the last 30 days (43,200 minutes),
+based on `updatedAt`, not creation time. Set `activeMinutes` to a positive number
+for another window, such as `129600` for 90 days, or set `allTime: true` to remove
+the time filter. Do not combine `allTime: true` with `activeMinutes`. Older
+sessions are retained, and all visibility restrictions still apply.
+
+The Control UI session list also defaults to **Last 30 days**. Select **All time**
+or enter a custom number of minutes to include older sessions. Refreshes preserve
+the selected window. These defaults apply at the tool and UI entrypoints; direct
+Gateway `sessions.list` requests and internal session resolution retain their
+existing behavior when `activeMinutes` is omitted.
+
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
 The returned view is intentionally bounded and safety-filtered:

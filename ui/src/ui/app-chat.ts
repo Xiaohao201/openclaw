@@ -49,8 +49,6 @@ export type ChatHost = {
   onSlashAction?: (action: string) => void;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
-
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
 }
@@ -454,7 +452,6 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
   await Promise.all([
     loadChatHistory(host as unknown as ChatState),
     loadSessions(host as unknown as SessionsState, {
-      activeMinutes: 0,
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,

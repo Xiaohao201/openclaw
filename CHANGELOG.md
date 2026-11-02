@@ -36,6 +36,8 @@ Docs: https://docs.openclaw.ai
 
 - WeChat Group Push: apply group-map edits without restarting the gateway, refresh tool destinations each turn, and reject removed or changed destinations before sending.
 
+- Sessions: default the agent session-list tool and Control UI to sessions updated in the last 30 days, with explicit custom and all-time queries, while preserving internal lookup and visibility behavior.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

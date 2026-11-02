@@ -65,6 +65,33 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
+  it("switches between 30 days, all time, and custom activity windows", () => {
+    const container = document.createElement("div");
+    const props = { ...buildProps(buildMultiResult([])), activeMinutes: "43200" };
+    props.onFiltersChange = vi.fn((next) => {
+      Object.assign(props, next);
+      render(renderSessions(props), container);
+    });
+    render(renderSessions(props), container);
+    const range = container.querySelector<HTMLSelectElement>("select[data-session-time-range]");
+    expect(range?.value).toBe("43200");
+    expect(range?.selectedOptions[0]?.textContent).toContain("Last 30 days");
+
+    range!.value = "";
+    range!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.activeMinutes).toBe("");
+    range!.value = "custom";
+    range!.dispatchEvent(new Event("change", { bubbles: true }));
+    const minutes = container.querySelector<HTMLInputElement>("input[data-session-active-minutes]");
+    expect(minutes).not.toBeNull();
+    minutes!.value = "129600";
+    minutes!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(props.activeMinutes).toBe("129600");
+    range!.value = "43200";
+    range!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.activeMinutes).toBe("43200");
+  });
+
   it("renders verbose=full without falling back to inherit", async () => {
     const container = document.createElement("div");
     render(
@@ -82,7 +109,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const selects = container.querySelectorAll("select");
+    const selects = container.querySelectorAll("tbody select");
     const verbose = selects[2] as HTMLSelectElement | undefined;
     expect(verbose?.value).toBe("full");
     expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
@@ -105,7 +132,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const selects = container.querySelectorAll("select");
+    const selects = container.querySelectorAll("tbody select");
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(reasoning?.value).toBe("custom-mode");
     expect(
@@ -130,7 +157,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const selects = container.querySelectorAll("select");
+    const selects = container.querySelectorAll("tbody select");
     const fast = selects[1] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
   });

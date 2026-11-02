@@ -148,6 +148,29 @@ describe("listSessionsFromStore search", () => {
     } as SessionEntry,
   });
 
+  test("filters by last update inclusively without changing unfiltered internal queries", () => {
+    const now = Date.UTC(2026, 10, 2);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(transcriptReaders, "readLatestSessionUsageFromTranscript").mockReturnValue(null);
+    const cutoff = now - 43200 * 60_000;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:old-but-active": { sessionId: "old-active", updatedAt: now },
+      "agent:main:boundary": { sessionId: "boundary", updatedAt: cutoff },
+      "agent:main:older": { sessionId: "older", updatedAt: cutoff - 1 },
+    };
+    const params = { cfg: baseCfg, storePath: "/tmp/sessions.json", store };
+
+    expect(
+      listSessionsFromStore({ ...params, opts: { activeMinutes: 43200 } }).sessions.map(
+        (row) => row.key,
+      ),
+    ).toEqual(["agent:main:old-but-active", "agent:main:boundary"]);
+    expect(listSessionsFromStore({ ...params, opts: {} }).sessions).toHaveLength(3);
+    expect(
+      listSessionsFromStore({ ...params, opts: { activeMinutes: 129600 } }).sessions,
+    ).toHaveLength(3);
+  });
+
   test.each([undefined, "wanted"])(
     "reads transcript details only for the requested page (search=%s)",
     (search) => {
