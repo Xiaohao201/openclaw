@@ -339,6 +339,23 @@ describe("complaint_submit", () => {
     });
   });
 
+  it("accepts and forwards the source author's unavailability reason", async () => {
+    const snapshots = sourceContents.map((item) => ({
+      ...item,
+      authorUnavailableReason: "原页面未展示作者",
+    }));
+    expect(Value.Check(tool().parameters, { ...batchParams, sourceContents: snapshots })).toBe(
+      true,
+    );
+    mockPostForm.mockResolvedValue({ code: "success" });
+    await tool().execute("source-author-reason", { ...batchParams, sourceContents: snapshots });
+    snapshots.forEach((item, index) =>
+      expect(mockPostForm.mock.calls[index][2]).toMatchObject({
+        sourceContents: JSON.stringify([item]),
+      }),
+    );
+  });
+
   it("preserves explicitly unknown fields on a single-link submission", async () => {
     mockPostForm.mockResolvedValue({ code: "success" });
     const snapshot = { link: batchLinks[0], title: "", author: "", summary: "" };
@@ -365,6 +382,8 @@ describe("complaint_submit", () => {
       [sourceContents[0], { ...sourceContents[1], author: undefined }],
       [sourceContents[0], { ...sourceContents[1], title: "字".repeat(1001) }],
       [sourceContents[0], { ...sourceContents[1], sources: { title: "forged" } }],
+      [sourceContents[0], { ...sourceContents[1], authorUnavailableReason: 123 }],
+      [sourceContents[0], { ...sourceContents[1], authorUnavailableReason: "字".repeat(501) }],
     ].map((snapshots) => ({ snapshots })),
   )(
     "rejects invalid or incomplete snapshots before any submission: $snapshots",
@@ -424,6 +443,109 @@ describe("complaint_submit", () => {
     mockPostForm.mockResolvedValue({ code: "success" });
     expect(parse(await tool().execute("batch-classified", batchParams)).success).toBe(true);
     expect(mockPostForm).toHaveBeenCalledTimes(2);
+  });
+
+  it("submits links explicitly declared classification-free with their source snapshots", async () => {
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: batchLinks.map((link) => ({
+        link,
+        platform: "Maimai",
+        classificationRequired: false,
+        categories: [],
+      })),
+      unsupportedLinks: [],
+    });
+    mockPostForm.mockResolvedValue({ code: "success" });
+    const res = parse(
+      await tool().execute("no-category", {
+        ...batchParams,
+        classifications: undefined,
+        sourceContents,
+      }),
+    );
+    expect(res).toMatchObject({ success: true, submittedLinks: batchLinks });
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+    batchLinks.forEach((link, index) =>
+      expect(mockPostForm.mock.calls[index][2]).toMatchObject({
+        links: JSON.stringify([link]),
+        classifications: "[]",
+        sourceContents: JSON.stringify([sourceContents[index]]),
+        judgment: batchParams.linkJudgments[index].judgment,
+      }),
+    );
+  });
+
+  it("only requests categories for required links in a mixed batch", async () => {
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: [
+        { link: batchLinks[0], classificationRequired: false },
+        { link: batchLinks[1], taxonomyVersionId: 23, categories: [] },
+      ],
+      unsupportedLinks: [],
+    });
+    const res = parse(
+      await tool().execute("mixed", { ...batchParams, classifications: undefined }),
+    );
+    expect(res).toMatchObject({ classificationRequired: true, missingLinks: [batchLinks[1]] });
+    expect(mockPostForm).not.toHaveBeenCalled();
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      taxonomies: [{ link: batchLinks[0], classificationRequired: false }],
+      unsupportedLinks: [],
+    });
+    mockPostForm.mockResolvedValue({ code: "success" });
+    expect(
+      parse(
+        await tool().execute("mixed-retry", {
+          ...batchParams,
+          classifications: [batchParams.classifications[1]],
+        }),
+      ).success,
+    ).toBe(true);
+    expect(mockPostForm).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([undefined, true, "false", null])(
+    "does not exempt ambiguous category capability %s",
+    async (classificationRequired) => {
+      mockGetJson.mockResolvedValue({
+        code: "success",
+        taxonomies: batchLinks.map((link) => ({
+          link,
+          classificationRequired,
+        })),
+        unsupportedLinks: [],
+      });
+      expect(
+        parse(await tool().execute("required", { ...batchParams, classifications: undefined })),
+      ).toMatchObject({ classificationRequired: true, missingLinks: batchLinks });
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps 12377 classification mandatory even for a classification-free response", async () => {
+    mockGetJson.mockResolvedValue({
+      code: "success",
+      destination: "Report12377",
+      taxonomies: batchLinks.map((link) => ({
+        link,
+        platform: "Report12377",
+        classificationRequired: false,
+      })),
+      unsupportedLinks: [],
+    });
+    expect(
+      parse(
+        await tool().execute("12377-required", {
+          ...batchParams,
+          destination: "Report12377",
+          classifications: undefined,
+        }),
+      ),
+    ).toMatchObject({ classificationRequired: true, missingLinks: batchLinks });
+    expect(mockPostForm).not.toHaveBeenCalled();
   });
 
   it("stops on the first rejection and preserves the unsubmitted remainder", async () => {
