@@ -141,13 +141,14 @@ const ComplaintSubmitSchema = Type.Object(
             title: Type.String({ maxLength: 1000 }),
             author: Type.String({ maxLength: 255 }),
             summary: Type.String({ maxLength: 6000 }),
+            authorUnavailableReason: Type.Optional(Type.String({ maxLength: 500 })),
           },
           { additionalProperties: false },
         ),
         {
           maxItems: 1000,
           description:
-            "直接研判应始终逐链接提供原文标题、作者和内容摘要；无法取得的字段明确传空字符串。传数组而非JSON字符串，不得将举报结论当原文摘要。",
+            "直接研判应始终逐链接提供原文标题、作者和内容摘要；标题或摘要至少一项，作者缺失时提供 authorUnavailableReason。传数组而非JSON字符串，不得将举报结论当原文摘要。",
         },
       ),
     ),
@@ -193,8 +194,8 @@ const ComplaintSubmitSchema = Type.Object(
     classifications: Type.Optional(
       Type.Array(ComplaintClassificationSchema, {
         description:
-          "逐链接的平台举报分类。直接使用夙衡研判时，首次省略本字段会返回当前分类目录；" +
-          "根据研判为每条链接选择目录中的稳定代码后，使用相同参数再次调用。",
+          "逐链接的平台举报分类。直接使用夙衡研判时，首次省略本字段会查询当前平台能力；" +
+          "仅为需要分类的链接选择目录中的稳定代码后，使用相同参数再次调用；后端明确声明 classificationRequired=false 的链接无需分类。",
       }),
     ),
   },
@@ -489,9 +490,9 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
         "向12377举报必须传destination=Report12377，查询和重试提交均保留该参数；使用12377目录，不能改投原平台。12377走匿名流程，每条事由最多500个UTF-16字符，网站名称使用原链接域名；验证码和最终提交由操作员完成。" +
         "直接使用研判时传 basisSource=AgentJudgment、confirmed=true、subjectScope、judgment 和 links，不要创建或查询内容检测任务。" +
         "批量举报必须提供 linkJudgments，为每条链接独立撰写事由；工具逐链接创建任务，不会把整批摘要填入每条举报。" +
-        "直接研判应同时传 sourceContents 数组，每条包含 link、title、author、summary，未知字段传空字符串；原文与举报事由分开，不要放进 linkJudgments，也不要把数组转成字符串。缺原文信息时补齐该参数，不要修改原始链接重试。" +
+        "直接研判应同时传 sourceContents 数组，每条包含 link、title、author、summary，标题或摘要至少一项；作者缺失时 author 传空字符串并提供 authorUnavailableReason。原文与举报事由分开，不要放进 linkJudgments，也不要把数组转成字符串。缺原文信息时补齐该参数，不要修改原始链接重试。" +
         "仅根据对应链接的真实证据和用户理由撰写，不得将未核实、AI标注或缺少来源直接认定为虚假事实。" +
-        "直接研判首次调用不要猜分类、不要传 classifications；工具会返回当前平台分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
+        "直接研判首次调用不要猜分类、不要传 classifications；工具按后端平台能力处理，无需分类的链接直接继续提交，其余链接返回分类目录，按研判选择稳定代码后立即用原参数再次调用，不要再次询问用户。" +
         "默认复用检测任务提交的原始链接；如需举报其他链接可传 links。" +
         "支持范围动态变化；查询 complaint_taxonomy 获取当前平台和逐链接分类，不得凭旧名单拒绝。" +
         "异步执行——success=true、submitted=true 和 submittedLinks 仅表示举报服务已接收任务，不表示已提交到目标平台。" +
@@ -571,7 +572,13 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
 
         const sourceContents = new Map<
           string,
-          { link: string; title: string; author: string; summary: string }
+          {
+            link: string;
+            title: string;
+            author: string;
+            summary: string;
+            authorUnavailableReason?: string;
+          }
         >();
         if (rawParams.sourceContents !== undefined) {
           const entries = rawParams.sourceContents;
@@ -591,14 +598,20 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                 !links.includes(item.link) ||
                 sourceContents.has(item.link) ||
                 Object.keys(item).some(
-                  (key) => !["link", "title", "author", "summary"].includes(key),
+                  (key) =>
+                    !["link", "title", "author", "summary", "authorUnavailableReason"].includes(
+                      key,
+                    ),
                 ) ||
                 typeof item.title !== "string" ||
                 Array.from(item.title).length > 1000 ||
                 typeof item.author !== "string" ||
                 Array.from(item.author).length > 255 ||
                 typeof item.summary !== "string" ||
-                Array.from(item.summary).length > 6000
+                Array.from(item.summary).length > 6000 ||
+                (item.authorUnavailableReason !== undefined &&
+                  (typeof item.authorUnavailableReason !== "string" ||
+                    Array.from(item.authorUnavailableReason).length > 500))
               ) {
                 valid = false;
                 break;
@@ -608,6 +621,9 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                 title: item.title,
                 author: item.author,
                 summary: item.summary,
+                ...(typeof item.authorUnavailableReason === "string"
+                  ? { authorUnavailableReason: item.authorUnavailableReason }
+                  : {}),
               });
             }
           }
@@ -745,19 +761,35 @@ export function createComplaintSubmitToolFactory(api: OpenClawPluginApi, resolve
                   "部分链接没有当前已发布且允许自动选择的举报分类目录，已停止提交，避免生成空分类举报记录。",
               });
             }
-            return jsonResult({
-              success: false,
-              classificationRequired: true,
-              ...(destination === "Report12377" ? { destination } : {}),
-              retryable: true,
-              missingLinks,
-              taxonomies,
-              unsupportedLinks: Array.isArray(taxonomyResponse.unsupportedLinks)
-                ? taxonomyResponse.unsupportedLinks
-                : [],
-              instruction:
-                "请根据夙衡研判为每条链接选择 taxonomyVersionId、categoryCode 和适用的 subCategoryCode，然后用原参数及 classifications 再次调用 complaint_submit；不要再次询问用户。",
-            });
+            // Only an explicit backend capability exempts a link. Old catalogs
+            // and 12377 retain mandatory classification.
+            const categoryFreeLinks = new Set(
+              taxonomies.flatMap((item) =>
+                destination === "ContentPlatform" &&
+                item &&
+                typeof item === "object" &&
+                (item as Record<string, unknown>).classificationRequired === false &&
+                typeof (item as Record<string, unknown>).link === "string"
+                  ? [(item as { link: string }).link]
+                  : [],
+              ),
+            );
+            const requiredLinks = missingLinks.filter((link) => !categoryFreeLinks.has(link));
+            if (requiredLinks.length > 0) {
+              return jsonResult({
+                success: false,
+                classificationRequired: true,
+                ...(destination === "Report12377" ? { destination } : {}),
+                retryable: true,
+                missingLinks: requiredLinks,
+                taxonomies,
+                unsupportedLinks: Array.isArray(taxonomyResponse.unsupportedLinks)
+                  ? taxonomyResponse.unsupportedLinks
+                  : [],
+                instruction:
+                  "请仅为 missingLinks 中的链接选择 taxonomyVersionId、categoryCode 和适用的 subCategoryCode，然后用原参数及 classifications 再次调用 complaint_submit；无需分类的链接不填分类，不要再次询问用户。",
+              });
+            }
           }
         }
 

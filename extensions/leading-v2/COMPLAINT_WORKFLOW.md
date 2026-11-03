@@ -27,7 +27,9 @@ Single-link calls may continue to use the top-level `judgment` alone.
 For direct submissions, always include `sourceContents` as an array (not a JSON
 string), with exactly one `{ link, title, author, summary }` per original URL.
 Use the original title, account, and content summary, not allegations or judgment
-conclusions. Explicitly use `""` for unavailable fields. Limits are 1000, 255,
+conclusions. Provide at least a title or summary. If the page does not show an
+author, use `author: ""` and supply `authorUnavailableReason` (up to 500 Unicode
+characters). Explicitly use `""` for other unavailable fields. Limits are 1000, 255,
 and 6000 Unicode characters respectively. Do not place these fields inside
 `linkJudgments`. The plugin validates the complete array before submitting,
 then sends only the matching snapshot in each single-link backend request as a
@@ -43,6 +45,19 @@ one task per link, sending only its own reason and classification. It validates
 all reasons and obtains missing classifications before any submission. Explicit
 `role` identifies the reporter; `subjectScope` identifies the affected subject
 and must not override a personal reporter's selected identity.
+
+Platform discovery also describes classification requirements. A content-platform
+entry with `classificationRequired: false` supports submission without taxonomy
+codes (currently Maimai); it can have an empty `categories` array and no taxonomy
+version. Missing capability flags retain the existing classification requirement.
+The backend decides this capability independently; callers cannot opt out of
+classification by submitting a flag. For mixed batches, select classifications
+only for `missingLinks`, retaining every original link and its source snapshot on
+retry. All links are checked before the first submission. Report12377 still
+requires its own classification even when the source URL belongs to Maimai.
+Source-content validation remains mandatory for classification-free submissions.
+Deploy the matching backend capability changes before the updated plugin.
+Discovery and task acceptance do not establish that a platform worker is deployed.
 
 Batch results list `submittedLinks`. On a backend rejection, they also identify
 `failedLinks` and the remaining `pendingLinks`; a transport exception instead
