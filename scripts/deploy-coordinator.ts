@@ -7,6 +7,7 @@ export interface DeployWorker {
 }
 
 export type DeploymentPhase =
+  | "recovering"
   | "running"
   | "preparing"
   | "draining"

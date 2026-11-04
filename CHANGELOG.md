@@ -38,6 +38,8 @@ Docs: https://docs.openclaw.ai
 
 - Gateway/queued deployments: add an external `gateway supervise` manager with fresh-process preflight, standby readiness, RabbitMQ and scheduler draining, rollback before consumption, and hot-only configuration reloads; managed agents cannot invoke self-restart, self-update, or host command execution.
 
+- Windows/managed deployments: recover exited or persistently unhealthy gateway workers with bounded persistent retries, preserve single-writer ownership, and add local management commands plus a WinSW service configuration generator.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

@@ -2,6 +2,8 @@
 
 适用范围：原生 Windows、Control UI、RabbitMQ；2026-10-26。本次是代码交付和隔离验证，未切换当前服务，也未连接生产 RabbitMQ/MySQL。
 
+运行中异常退出的自动恢复、健康检查、Windows 服务化和本机管理命令，见 [Windows 运行时故障恢复部署](windows-runtime-recovery.md)。以下发布流程仍适用；退役现在具有有界等待，超时后阻断接管而不强杀旧进程。
+
 ## 实际行为
 
 - 一个长期运行的 supervisor 监听固定入口端口，转发 HTTP 和 WebSocket；两个版本分别使用独立只读代码目录、不同后端端口。
@@ -64,12 +66,12 @@ pnpm deploy:serve C:\openclaw-deploy\supervisor.json
 构建并验证候选版本后，在 supervisor 的标准输入中输入一行 JSON：
 
 ```json
-{"release":"C:\\openclaw-releases\\release-002","compatibleState":true}
+{ "release": "C:\\openclaw-releases\\release-002", "compatibleState": true }
 ```
 
 `compatibleState: true` 是发布者确认旧代码可以读取新代码可能写入的数据格式、配置和数据库结构；它不是程序自动推导出来的兼容性证明。有破坏性数据库迁移、会话格式升级或不可逆外部操作时，不应作此声明，也不应使用自动回滚流程。
 
-日志阶段依次为 preparing、draining、activating、running。失败可能进入 rolling-back 或 blocked。启动等待默认 120 秒；超时不意味着可以强杀一个仍在写入的进程。退役没有强杀超时：若仍有任务或插件拒绝停止，会保留执行权并阻止第二个写入者，可能需要人工排查。
+日志阶段依次为 preparing、draining、activating、running。失败可能进入 rolling-back 或 blocked。启动等待默认 120 秒；超时不意味着可以强杀一个仍在写入的进程。退役等待超时只会阻断接管，不会授权强杀：若仍有任务或插件拒绝停止，会保留执行权并阻止第二个写入者，可能需要人工排查。
 
 `deployment-state.json` 用临时文件重命名记录阶段。重启 supervisor 时，running 记录决定要启动的版本；如果记录停在中间阶段，程序拒绝猜测恢复。先核实是否还有旧 worker、锁和在途消息，再修复部署状态；不能仅删除锁文件强行启动第二个实例。
 

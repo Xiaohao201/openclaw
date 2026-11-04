@@ -1,16 +1,15 @@
-import { fork, type ChildProcess, type ForkOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { verifyDeployArtifact } from "./deploy-artifact.js";
-import {
-  DeployCoordinator,
-  type DeployWorker,
-  type DeploymentPhase,
-} from "./deploy-coordinator.js";
+import { startDeploymentControl } from "./deploy-control.js";
+import { DeployCoordinator, type DeploymentPhase } from "./deploy-coordinator.js";
 import { createDeployProxy } from "./deploy-proxy.js";
+import { DeploymentEvents, RecoveryState, recoveryConfigSchema } from "./deploy-recovery-state.js";
+import { ProcessWorker, deadline } from "./deploy-worker-process.js";
 
 const portSchema = z.number().int().min(1024).max(65535);
 const absolutePath = z.string().refine(path.isAbsolute, "An absolute path is required");
@@ -23,6 +22,7 @@ export const supervisorConfigSchema = z
     configPath: absolutePath,
     initialRelease: absolutePath,
     journal: absolutePath,
+    recovery: recoveryConfigSchema.prefault({}),
     startupTimeoutMs: z.number().int().min(1000).max(600_000).default(120_000),
   })
   .strict()
@@ -30,187 +30,63 @@ export const supervisorConfigSchema = z
     const ports = [c.port, ...c.slotPorts];
     return ports.every((p, i) => ports.every((q, j) => i === j || Math.abs(p - q) >= 20));
   }, "Ingress and slot ports must be separated by at least 20");
-const replySchema = z.union([
-  z.object({ ready: z.literal(true) }),
-  z.object({ id: z.number().int(), ok: z.boolean(), error: z.string().optional() }),
-]);
 const journalSchema = z.object({
   format: z.literal(1),
-  phase: z.enum(["running", "preparing", "draining", "activating", "rolling-back", "blocked"]),
+  phase: z.enum([
+    "running",
+    "preparing",
+    "draining",
+    "activating",
+    "rolling-back",
+    "blocked",
+    "recovering",
+  ]),
   release: absolutePath,
 });
 const deployCommandSchema = z
   .object({ release: absolutePath, compatibleState: z.literal(true) })
   .strict();
 
-class ProcessWorker implements DeployWorker {
-  private sequence = 0;
-  private pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
-  private child: ChildProcess;
-  private exited = false;
-  private exitPromise: Promise<void>;
-  private readyPromise: Promise<void>;
-  private activated = false;
-  constructor(
-    readonly port: number,
-    release: string,
-    private config: z.infer<typeof supervisorConfigSchema>,
-  ) {
-    const forkOptions: ForkOptions & { windowsHide: boolean } = {
-      cwd: release,
-      windowsHide: true,
-      execArgv: [],
-      stdio: ["ignore", "inherit", "inherit", "ipc"],
-      env: {
-        ...process.env,
-        OPENCLAW_ALLOW_MULTI_GATEWAY: "0",
-        OPENCLAW_MANAGED_DEPLOYMENT: "1",
-        OPENCLAW_STATE_DIR: config.stateDir,
-        OPENCLAW_CONFIG_PATH: config.configPath,
-        OPENCLAW_DEPLOY_PORT: String(port),
-        OPENCLAW_GATEWAY_PORT: String(port),
-      },
-    };
-    this.child = fork(path.join(release, "dist/deployment/worker.js"), [], forkOptions);
-    let ready!: () => void, failReady!: (error: Error) => void;
-    this.readyPromise = new Promise<void>((resolve, reject) => {
-      ready = resolve;
-      failReady = reject;
-    });
-    this.exitPromise = new Promise<void>((resolve) => {
-      this.child.once("exit", () => {
-        this.exited = true;
-        const error = new Error("Deployment worker exited");
-        failReady(error);
-        for (const pending of this.pending.values()) {
-          pending.reject(error);
-        }
-        this.pending.clear();
-        resolve();
-      });
-      this.child.once("error", (error) => {
-        failReady(error);
-        if (!this.child.pid) {
-          this.exited = true;
-          resolve();
-        }
-      });
-    });
-    this.child.on("message", (raw) => {
-      const parsed = replySchema.safeParse(raw);
-      if (!parsed.success) {
-        return;
-      }
-      const reply = parsed.data;
-      if ("ready" in reply) {
-        ready();
-        return;
-      }
-      const pending = this.pending.get(reply.id);
-      this.pending.delete(reply.id);
-      if (reply.ok) {
-        pending?.resolve();
-      } else {
-        pending?.reject(new Error(reply.error ?? "Worker command failed"));
-      }
-    });
-  }
-  async prepared(timeoutMs: number) {
-    await deadline(this.readyPromise, timeoutMs);
-  }
-  private command(command: "activate" | "retire") {
-    if (this.exited) {
-      return Promise.reject(new Error("Worker already exited"));
-    }
-    const id = ++this.sequence;
-    return new Promise<void>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.child.send({ command, id }, (error) => {
-        if (error) {
-          this.pending.delete(id);
-          reject(error);
-        }
-      });
-    });
-  }
-  activate() {
-    this.activated = true;
-    return deadline(this.command("activate"), this.config.startupTimeoutMs);
-  }
-  async retire() {
-    if (this.exited) {
-      return;
-    }
-    // Successful retirement exits instead of replying. A negative reply must
-    // fail closed; no force-kill timeout grants another process execution.
-    const command = this.command("retire");
-    await Promise.race([
-      this.exitPromise,
-      command.catch((error: unknown) => {
-        if (!this.exited) {
-          throw error;
-        }
-      }),
-    ]);
-    await this.exitPromise;
-  }
-  async discard() {
-    if (!this.activated && !this.exited) {
-      this.child.kill();
-      await this.exitPromise;
-      return;
-    }
-    await this.retire();
-  }
-}
-
-async function deadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Worker startup timed out")), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function runSupervisor(
   configFile: string,
-  options: {
-    input?: NodeJS.ReadableStream;
-    installSignalHandlers?: boolean;
-  } = {},
+  options: { input?: NodeJS.ReadableStream; installSignalHandlers?: boolean } = {},
 ) {
   const config = supervisorConfigSchema.parse(JSON.parse(await fs.readFile(configFile, "utf8")));
-  let release = config.initialRelease;
+  const recovery = new RecoveryState(`${config.journal}.recovery.json`);
+  const events = new DeploymentEvents(`${config.journal}.events.jsonl`);
+  await recovery.load();
+  let release = await fs.realpath(config.initialRelease);
+  let interruptedRecovery = false;
   try {
     const journal = journalSchema.parse(JSON.parse(await fs.readFile(config.journal, "utf8")));
-    if (journal.phase !== "running") {
+    if (journal.phase !== "running" && journal.phase !== "recovering") {
       throw new Error(
         `Interrupted deployment (${journal.phase}); inspect ownership and recover journal before restarting`,
       );
     }
     release = journal.release;
+    interruptedRecovery = journal.phase === "recovering";
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
   }
-  const record = async (phase: DeploymentPhase, current: string) => {
+  type RuntimePhase = DeploymentPhase | "starting" | "stopping" | "stopped";
+  let phase: RuntimePhase = "starting";
+  const record = async (next: DeploymentPhase, current: string) => {
     const temporary = `${config.journal}.${process.pid}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify({ format: 1, phase, release: current }) + "\n", {
-      flag: "wx",
-    });
+    await fs.writeFile(
+      temporary,
+      JSON.stringify({ format: 1, phase: next, release: current }) + "\n",
+    );
     await fs.rename(temporary, config.journal);
-    console.log(`[deploy] ${phase}`);
+    phase = next;
+    if (next === "running") {
+      release = current;
+    }
+    await events.write(next, { release: current });
   };
   const proxy = createDeployProxy();
-  // Bind the stable port before starting any business process. A duplicate
-  // supervisor fails here without contacting RabbitMQ or MySQL.
   await new Promise<void>((resolve, reject) => {
     proxy.server.once("error", reject);
     proxy.server.listen(config.port, config.host, () => {
@@ -220,6 +96,52 @@ export async function runSupervisor(
   });
   const workers = new Set<ProcessWorker>();
   let active: ProcessWorker | undefined;
+  let coordinator: DeployCoordinator<ProcessWorker>;
+  let shuttingDown = false;
+  let busy = false;
+  let operation: Promise<unknown> = Promise.resolve();
+  let input: readline.Interface | undefined;
+  let control: Awaited<ReturnType<typeof startDeploymentControl>> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let failures = 0;
+  const cancellation = new AbortController();
+  const status = () => ({
+    phase,
+    operationInProgress: busy,
+    release,
+    pid: active?.isExited ? null : (active?.pid ?? null),
+    healthFailures: failures,
+  });
+  const block = async (reason: string) => {
+    phase = "blocked";
+    proxy.route(null);
+    await recovery.block();
+    await events.write("recovery-blocked", { reason, release });
+  };
+  const reportFailure = (error: unknown) => {
+    // Loss of diagnostic/state persistence must not authorize another writer.
+    phase = "blocked";
+    proxy.route(null);
+    console.error("[deploy] Lifecycle failure", error);
+  };
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => {
+    if (shuttingDown) {
+      return Promise.reject(new Error("Supervisor is stopping"));
+    }
+    if (busy) {
+      return Promise.reject(new Error("Lifecycle operation already in progress"));
+    }
+    busy = true;
+    const next = Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        busy = false;
+      });
+    operation = next;
+    // Event-triggered operations must always have a rejection handler.
+    void next.catch(() => {});
+    return next;
+  };
   const prepare = async (directory: string): Promise<ProcessWorker> => {
     const canonical = await fs.realpath(directory);
     await verifyDeployArtifact(canonical);
@@ -228,7 +150,26 @@ export async function runSupervisor(
     if (!port) {
       throw new Error("No standby slot");
     }
-    const worker = new ProcessWorker(port, canonical, config);
+    const worker = new ProcessWorker(
+      port,
+      canonical,
+      config,
+      async () => {
+        // Persist ownership BEFORE activation can create any external side effects.
+        await recovery.owners(
+          [...workers].filter((w) => !w.isExited).flatMap((w) => (w.pid ? [w.pid] : [])),
+        );
+      },
+      (exited, code, signal) => {
+        workers.delete(exited);
+        void events
+          .write("worker-exit", { pid: exited.pid ?? null, code, signal })
+          .catch(reportFailure);
+        if (exited === active && !busy && !shuttingDown && phase === "running") {
+          void exclusive(() => restore("worker-exit")).catch(reportFailure);
+        }
+      },
+    );
     workers.add(worker);
     try {
       await worker.prepared(config.startupTimeoutMs);
@@ -238,54 +179,219 @@ export async function runSupervisor(
       throw error;
     }
   };
-  let shuttingDown = false;
-  let operation: Promise<unknown> = Promise.resolve();
-  let input: readline.Interface | undefined;
-  const onSignal = () => {
-    void shutdown().catch(console.error);
-  };
-  const shutdown = async () => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    input?.close();
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await operation.catch(() => {});
-    proxy.route(null);
-    for (const worker of workers) {
-      await worker.retire();
-    }
-    await proxy.close();
-  };
-  try {
-    active = await prepare(release);
-    await record("activating", release);
-    await deadline(active.activate(), config.startupTimeoutMs);
-    await record("running", release);
-    proxy.route(active.port);
-    const coordinator = new DeployCoordinator({
+  const makeCoordinator = () =>
+    new DeployCoordinator({
       release,
-      worker: active,
+      worker: active!,
       prepare,
       record,
       route: (worker) => {
-        const port = worker?.port ?? null;
-        proxy.route(port);
-        if (port !== null) {
-          active = [...workers].findLast((w) => w.port === port);
+        proxy.route(worker?.port ?? null);
+        if (worker) {
+          active = worker;
+          failures = 0;
         }
       },
     });
-    const deploy = (directory: string, compatibleState: boolean) => {
-      if (shuttingDown) {
-        return Promise.reject(new Error("Supervisor is stopping"));
+  const restore = async (
+    reason: "worker-exit" | "unhealthy" | "manual" | "interrupted" | "startup-failed",
+  ) => {
+    proxy.route(null);
+    phase = "recovering";
+    await events.write("recovery-start", { reason, release });
+    await record("recovering", release);
+    // A live or unresponsive owner is retired before ANY replacement is prepared.
+    try {
+      for (const worker of workers) {
+        await worker.retire();
       }
-      const next = coordinator.deploy(directory, compatibleState);
-      operation = Promise.allSettled([operation, next]);
-      return next;
-    };
+      await recovery.owners([]);
+    } catch {
+      await block("owner-not-retired");
+      return;
+    }
+    while (!cancellation.signal.aborted) {
+      const waitMs = await recovery.attempt(config.recovery);
+      if (waitMs === null) {
+        await block("restart-budget-exhausted");
+        return;
+      }
+      await events.write("recovery-backoff", { waitMs });
+      try {
+        await delay(waitMs, undefined, { signal: cancellation.signal });
+      } catch {
+        if (shuttingDown) {
+          return;
+        }
+        throw new Error("Recovery delay interrupted");
+      }
+      if (shuttingDown) {
+        return;
+      }
+      let candidate: ProcessWorker | undefined;
+      try {
+        candidate = await prepare(release);
+        if (shuttingDown) {
+          await candidate.discard();
+          return;
+        }
+        await candidate.activate();
+        if (candidate.isExited) {
+          throw new Error("Worker exited during activation");
+        }
+        active = candidate;
+        await record("running", release);
+        coordinator = makeCoordinator();
+        failures = 0;
+        proxy.route(active.port);
+        await events.write("recovery-complete", { pid: active.pid ?? null, release });
+        // Retain only live workers; durable ownership is refreshed before activation.
+        for (const worker of workers) {
+          if (worker.isExited) {
+            workers.delete(worker);
+          }
+        }
+        return;
+      } catch (error) {
+        console.error("[deploy] Recovery attempt failed", error);
+        try {
+          await candidate?.discard();
+          await recovery.owners([]);
+        } catch {
+          await block("candidate-not-retired");
+          return;
+        }
+        await events.write("recovery-attempt-failed", { release });
+      }
+    }
+  };
+  const deploy = (directory: string, compatibleState: boolean) =>
+    exclusive(async () => {
+      if (phase !== "running") {
+        throw new Error("Supervisor is not running; inspect recovery status");
+      }
+      return coordinator.deploy(await fs.realpath(directory), compatibleState);
+    });
+  const recover = () =>
+    exclusive(async () => {
+      if (phase !== "blocked") {
+        throw new Error("Manual recovery is only allowed while blocked");
+      }
+      if ([...workers].some((w) => !w.isExited)) {
+        throw new Error("A previous worker is still alive; inspect ownership first");
+      }
+      await recovery.reset();
+      await restore("manual");
+    });
+  const monitor = async () => {
+    try {
+      const worker = active;
+      if (!busy && !shuttingDown && phase === "running" && worker) {
+        if (worker.isExited) {
+          await exclusive(() => restore("worker-exit"));
+        } else {
+          let healthy = false;
+          try {
+            const response = await fetch(`http://127.0.0.1:${worker.port}/healthz`, {
+              signal: AbortSignal.any([
+                cancellation.signal,
+                AbortSignal.timeout(config.recovery.healthTimeoutMs),
+              ]),
+              redirect: "error",
+            });
+            healthy = response.ok;
+            await response.body?.cancel();
+          } catch {
+            /* Consecutive probe failures, not dependency errors, trigger retirement. */
+          }
+          // A deployment may have completed while the probe was in flight.
+          if (!busy && !shuttingDown && phase === "running" && worker === active) {
+            failures = healthy ? 0 : failures + 1;
+            if (failures >= config.recovery.healthFailures) {
+              await exclusive(() => restore("unhealthy"));
+            }
+          }
+        }
+      }
+    } catch (error) {
+      reportFailure(error);
+    } finally {
+      if (!shuttingDown) {
+        timer = setTimeout(() => {
+          void monitor();
+        }, config.recovery.healthIntervalMs);
+      }
+    }
+  };
+  let closePromise: Promise<void> | undefined;
+  const onSignal = () => {
+    void shutdown().catch(reportFailure);
+  };
+  const shutdown = () => {
+    closePromise ??= (async () => {
+      shuttingDown = true;
+      cancellation.abort();
+      clearTimeout(timer);
+      input?.close();
+      await control?.close();
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      await operation.catch(() => {});
+      phase = "stopping";
+      proxy.route(null);
+      try {
+        for (const worker of workers) {
+          await worker.retire();
+        }
+        await recovery.owners([]);
+        phase = "stopped";
+        await events.write("stopped");
+      } finally {
+        await proxy.close();
+      }
+    })();
+    return closePromise;
+  };
+  try {
+    if (recovery.blocked) {
+      phase = "blocked";
+      await events.write("recovery-blocked", { reason: "persisted-budget-or-ownership-block" });
+    } else if (interruptedRecovery || recovery.unclean) {
+      await exclusive(() => restore("interrupted"));
+    } else {
+      await exclusive(async () => {
+        try {
+          active = await prepare(release);
+          await record("activating", release);
+          await deadline(active.activate(), config.startupTimeoutMs);
+          await record("running", release);
+          coordinator = makeCoordinator();
+          proxy.route(active.port);
+        } catch (error) {
+          console.error("[deploy] Initial startup failed", error);
+          await restore("startup-failed");
+        }
+      });
+    }
+    control = await startDeploymentControl(`${config.journal}.commands`, async (command) => {
+      switch (command.command) {
+        case "status":
+          return status();
+        case "deploy":
+          return deploy(command.release, command.compatibleState);
+        case "recover":
+          await recover();
+          return status();
+        case "stop":
+          // Finish the response before closing the control channel itself.
+          setImmediate(() => {
+            void shutdown().catch(reportFailure);
+          });
+          return { accepted: true };
+        default:
+          throw new Error("Unsupported deployment command");
+      }
+    });
     input = readline.createInterface({ input: options.input ?? process.stdin });
     input.on("line", (line) => {
       if (shuttingDown || !line.trim()) {
@@ -293,9 +399,7 @@ export async function runSupervisor(
       }
       try {
         const command = deployCommandSchema.parse(JSON.parse(line));
-        void deploy(command.release, command.compatibleState)
-          .then((result) => console.log(`[deploy] ${result}`))
-          .catch((error) => console.error(error));
+        void deploy(command.release, command.compatibleState).catch(console.error);
       } catch (error) {
         console.error(error);
       }
@@ -304,10 +408,11 @@ export async function runSupervisor(
       process.once("SIGINT", onSignal);
       process.once("SIGTERM", onSignal);
     }
-    console.log(
-      '[deploy] Ready. Enter {"release":"ABSOLUTE_PATH","compatibleState":true} to deploy.',
-    );
-    return { deploy, close: shutdown };
+    timer = setTimeout(() => {
+      void monitor();
+    }, config.recovery.healthIntervalMs);
+    await events.write("supervisor-ready", { phase });
+    return { deploy, recover, status, close: shutdown };
   } catch (error) {
     await shutdown();
     throw error;
