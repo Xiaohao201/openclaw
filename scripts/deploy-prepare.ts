@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { verifyDeployArtifact, writeDeployArtifact } from "./deploy-artifact.js";
+import { initializeDeployConfig } from "./deploy-bootstrap.js";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 type RunCommand = (command: string, args: string[], cwd: string) => void;
@@ -111,6 +112,7 @@ export async function prepareDeployRelease(params: {
 export async function runDeployCommand(
   args: string[],
   prepare: typeof prepareDeployRelease = prepareDeployRelease,
+  initialize: typeof initializeDeployConfig = initializeDeployConfig,
 ) {
   const { values } = parseArgs({
     args,
@@ -118,23 +120,40 @@ export async function runDeployCommand(
       source: { type: "string", default: process.cwd() },
       output: { type: "string" },
       verify: { type: "string" },
+      configure: { type: "string" },
     },
   });
+  if (
+    [values.verify, values.output, values.configure].filter((value) => value !== undefined).length >
+    1
+  ) {
+    throw new Error("Use either --verify, --output, or --configure");
+  }
   if (values.verify) {
-    if (values.output) {
-      throw new Error("Use either --verify or --output");
-    }
     await verifyDeployArtifact(path.resolve(values.verify));
     console.log("Build and UI checksums verified; no service was started or switched.");
     return;
   }
-  if (!values.output) {
+  let output: string;
+  if (values.configure) {
+    output = await fs.realpath(values.configure);
+    await verifyDeployArtifact(output);
+  } else if (values.output) {
+    output = await prepare({ source: values.source, output: values.output });
+  } else {
     throw new Error(
-      "Required: --output <new-directory-outside-source>; builds committed HEAD only",
+      "Required: --output <new-directory-outside-source> or --configure <existing-release>; builds committed HEAD only",
     );
   }
-  const output = await prepare({ source: values.source, output: values.output });
   console.log(`Prepared ${output}. No service was stopped, started, or switched.`);
+  const config = await initialize({ release: output });
+  console.log(`${config.created ? "Created" : "Preserved"} supervisor config: ${config.file}`);
+  console.log(
+    "Before first startup: keep Gateway token/password authentication; add 127.0.0.1 to gateway.trustedProxies and http://127.0.0.1:18789 to gateway.controlUi.allowedOrigins. Existing Gateway config was not modified.",
+  );
+  console.log(
+    `After stopping the old Gateway, run from the stable supervisor source directory: pnpm deploy:serve "${config.file}"`,
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -108,11 +108,37 @@ describe("deployment command", () => {
 
   it("passes the explicit release directory to preparation and propagates failure", async () => {
     const prepare = vi.fn().mockResolvedValue(root);
+    const initialize = vi.fn().mockResolvedValue({ file: "supervisor.json", created: true });
     vi.spyOn(console, "log").mockImplementation(() => {});
-    await runDeployCommand(["--source", root, "--output", `${root}-release`], prepare);
+    await runDeployCommand(["--source", root, "--output", `${root}-release`], prepare, initialize);
     expect(prepare).toHaveBeenCalledWith({ source: root, output: `${root}-release` });
+    expect(initialize).toHaveBeenCalledWith({ release: root });
+    initialize.mockClear();
     prepare.mockRejectedValue(new Error("build failed"));
-    await expect(runDeployCommand(["--output", root], prepare)).rejects.toThrow("build failed");
+    await expect(runDeployCommand(["--output", root], prepare, initialize)).rejects.toThrow(
+      "build failed",
+    );
+    expect(initialize).not.toHaveBeenCalled();
+  });
+
+  it("configures a verified existing release without rebuilding", async () => {
+    await fixture(root);
+    await writeDeployArtifact(root, commit);
+    const prepare = vi.fn();
+    const initialize = vi.fn().mockResolvedValue({ file: "supervisor.json", created: false });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await runDeployCommand(["--configure", root], prepare, initialize);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(initialize).toHaveBeenCalledWith({ release: await fs.realpath(root) });
+    initialize.mockClear();
+    await fs.writeFile(path.join(root, "dist/entry.js"), "changed");
+    await expect(runDeployCommand(["--configure", root], prepare, initialize)).rejects.toThrow(
+      "checksum mismatch",
+    );
+    expect(initialize).not.toHaveBeenCalled();
+    await expect(
+      runDeployCommand(["--configure", root, "--output", root], prepare, initialize),
+    ).rejects.toThrow("either");
   });
 });
 

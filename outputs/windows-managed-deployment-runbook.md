@@ -38,7 +38,7 @@ pnpm deploy:verify C:\openclaw-releases\release-001
 
 首次迁移需要安排一次端口交接窗口：现有 Gateway 正占用的端口无法被 supervisor 同时绑定。先让现有任务结束，再停止旧启动方式，将该端口交给 supervisor。关闭原 Windows 计划任务或服务的自动拉起机制，避免它抢占端口或执行权。此步骤本次没有执行。
 
-把 supervisor 运行目录保持不变，它的升级需要另行安排。新建独立配置文件，例如 `C:\openclaw-deploy\supervisor.json`（路径均为示例，父目录需先存在）：
+把 supervisor 运行目录保持不变，它的升级需要另行安排。`deploy:prepare` 现在自动创建发布目录同级的 `supervisor/supervisor.json` 并保留已有配置，详见运行时恢复说明。也可手工维护独立配置文件，例如 `C:\openclaw-deploy\supervisor.json`（以下路径均为手动配置示例，父目录需先存在）：
 
 ```json
 {

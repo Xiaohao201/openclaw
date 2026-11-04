@@ -96,6 +96,8 @@ Docs: https://docs.openclaw.ai
 - Phone control/handoff: keep expiry polling idle in managed standby, drain in-flight revocations, and reconcile expired grants before resuming ingress without overlapping timers.
 - Windows/deployment preparation: repair the root CLAUDE.md guidance alias and skip CLAUDE.md aliases during archive extraction so release preparation works without symlink creation privileges, including older revisions with malformed aliases.
 
+- Deployment preparation: generate a protected sibling supervisor configuration using the current user's existing OpenClaw state, preserve existing deployment settings, and support `--configure` for verified releases without rebuilding.
+
 ## 2026.4.15
 
 ### Changes

@@ -14,6 +14,19 @@
 
 ## 配置
 
+`pnpm deploy:prepare --output <新版本目录>` 在构建和产物校验成功后，自动创建同级的 `supervisor/supervisor.json`。例如输出 `C:\Users\PC\Desktop\release\001`，配置位于 `C:\Users\PC\Desktop\release\supervisor\supervisor.json`。默认沿用当前用户的 `~/.openclaw/openclaw.json` 和状态目录；遵循 `OPENCLAW_HOME`、`OPENCLAW_STATE_DIR` 和 `OPENCLAW_CONFIG_PATH` 环境变量。默认入口为 `127.0.0.1:18789`，worker 端口为 19001 和 19041。
+
+已有 supervisor 配置和部署状态保持原样，准备下一版本不会修改 `initialRelease` 或切换运行中的服务。首次创建的管理目录在 Windows 上只授权当前账户、SYSTEM 和管理员；其他平台使用 0700。已有目录缺少配置时会要求人工检查，避免重置现有目录的权限。Gateway 配置必须已存在；生成器不改写认证、代理、来源设置或凭证。启动前仍需检查部署说明中的 Gateway 配置和首次端口交接条件。
+
+对于已经构建并校验过的版本，可以只补生成配置，无需重建：
+
+```powershell
+pnpm deploy:prepare --configure C:\Users\PC\Desktop\release\001
+pnpm deploy:serve C:\Users\PC\Desktop\release\supervisor\supervisor.json
+```
+
+`--configure` 先校验发布产物，再生成或保留配置；`--verify` 保持只读。若构建成功但配置生成失败，修正所提示的问题后使用 `--configure`，不要对已有版本目录重新执行 `--output`。`supervisor` 是保留的管理目录名称，不应用作发布版本目录名。Windows 服务账户若不是当前用户，仍需按下文单独授予该账户所需权限。
+
 旧 supervisor 配置仍兼容。可在 `supervisor.json` 增加以下字段；省略时使用这些默认值：
 
 ```json
