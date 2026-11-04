@@ -1,4 +1,4 @@
-import type { spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { cpSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -117,6 +117,75 @@ describe("deployment command", () => {
 });
 
 describe("isolated release preparation", () => {
+  it("extracts real Git archives without creating guidance symlinks on Windows", async () => {
+    const source = path.join(root, "source");
+    const output = path.join(root, "release candidate");
+    await fs.mkdir(source);
+    await fixture(source);
+    await fs.writeFile(path.join(source, ".gitattributes"), "* -text\n");
+    await fs.mkdir(path.join(source, "nested"));
+    await fs.writeFile(path.join(source, "AGENTS.md"), "Repository guidance\n");
+    await fs.writeFile(path.join(source, "nested", "AGENTS.md"), "Scoped guidance\n");
+    const git = (args: string[], input?: string) => {
+      const result = spawnSync("git", args, {
+        cwd: source,
+        encoding: "utf8",
+        input,
+        windowsHide: true,
+      });
+      if (result.status !== 0) {
+        throw new Error(result.stderr || "Fixture Git command failed");
+      }
+      return result.stdout.trim();
+    };
+    git(["init"]);
+    git(["add", "."]);
+    // Reproduce the malformed link actually found in v3 without requiring
+    // filesystem symlink privileges in the fixture itself.
+    for (const [file, target] of [
+      ["CLAUDE.md", "# CLAUDE.md\n" + "invalid link target\n".repeat(600)],
+      ["nested/CLAUDE.md", "AGENTS.md"],
+    ]) {
+      const blob = git(["hash-object", "-w", "--stdin"], target);
+      git(["update-index", "--add", "--cacheinfo", `120000,${blob},${file}`]);
+    }
+    const tree = git(["write-tree"]);
+    const revision = git([
+      "-c",
+      "user.name=Deployment Test",
+      "-c",
+      "user.email=deployment@example.invalid",
+      "commit-tree",
+      tree,
+      "-m",
+      "Archive fixture",
+    ]);
+    const commands: string[] = [];
+    const run = (command: string, args: string[]) => {
+      commands.push(command);
+      // Use real Git archive and Windows tar; only expensive build commands
+      // are replaced because this fixture already contains built output.
+      if (command !== "git" && command !== "tar") {
+        return;
+      }
+      const result = spawnSync(command, args, { cwd: source, encoding: "utf8", windowsHide: true });
+      if (result.status !== 0) {
+        throw new Error(result.stderr || "Archive extraction failed");
+      }
+    };
+    await prepareDeployRelease({ source, output, resolveCommit: () => revision, run });
+    await verifyDeployArtifact(output);
+    expect(await fs.readFile(path.join(output, "AGENTS.md"), "utf8")).toBe("Repository guidance\n");
+    expect(await fs.readFile(path.join(output, "nested", "AGENTS.md"), "utf8")).toBe(
+      "Scoped guidance\n",
+    );
+    expect(await fs.readFile(path.join(output, "dist", "entry.js"), "utf8")).toBe("// built");
+    for (const file of ["CLAUDE.md", "nested/CLAUDE.md"]) {
+      await expect(fs.lstat(path.join(output, file))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(commands.slice(0, 2)).toEqual(["git", "tar"]);
+  });
+
   it.each(["success", "archive-error", "archive-exit", "install-error", "install-exit"])(
     "runs the process adapter with isolated cwd and fails closed: %s",
     async (outcome) => {

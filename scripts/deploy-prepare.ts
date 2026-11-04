@@ -73,7 +73,11 @@ export async function prepareDeployRelease(params: {
   await fs.mkdir(output);
   const archive = path.join(output, "source.tar");
   run("git", ["archive", "--format=tar", `--output=${archive}`, commit], source);
-  run("tar", ["-xf", archive, "-C", output], source);
+  // CLAUDE.md files are AI guidance aliases, not runtime/build inputs. Skip
+  // them at every depth so Windows extraction needs no symlink privileges,
+  // including when an older committed revision contains a malformed alias.
+  // Keep AGENTS.md and every other source file in the exported release.
+  run("tar", ["--exclude=CLAUDE.md", "-xf", archive, "-C", output], source);
   await fs.rm(archive);
   const pnpm = (args: string[]) => {
     const invocation = resolvePnpmRunner({ pnpmArgs: args });

@@ -94,6 +94,7 @@ Docs: https://docs.openclaw.ai
 - WeChat Group Push: build each turn's destination list from the host's current configuration so newly added groups appear even when a cached plugin runtime retains an older snapshot.
 - Gateway/plugin handoff: support standby and draining for ACP, browser control, and device pairing notifications; pause ingress before execution backends, preserve in-flight work, and report unsupported lifecycle contracts before starting services.
 - Phone control/handoff: keep expiry polling idle in managed standby, drain in-flight revocations, and reconcile expired grants before resuming ingress without overlapping timers.
+- Windows/deployment preparation: repair the root CLAUDE.md guidance alias and skip CLAUDE.md aliases during archive extraction so release preparation works without symlink creation privileges, including older revisions with malformed aliases.
 
 ## 2026.4.15
 

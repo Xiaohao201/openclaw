@@ -95,6 +95,8 @@ WinSW 会调用本机 `stop` 管理命令，等待进程退出。它的最终停
 
 ## 故障排查
 
+`deploy:prepare` 在解压时若提示 `CLAUDE.md: Can't create`，请更新 v3 后重试。根目录的损坏链接已恢复为 `AGENTS.md`，发布解压也会跳过各级 `CLAUDE.md` AI 指引别名，避免依赖 Windows 创建符号链接的权限；`AGENTS.md` 和业务源码仍保留。发布准备仅导出已提交的版本，所以仅在工作目录编辑文件不会修复旧提交中的归档。之前失败的输出目录可能已部分解压，重试时使用新的目录，例如 `release-002`，不要覆盖已有发布目录。
+
 以 journal 为 `deployment-state.json` 为例：
 
 | 文件                                  | 用途                                                     |
