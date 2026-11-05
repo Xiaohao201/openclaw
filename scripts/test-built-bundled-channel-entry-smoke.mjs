@@ -48,10 +48,15 @@ function smokeInInstalledLayoutIfNeeded() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-smoke-"));
   const nodeModulesRoot = path.join(tempRoot, "node_modules");
   const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
-  fs.mkdirSync(nodeModulesRoot, { recursive: true });
-  fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
-
+  let exitCode;
   try {
+    fs.mkdirSync(nodeModulesRoot, { recursive: true });
+    // Windows junctions preserve the installed layout without symlink privileges.
+    fs.symlinkSync(
+      packageRoot,
+      installedPackageRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const result = spawnSync(
       process.execPath,
       [
@@ -65,10 +70,15 @@ function smokeInInstalledLayoutIfNeeded() {
         stdio: "inherit",
       },
     );
-    process.exit(result.status ?? 1);
+    if (result.error) {
+      throw result.error;
+    }
+    exitCode = result.status ?? 1;
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+  // process.exit() inside the try block would bypass temporary directory cleanup.
+  process.exit(exitCode);
 }
 
 smokeInInstalledLayoutIfNeeded();
