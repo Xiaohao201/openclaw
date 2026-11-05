@@ -49,7 +49,11 @@ const deployCommandSchema = z
 
 export async function runSupervisor(
   configFile: string,
-  options: { input?: NodeJS.ReadableStream; installSignalHandlers?: boolean } = {},
+  options: {
+    input?: NodeJS.ReadableStream;
+    installSignalHandlers?: boolean;
+    expectedRelease?: string;
+  } = {},
 ) {
   const config = supervisorConfigSchema.parse(JSON.parse(await fs.readFile(configFile, "utf8")));
   const recovery = new RecoveryState(`${config.journal}.recovery.json`);
@@ -71,6 +75,20 @@ export async function runSupervisor(
       throw error;
     }
   }
+  if (options.expectedRelease) {
+    const expected = await fs.realpath(options.expectedRelease);
+    if (path.relative(path.resolve(release), expected) !== "") {
+      throw new Error(
+        `Release mismatch: requested ${expected}, but shared supervisor state selects ${release}. ` +
+          `Config: ${path.resolve(configFile)}; journal: ${config.journal}. ` +
+          "No service was started. Run node deploy.mjs status; use node deploy.mjs deploy --compatible-state " +
+          "only when the shared supervisor is running. If blocked, inspect its recovery state before changing the release.",
+      );
+    }
+  }
+  console.log(
+    `[deploy] Selected release: ${release}; shared config: ${path.resolve(configFile)}; journal: ${config.journal}`,
+  );
   type RuntimePhase = DeploymentPhase | "starting" | "stopping" | "stopped";
   let phase: RuntimePhase = "starting";
   const record = async (next: DeploymentPhase, current: string) => {

@@ -40,6 +40,8 @@ Docs: https://docs.openclaw.ai
 
 - Windows/managed deployments: recover exited or persistently unhealthy gateway workers with bounded persistent retries, preserve single-writer ownership, and add local management commands plus a WinSW service configuration generator.
 
+- Deployment: generate per-release `deploy.mjs` entrypoints backed by one shared Supervisor, show target and selected releases in status, and reject startup when shared state selects a different release.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

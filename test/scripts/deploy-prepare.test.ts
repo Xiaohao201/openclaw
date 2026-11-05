@@ -130,6 +130,10 @@ describe("deployment command", () => {
     await runDeployCommand(["--configure", root], prepare, initialize);
     expect(prepare).not.toHaveBeenCalled();
     expect(initialize).toHaveBeenCalledWith({ release: await fs.realpath(root) });
+    expect(await fs.readFile(path.join(root, "deploy.mjs"), "utf8")).toContain(
+      "deploy-release-cli.ts",
+    );
+    await verifyDeployArtifact(root);
     initialize.mockClear();
     await fs.writeFile(path.join(root, "dist/entry.js"), "changed");
     await expect(runDeployCommand(["--configure", root], prepare, initialize)).rejects.toThrow(

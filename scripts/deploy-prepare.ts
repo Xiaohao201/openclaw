@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { verifyDeployArtifact, writeDeployArtifact } from "./deploy-artifact.js";
 import { initializeDeployConfig } from "./deploy-bootstrap.js";
+import { writeReleaseLauncher } from "./deploy-release.js";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 type RunCommand = (command: string, args: string[], cwd: string) => void;
@@ -147,12 +148,13 @@ export async function runDeployCommand(
   }
   console.log(`Prepared ${output}. No service was stopped, started, or switched.`);
   const config = await initialize({ release: output });
+  const launcher = await writeReleaseLauncher({ release: output, configFile: config.file });
   console.log(`${config.created ? "Created" : "Preserved"} supervisor config: ${config.file}`);
   console.log(
     "Before first startup: keep Gateway token/password authentication; add 127.0.0.1 to gateway.trustedProxies and http://127.0.0.1:18789 to gateway.controlUi.allowedOrigins. Existing Gateway config was not modified.",
   );
   console.log(
-    `After stopping the old Gateway, run from the stable supervisor source directory: pnpm deploy:serve "${config.file}"`,
+    `Release entrypoint: ${launcher}\nFrom the release directory: node deploy.mjs serve\nInspect the shared service: node deploy.mjs status\nUpdate a running service to this release: node deploy.mjs deploy --compatible-state\nStop the shared service: node deploy.mjs stop\nKeep the supervisor source directory available; preparing a release does not switch the running version.`,
   );
 }
 

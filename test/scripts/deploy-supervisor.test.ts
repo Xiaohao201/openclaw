@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeDeployArtifact } from "../../scripts/deploy-artifact.js";
 import { sendDeploymentCommand } from "../../scripts/deploy-control.js";
+import { runReleaseCommand } from "../../scripts/deploy-release.js";
 import { runSupervisor, supervisorConfigSchema } from "../../scripts/deploy-supervisor.js";
 
 let supervisor: Awaited<ReturnType<typeof runSupervisor>> | undefined;
@@ -182,6 +183,45 @@ async function recoveryFixture(maxAttempts = 3, delayMs = 20) {
 }
 
 describe("runtime recovery", () => {
+  it("refuses a different release before changing shared state or starting a worker", async () => {
+    const f = await recoveryFixture();
+    await supervisor!.close();
+    supervisor = undefined;
+    const candidate = await artifact("002");
+    const journal = path.join(root!, "journal.json");
+    const previous = await fs.readFile(journal, "utf8");
+    await expect(
+      runSupervisor(f.configFile, {
+        expectedRelease: candidate,
+        installSignalHandlers: false,
+      }),
+    ).rejects.toThrow("Release mismatch");
+    expect(await fs.readFile(journal, "utf8")).toBe(previous);
+    supervisor = await runSupervisor(f.configFile, {
+      expectedRelease: f.release,
+      input: new PassThrough(),
+      installSignalHandlers: false,
+    });
+    expect(supervisor.status()).toMatchObject({ phase: "running", release: f.release });
+  });
+
+  it("operates one shared supervisor from another release entrypoint", async () => {
+    const f = await recoveryFixture();
+    const candidate = await artifact("002");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runReleaseCommand(f.configFile, candidate, ["status"]);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('"releaseMatches":false'));
+      await runReleaseCommand(f.configFile, candidate, ["deploy", "--compatible-state"]);
+      await runReleaseCommand(f.configFile, candidate, ["status"]);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('"releaseMatches":true'));
+      expect(supervisor!.status()).toMatchObject({ phase: "running", release: candidate });
+      expect(await (await fetch(f.url)).text()).toBe("002");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("supports service management without an attached terminal", async () => {
     const f = await recoveryFixture();
     const directory = path.join(root!, "journal.json.commands");
