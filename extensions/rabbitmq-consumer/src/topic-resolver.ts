@@ -115,7 +115,7 @@ export class TopicResolver {
 
   /**
    * Look up every topic a user may view plus their feed_topic titles.
-   * Superusers (su = 1) get every active daily-monitoring master topic;
+   * Superusers and level 1/2 admins get every active daily-monitoring master topic;
    * everyone else gets their entity_auth ownership (many rows per uid), with
    * the primary topic (top-level fields) being the most recently granted
    * mapping. Results are cached per uid for CACHE_TTL_MS; on a DB failure a
@@ -135,13 +135,13 @@ export class TopicResolver {
     const pool = await this.getPool();
 
     try {
-      // Superusers (legal_user_role.su = 1) administer every active
+      // Superusers and level 1/2 admins administer every active
       // daily-monitoring project regardless of entity_auth grants; everyone
       // else is scoped to their entity_auth ownership. Keep this branch in
       // sync with extensions/feed-search/src/auth-topic-resolver.ts so the
       // injected chat prefix and the feed_query tool agree on topic scope.
-      const mappings = (await this.isSuperUser(pool, userId, signal))
-        ? await this.resolveSuperUserMappings(pool, signal)
+      const mappings = (await this.canViewAllMonitoringProjects(pool, userId, signal))
+        ? await this.resolveAllMonitoringMappings(pool, signal)
         : await this.resolveEntityAuthMappings(pool, userId, signal);
       const names = await this.lookupTopicNames(
         pool,
@@ -176,19 +176,24 @@ export class TopicResolver {
     }
   }
 
-  /** True when legal_user_role.su = 1 for this user (missing row => not super). */
-  private async isSuperUser(
+  /** Superusers and level 1/2 admins can view all monitoring projects; missing roles cannot. */
+  private async canViewAllMonitoringProjects(
     pool: mysql.Pool,
     userId: string,
     signal?: AbortSignal,
   ): Promise<boolean> {
     const [rows] = await cancellableRead(
       pool,
-      "SELECT su FROM legal_user_role WHERE id = ?",
+      "SELECT su, is_level1_admin, is_level2_admin FROM legal_user_role WHERE id = ?",
       [userId],
       signal,
     );
-    return Number(rows?.[0]?.su) === 1;
+    const role = rows?.[0];
+    return (
+      Number(role?.su) === 1 ||
+      Number(role?.is_level1_admin) === 1 ||
+      Number(role?.is_level2_admin) === 1
+    );
   }
 
   /** Normal-user path: entity_auth ownership, newest grant first (index 0). */
@@ -209,13 +214,13 @@ export class TopicResolver {
   }
 
   /**
-   * Superuser path: the master feed_topic of every active (non-deleted)
+   * Monitoring administrator path: the master feed_topic of every active (non-deleted)
    * Running daily-monitoring report. These are always master topics, so they
    * map to feed_monitor_item.topicId (useSlaveTopic = false, masterId =
    * topicId). Ordered by topic id for a deterministic primary and a
    * prompt-cache-stable prefix.
    */
-  private async resolveSuperUserMappings(
+  private async resolveAllMonitoringMappings(
     pool: mysql.Pool,
     signal?: AbortSignal,
   ): Promise<Omit<TopicInfo, "topicName">[]> {

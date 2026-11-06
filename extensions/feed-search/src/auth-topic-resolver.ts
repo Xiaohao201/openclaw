@@ -6,12 +6,10 @@ import type { MySqlConfig } from "./types.js";
  * One topic the user is authorized to query.
  *
  * Two resolution paths feed this (see 权限问题.md):
- * - Superusers (legal_user_role.su = 1) get the master feed_topic of every
+ * - Superusers and level 1/2 admins get the master feed_topic of every
  *   active daily-monitoring report, independent of entity_auth grants.
  * - Everyone else goes through entity_auth ownership (masterId/slaveId),
- *   mirroring extensions/rabbitmq-consumer/src/topic-resolver.ts. NOTE: that
- *   blueprint still lacks the superuser branch; the injected chat prefix will
- *   under-report topics for su=1 accounts until it is updated to match.
+ *   mirroring extensions/rabbitmq-consumer/src/topic-resolver.ts.
  */
 export interface AuthorizedTopic {
   topicId: number;
@@ -75,7 +73,7 @@ export class AuthTopicResolver {
   }
 
   /**
-   * Look up every topic the user may query. Superusers (su = 1) get every
+   * Look up every topic the user may query. Superusers and level 1/2 admins get every
    * active daily-monitoring master topic; everyone else gets their entity_auth
    * grants (index 0 = most recently granted / current project). Results are
    * cached per uid for CACHE_TTL_MS; on a DB failure a stale entry (if any) is
@@ -92,8 +90,8 @@ export class AuthTopicResolver {
     }
 
     try {
-      const mappings = (await this.isSuperUser(userId))
-        ? await this.resolveSuperUserTopics()
+      const mappings = (await this.canViewAllMonitoringProjects(userId))
+        ? await this.resolveAllMonitoringTopics()
         : await this.resolveEntityAuthTopics(userId);
       const names = await this.lookupTopicNames(mappings.map((m) => m.topicId));
       // A transient feed_topic blip must not blank previously known titles
@@ -118,14 +116,19 @@ export class AuthTopicResolver {
     }
   }
 
-  /** True when legal_user_role.su = 1 for this user (missing row => not super). */
-  private async isSuperUser(userId: string): Promise<boolean> {
+  /** Superusers and level 1/2 admins can view all monitoring projects; missing roles cannot. */
+  private async canViewAllMonitoringProjects(userId: string): Promise<boolean> {
     const rows = await executeQuery<RowDataPacket[]>(
       this.config,
-      "SELECT su FROM legal_user_role WHERE id = ?",
+      "SELECT su, is_level1_admin, is_level2_admin FROM legal_user_role WHERE id = ?",
       [userId],
     );
-    return Number(rows?.[0]?.su) === 1;
+    const role = rows?.[0];
+    return (
+      Number(role?.su) === 1 ||
+      Number(role?.is_level1_admin) === 1 ||
+      Number(role?.is_level2_admin) === 1
+    );
   }
 
   /** Normal-user path: entity_auth ownership, newest grant first. */
@@ -139,12 +142,12 @@ export class AuthTopicResolver {
   }
 
   /**
-   * Superuser path: the master feed_topic of every active (non-deleted)
+   * Monitoring administrator path: the master feed_topic of every active (non-deleted)
    * Running daily-monitoring report. Topics are always master topics, so they
    * map to feed_monitor_item.topicId (useSlaveTopic = false). Ordered by topic
    * id for a deterministic primary topic and prompt-cache-stable output.
    */
-  private async resolveSuperUserTopics(): Promise<TopicMapping[]> {
+  private async resolveAllMonitoringTopics(): Promise<TopicMapping[]> {
     const reportRows = await executeQuery<RowDataPacket[]>(
       this.config,
       "SELECT id FROM research_report WHERE status = 'Running' AND category = 'DailyMonitoring' AND deleted = 0",

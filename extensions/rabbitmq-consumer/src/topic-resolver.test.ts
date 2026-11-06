@@ -61,7 +61,7 @@ describe("TopicResolver.getTopicIdsByUser", () => {
   afterEach(async () => {
     await resolver.close();
     vi.useRealTimers();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   describe("normal user (su = 0)", () => {
@@ -74,7 +74,7 @@ describe("TopicResolver.getTopicIdsByUser", () => {
 
       expect(mockExecute).toHaveBeenNthCalledWith(
         1,
-        "SELECT su FROM legal_user_role WHERE id = ?",
+        "SELECT su, is_level1_admin, is_level2_admin FROM legal_user_role WHERE id = ?",
         ["42"],
       );
       expect(mockExecute).toHaveBeenNthCalledWith(
@@ -156,6 +156,43 @@ describe("TopicResolver.getTopicIdsByUser", () => {
       expect(result.topicId).toBe(270);
       expect(result.useSlaveTopic).toBe(false);
     });
+  });
+
+  it.each([
+    { su: 0, is_level1_admin: 1, is_level2_admin: 0 },
+    { su: 0, is_level1_admin: 0, is_level2_admin: 1 },
+    { su: 0, is_level1_admin: 1, is_level2_admin: 1 },
+    { su: "0", is_level1_admin: "1", is_level2_admin: "0" },
+    { su: "0", is_level1_admin: "0", is_level2_admin: "1" },
+  ])("grants all monitoring topics for admin role %j", async (role) => {
+    mockExecute.mockResolvedValueOnce([[role], undefined]);
+    mockExecute.mockResolvedValueOnce(reportRows(3076, 3250));
+    mockExecute.mockResolvedValueOnce(topicIdRows(270, 328));
+    mockExecute.mockResolvedValueOnce(titleRows([270, "Project A"], [328, "Project B"]));
+
+    const result = await resolver.getTopicIdsByUser("42");
+
+    expect(result.topics.map((topic) => topic.topicId)).toEqual([270, 328]);
+    expect(
+      mockExecute.mock.calls.some((args) => String(args[0]).includes("FROM entity_auth")),
+    ).toBe(false);
+  });
+
+  it.each([
+    { su: 0, is_level1_admin: 0, is_level2_admin: 0 },
+    { su: 0, is_level1_admin: null, is_level2_admin: null },
+    { su: 0, is_level1_admin: 2, is_level2_admin: -1 },
+  ])("keeps non-admin role scoped to grants %j", async (role) => {
+    mockExecute.mockResolvedValueOnce([[role], undefined]);
+    mockExecute.mockResolvedValueOnce(authRows([270, 0]));
+    mockExecute.mockResolvedValueOnce(titleRows([270, "Project A"]));
+
+    const result = await resolver.getTopicIdsByUser("42");
+
+    expect(result.topics.map((topic) => topic.topicId)).toEqual([270]);
+    expect(
+      mockExecute.mock.calls.some((args) => String(args[0]).includes("FROM entity_auth")),
+    ).toBe(true);
   });
 
   describe("superuser (su = 1)", () => {
