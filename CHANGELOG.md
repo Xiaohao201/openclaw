@@ -38,6 +38,8 @@ Docs: https://docs.openclaw.ai
 
 - Sessions: default the agent session-list tool and Control UI to sessions updated in the last 30 days, with explicit custom and all-time queries, while preserving internal lookup and visibility behavior.
 
+- Monitoring permissions: allow level 1 and level 2 administrators, alongside superusers, to view all active daily-monitoring projects in chat context and feed queries.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
