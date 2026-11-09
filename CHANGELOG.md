@@ -102,6 +102,8 @@ Docs: https://docs.openclaw.ai
 
 - Deployment builds: exclude the unused Feishu plugin through plugin-owned bundle metadata while preserving SDK type generation, avoiding Feishu runtime dependency staging on Windows.
 
+- Windows/deployment builds: retry transient runtime dependency cleanup failures up to 10 times with incremental backoff, while still reporting persistent deletion errors.
+
 ## 2026.4.15
 
 ### Changes

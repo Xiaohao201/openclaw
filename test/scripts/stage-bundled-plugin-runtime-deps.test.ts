@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectRuntimeDependencyInstallManifest,
   collectRuntimeDependencyInstallSpecs,
@@ -26,6 +26,55 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
     return { pluginDir, repoRoot };
   }
+
+  it.each([false, true])(
+    "bounds native staging cleanup retries and preserves failure=%s",
+    (fail) => {
+      const { repoRoot } = createBundledPluginFixture({
+        packageJson: {
+          name: "@openclaw/fixture-plugin",
+          version: "1.0.0",
+          dependencies: { direct: "1.0.0" },
+          openclaw: { bundle: { stageRuntimeDependencies: true } },
+        },
+      });
+      const directDir = path.join(repoRoot, "node_modules", "direct");
+      fs.mkdirSync(directDir, { recursive: true });
+      fs.writeFileSync(path.join(directDir, "package.json"), '{"name":"direct","version":"1.0.0"}');
+      const remove = fs.rmSync;
+      const failure = Object.assign(new Error("Staging directory remains locked"), {
+        code: "EPERM",
+      });
+      let cleanupCalls = 0;
+      const spy = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+        if (path.basename(String(target)).startsWith(".openclaw-runtime-deps-stage-")) {
+          cleanupCalls += 1;
+          // Native rmSync owns retries; verify the real staging path opts in.
+          expect(options).toMatchObject({
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 300,
+          });
+          if (fail) {
+            throw failure;
+          }
+        }
+        return remove(target, options);
+      });
+      try {
+        const stage = () => stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+        if (fail) {
+          expect(stage).toThrow(failure);
+        } else {
+          expect(stage).not.toThrow();
+        }
+        expect(cleanupCalls).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("pins fallback install specs to exact installed versions", () => {
     const { repoRoot } = createBundledPluginFixture({

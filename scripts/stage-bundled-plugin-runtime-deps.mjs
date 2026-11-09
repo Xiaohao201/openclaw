@@ -22,7 +22,14 @@ function readOptionalUtf8(filePath) {
 }
 
 function removePathIfExists(targetPath) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
+  // Windows scanners can briefly lock freshly staged files. Let Node retry
+  // transient removal failures, but still throw if the retry budget is exhausted.
+  fs.rmSync(targetPath, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 300,
+  });
 }
 
 function makeTempDir(parentDir, prefix) {
