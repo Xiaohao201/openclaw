@@ -104,6 +104,8 @@ Docs: https://docs.openclaw.ai
 
 - Windows/deployment builds: retry transient runtime dependency cleanup failures up to 10 times with incremental backoff, while still reporting persistent deletion errors.
 
+- Managed deployment/model discovery: limit implicit startup discovery to configured providers while preserving explicit allowlists and full-discovery overrides; reuse models.json readiness after internal writes without masking external config, environment, or file changes.
+
 ## 2026.4.15
 
 ### Changes

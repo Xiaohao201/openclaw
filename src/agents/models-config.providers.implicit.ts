@@ -13,6 +13,7 @@ import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
+import { collectConfiguredDiscoveryProviders } from "./models-config.discovery-scope.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -100,19 +101,26 @@ function resolveProviderDiscoveryFilter(params: {
   // Opt-in production allowlist: restrict implicit provider discovery to a few
   // providers so a cold start does not load and probe dozens of unused provider
   // plugins (each adds module-load + network-probe latency to the first message).
-  // Unset = discover all (default, unchanged). Works in any mode.
+  // Managed deployments infer a scope from configuration when no override exists.
+  // Other entrypoints retain broad discovery, including onboarding and live tests.
+  if (!live && env.OPENCLAW_PROVIDERS?.trim() === "all") {
+    return undefined;
+  }
   const rawValues = [
     env.OPENCLAW_PROVIDERS?.trim(),
     live ? env.OPENCLAW_LIVE_PROVIDERS?.trim() : undefined,
     live ? env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim() : undefined,
   ].filter((value): value is string => Boolean(value && value !== "all"));
-  if (rawValues.length === 0) {
-    return undefined;
-  }
-  const ids = rawValues
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const inferred =
+    rawValues.length === 0 && !live && env.OPENCLAW_MANAGED_DEPLOYMENT === "1"
+      ? collectConfiguredDiscoveryProviders(config)
+      : undefined;
+  const ids =
+    inferred ??
+    rawValues
+      .flatMap((value) => value.split(","))
+      .map((value) => value.trim())
+      .filter(Boolean);
   if (ids.length === 0) {
     return undefined;
   }

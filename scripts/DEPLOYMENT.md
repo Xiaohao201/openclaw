@@ -42,6 +42,16 @@ that flag or set it to `true`, commit the change, and prepare a new release.
 Use a new output directory after a failed preparation; existing directories are
 never overwritten.
 
+Managed workers restrict implicit model-provider discovery to providers referenced
+by the configuration (including model fallbacks and configured auth profiles).
+Unconfigured setups and ambiguous model references keep broad discovery. Existing
+`OPENCLAW_PROVIDERS` allowlists take precedence; set `OPENCLAW_PROVIDERS=all` before
+starting the Supervisor to restore full discovery, for example when selecting
+additional providers dynamically. Normal CLI/onboarding discovery is unchanged.
+Unchanged model discovery results are reused per agent within the worker process;
+configuration, environment, auth-profile mtime, and models.json mtime changes
+invalidate that cache. This does not cache results across service restarts.
+
 After stopping any previous standalone Gateway, start from the release directory:
 
 ```powershell

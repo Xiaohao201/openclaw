@@ -31,6 +31,49 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("reuses discovery after writing models.json and invalidates after external edits", async () => {
+    await withModelsTempHome(async () => {
+      const cfg = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      const first = await ensureOpenClawModelsJson(cfg);
+      const before = await fs.readFile(path.join(first.agentDir, "models.json"), "utf8");
+      await ensureOpenClawModelsJson(cfg);
+      await ensureOpenClawModelsJson(cfg);
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(path.join(first.agentDir, "models.json"), "utf8")).toBe(before);
+      const modelsPath = path.join(first.agentDir, "models.json");
+      await fs.utimes(modelsPath, new Date(1_000), new Date(1_000));
+      await ensureOpenClawModelsJson(cfg);
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("shares discovery for concurrent calls with identical configuration", async () => {
+    await withModelsTempHome(async () => {
+      const cfg = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      await Promise.all(Array.from({ length: 4 }, () => ensureOpenClawModelsJson(cfg)));
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("invalidates discovery when the host provider scope changes", async () => {
+    await withModelsTempHome(async () => {
+      const previous = process.env.OPENCLAW_PROVIDERS;
+      try {
+        process.env.OPENCLAW_PROVIDERS = "custom-primary";
+        await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+        process.env.OPENCLAW_PROVIDERS = "custom-backup";
+        await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+        expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_PROVIDERS;
+        } else {
+          process.env.OPENCLAW_PROVIDERS = previous;
+        }
+      }
+    });
+  });
+
   it("serializes concurrent models.json writes to avoid overlap", async () => {
     await withModelsTempHome(async () => {
       const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);

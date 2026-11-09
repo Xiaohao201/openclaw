@@ -37,23 +37,25 @@ function stableStringify(value: unknown): string {
     .join(",")}}`;
 }
 
-async function buildModelsJsonFingerprint(params: {
+async function readModelsJsonFingerprint(params: {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
-}): Promise<string> {
+}): Promise<{ inputs: string; modelsFileMtimeMs: number | null }> {
   const authProfilesMtimeMs = await readFileMtimeMs(
     path.join(params.agentDir, "auth-profiles.json"),
   );
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
-  const envShape = createConfigRuntimeEnv(params.config, {});
-  return stableStringify({
-    config: params.config,
-    sourceConfigForSecrets: params.sourceConfigForSecrets,
-    envShape,
-    authProfilesMtimeMs,
+  const envShape = createConfigRuntimeEnv(params.config);
+  return {
+    inputs: stableStringify({
+      config: params.config,
+      sourceConfigForSecrets: params.sourceConfigForSecrets,
+      envShape,
+      authProfilesMtimeMs,
+    }),
     modelsFileMtimeMs,
-  });
+  };
 }
 
 async function readExistingModelsFile(pathname: string): Promise<{
@@ -143,14 +145,21 @@ export async function ensureOpenClawModelsJson(
   const cfg = resolved.config;
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
   const targetPath = path.join(agentDir, "models.json");
-  const fingerprint = await buildModelsJsonFingerprint({
+  const fingerprintParams = {
     config: cfg,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
-  });
+  };
+  let fingerprintSnapshot = await readModelsJsonFingerprint(fingerprintParams);
+  let fingerprint = stableStringify(fingerprintSnapshot);
   const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
   if (cached) {
     const settled = await cached;
+    // A concurrent writer may have replaced models.json while we awaited it.
+    if (settled.fingerprint !== fingerprint) {
+      fingerprintSnapshot = await readModelsJsonFingerprint(fingerprintParams);
+      fingerprint = stableStringify(fingerprintSnapshot);
+    }
     if (settled.fingerprint === fingerprint) {
       await ensureModelsFileModeForModelsJson(targetPath);
       return settled.result;
@@ -183,7 +192,15 @@ export async function ensureOpenClawModelsJson(
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
     await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
     await ensureModelsFileModeForModelsJson(targetPath);
-    return { fingerprint, result: { agentDir, wrote: true } };
+    // Only refresh our own output mtime. Auth/env changes during discovery must
+    // still invalidate the result rather than being stamped onto stale discovery.
+    return {
+      fingerprint: stableStringify({
+        ...fingerprintSnapshot,
+        modelsFileMtimeMs: await readFileMtimeMs(targetPath),
+      }),
+      result: { agentDir, wrote: true },
+    };
   });
   MODELS_JSON_STATE.readyCache.set(targetPath, pending);
   try {
