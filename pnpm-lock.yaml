@@ -503,6 +503,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/device-pair: {}
+
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
@@ -1088,6 +1090,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/phone-control: {}
+
   extensions/phone-reader:
     dependencies:
       '@sinclair/typebox':
@@ -1289,6 +1293,8 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+
+  extensions/talk-voice: {}
 
   extensions/tavily:
     devDependencies:

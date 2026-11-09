@@ -33,11 +33,13 @@ preserves the shared configuration, and writes `deploy.mjs` in the release.
 It does not switch or stop a running service. Review the printed Gateway
 authentication and trusted proxy instructions before first startup.
 
-The v3 build excludes the unused Feishu plugin from bundled runtime output.
-Its `extensions/feishu/package.json` sets `openclaw.bundle.enabled` to `false`.
+The v3 build excludes Feishu, Device Pairing (`device-pair`), Phone Control
+(`phone-control`), and Talk Voice (`talk-voice`) from bundled runtime output.
+Their plugin `package.json` files set `openclaw.bundle.enabled` to `false`.
 This plugin-owned build flag skips entry bundling and runtime dependency staging;
 source files and workspace dependencies remain available for Plugin SDK types.
-Other plugins keep their existing build behavior. To bundle Feishu again, remove
+The excluded command plugins provide `/pair`, `/phone`, and `/voice`; Phone Reader,
+Browser, ACP, and business services remain bundled. To bundle an excluded plugin again, remove
 that flag or set it to `true`, commit the change, and prepare a new release.
 Use a new output directory after a failed preparation; existing directories are
 never overwritten.

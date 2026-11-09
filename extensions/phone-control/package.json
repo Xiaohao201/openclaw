@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/phone-control",
+  "version": "2026.4.16",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "bundle": {
+      "enabled": false
+    }
+  }
+}
