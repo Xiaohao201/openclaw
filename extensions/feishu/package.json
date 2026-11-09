@@ -50,6 +50,7 @@
       "openclawVersion": "2026.4.16"
     },
     "bundle": {
+      "enabled": false,
       "stageRuntimeDependencies": true
     },
     "release": {

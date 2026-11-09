@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectBundledPluginBuildEntries,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -89,6 +90,7 @@ describe("bundled plugin build entries", () => {
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
+    const builtPluginIds = new Set(collectBundledPluginBuildEntries().map(({ id }) => id));
     const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
 
@@ -108,6 +110,9 @@ describe("bundled plugin build entries", () => {
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
       const secretApiPath = path.join("extensions", pluginId, "secret-contract-api.ts");
       expect(fs.readFileSync(secretApiPath, "utf8")).toContain("channelSecrets");
+      if (!builtPluginIds.has(pluginId)) {
+        continue;
+      }
       expect(artifacts).toContain(`dist/extensions/${pluginId}/secret-contract-api.js`);
     }
   });

@@ -100,6 +100,8 @@ Docs: https://docs.openclaw.ai
 
 - Deployment preparation: generate a protected sibling supervisor configuration using the current user's existing OpenClaw state, preserve existing deployment settings, and support `--configure` for verified releases without rebuilding.
 
+- Deployment builds: exclude the unused Feishu plugin through plugin-owned bundle metadata while preserving SDK type generation, avoiding Feishu runtime dependency staging on Windows.
+
 ## 2026.4.15
 
 ### Changes

@@ -36,6 +36,11 @@ export function hasReleasedBundledInstall(packageJson) {
 }
 
 export function shouldBuildBundledCluster(cluster, env = process.env, options = {}) {
+  // Plugin-owned opt-outs apply to both build entries and runtime metadata.
+  // Keep sources available for SDK type generation without shipping the plugin.
+  if (options.packageJson?.openclaw?.bundle?.enabled === false) {
+    return false;
+  }
   if (hasReleasedBundledInstall(options.packageJson)) {
     return true;
   }

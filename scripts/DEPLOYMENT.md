@@ -33,6 +33,15 @@ preserves the shared configuration, and writes `deploy.mjs` in the release.
 It does not switch or stop a running service. Review the printed Gateway
 authentication and trusted proxy instructions before first startup.
 
+The v3 build excludes the unused Feishu plugin from bundled runtime output.
+Its `extensions/feishu/package.json` sets `openclaw.bundle.enabled` to `false`.
+This plugin-owned build flag skips entry bundling and runtime dependency staging;
+source files and workspace dependencies remain available for Plugin SDK types.
+Other plugins keep their existing build behavior. To bundle Feishu again, remove
+that flag or set it to `true`, commit the change, and prepare a new release.
+Use a new output directory after a failed preparation; existing directories are
+never overwritten.
+
 After stopping any previous standalone Gateway, start from the release directory:
 
 ```powershell
