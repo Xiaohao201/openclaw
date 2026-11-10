@@ -115,7 +115,10 @@ let publicSkillsSeeded = false;
 function resolveConfig(): MySqlConfig {
   const cfg = loadConfig();
   const pluginEntries = cfg.plugins?.entries as Record<string, Record<string, unknown>> | undefined;
-  const mysqlCfg = pluginEntries?.["feed-search"]?.config as Record<string, unknown> | undefined;
+  const feedSearchConfig = pluginEntries?.["feed-search"]?.config as
+    | Record<string, unknown>
+    | undefined;
+  const mysqlCfg = feedSearchConfig?.mysql as Record<string, unknown> | undefined;
   const env = process.env;
 
   // Skills need a writable account; use the unified deployment credentials.
