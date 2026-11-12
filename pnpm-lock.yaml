@@ -1438,6 +1438,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      amqplib:
+        specifier: ^0.10.7
+        version: 0.10.9
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1445,6 +1448,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@types/amqplib':
+        specifier: ^0.10.7
+        version: 0.10.8
 
   extensions/whatsapp:
     dependencies:

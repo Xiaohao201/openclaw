@@ -29,6 +29,7 @@ function setup(groups: Record<string, string> = { Alpha: "a" }) {
     registerTool,
     registerReload,
     registerHttpRoute: vi.fn(),
+    registerService: vi.fn(),
     runtime: { config: { loadConfig } },
   } as unknown as OpenClawPluginApi);
   const create = (context: OpenClawPluginToolContext = {}) =>
