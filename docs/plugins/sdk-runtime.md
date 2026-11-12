@@ -27,6 +27,23 @@ register(api) {
 
 ## Runtime namespaces
 
+### Gateway request authorization
+
+`openclaw/plugin-sdk/gateway-runtime` exports `getCurrentGatewayOperatorScopes()`.
+This additive helper returns a copy of the current plugin request's operator scopes,
+or an empty array outside a Gateway request. In HTTP routes registered with
+`auth: "gateway"`, check the required scope before directly reading or modifying
+protected state. Authentication does not by itself grant `operator.admin` to
+scoped clients. Never derive these permissions from unverified request headers.
+
+```typescript
+const scopes = getCurrentGatewayOperatorScopes();
+if (!scopes.includes("operator.admin")) {
+  // Return HTTP 403 before accessing administrative configuration.
+  return;
+}
+```
+
 ### Artifact links in outgoing text
 
 `openclaw/plugin-sdk/text-runtime` exports `ArtifactLinks` and
