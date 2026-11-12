@@ -18,6 +18,16 @@ export default definePluginEntry({
   configSchema: buildPluginConfigSchema(configSchema),
   register(api) {
     configSchema.parse(api.pluginConfig);
+    api.registerHttpRoute({
+      path: "/api/plugins/wechat-group-push/groups",
+      auth: "gateway",
+      match: "exact",
+      gatewayRuntimeScopeSurface: "trusted-operator",
+      handler: async (req, res) => {
+        const { handleGroupAdmin } = await import("./src/admin.runtime.js");
+        await handleGroupAdmin(req, res);
+      },
+    });
     api.registerReload({ noopPrefixes: ["plugins.entries.wechat-group-push.config.groups"] });
     api.registerTool(
       (ctx) => {

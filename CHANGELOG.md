@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Sessions: default the agent session-list tool and Control UI to sessions updated in the last 30 days, with explicit custom and all-time queries, while preserving internal lookup and visibility behavior.
 
 - Monitoring permissions: allow level 1 and level 2 administrators, alongside superusers, to view all active daily-monitoring projects in chat context and feed queries.
+- WeChat group push: add authenticated group configuration management and WeCom group creation with revision checks and recovery when configuration saving fails.
 
 ### Fixes
 

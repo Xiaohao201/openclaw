@@ -1,6 +1,31 @@
 # WeChat Group Push
 
 Registers `wechat_group_push` to send text through a configured warning service.
+
+## Group administration
+
+The plugin also registers `GET/POST /api/plugins/wechat-group-push/groups`, protected
+by Gateway authentication with the trusted-operator scope. Only a trusted server
+should call it; never put a Gateway token in browser code. GET returns only the
+group map and a config revision. POST accepts a revision and one action: `add`
+(`name`, `chatId`), `update` (`originalName`, `name`, `chatId`), `delete` (`name`),
+or `create` (`name`, `owner`, `userlist`, `requestId`). Creation uses a client-generated
+32-character lowercase hexadecimal request ID as the WeCom chat ID.
+
+Set `WECOM_CORP_ID` and `WECOM_APP_SECRET` in the Gateway process environment to
+enable creation of WeCom application group chats. Existing mappings can be managed
+without these credentials. Creation is never automatically retried. A
+`created_unsaved` result includes the created chat ID for recovery using `add`;
+`CREATE_UNKNOWN` errors require checking that ID before creating another group.
+No messages are sent by group administration. Deleting a mapping does not dissolve
+the real group, and the final mapping cannot be removed.
+
+Writes preserve other config sections through the public configuration writer.
+Requests are serialized and revisions reject stale edits. External file editors
+do not participate in this serialization; avoid simultaneous direct file edits.
+Restart once after deploying this code to register the new HTTP route.
+
+## Sending
 The tool requires `groupName`, `destinationVersion`, `confirmed: true`, and `content`. There is no
 default destination. Before each send, the agent must repeat the target group
 name and wait for user confirmation, even when the initial request names a group.
