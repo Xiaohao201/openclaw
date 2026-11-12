@@ -4,6 +4,33 @@ Registers `wechat_group_push` to send text through a configured warning service.
 
 ## Group administration
 
+For a cloud-hosted admin page and a local Gateway, use the outbound leading-v2.0
+bridge. Set `WECHAT_GROUP_BRIDGE_URL` to the HTTPS leading origin,
+`WECHAT_GROUP_BRIDGE_NODE_ID` to a unique lowercase node ID, and
+`WECHAT_GROUP_BRIDGE_TOKEN` to a random token of at least 32 bytes. Configure its
+SHA-256 digest in leading's `WECHAT_GROUP_BRIDGE_NODES` JSON map. Each Gateway
+instance needs its own ID and token; do not share an ID between v1 and v2.
+
+Set `WECHAT_GROUP_BRIDGE_AMQP_URL` for immediate wakeups through the dedicated
+`wechat-group-admin.wakeup.v1` fanout exchange. The durable node queue contains
+notifications only; the worker claims commands over authenticated HTTPS.
+Every 10 seconds it also reconciles over HTTP, including when MQ is unavailable.
+The bridge is disabled when `WECHAT_GROUP_BRIDGE_URL` is absent. No inbound port
+or public Gateway token is required by the cloud admin page.
+
+Deploy leading's `doc/wechat-group-bridge.sql` migration and set ai-assistant's
+private `NUXT_WECHAT_GROUP_NODE_ID`. See leading's `doc/wechat-group-bridge.md`
+for deployment, route contracts, expiry, and recovery instructions.
+
+The local config remains authoritative. The cloud keeps a timestamped snapshot
+and durable jobs; queued work is never reported as saved. The worker journals
+execution before effects and persists results before reporting. Delivery may be
+retried, but mutation execution is never automatically repeated after a crash.
+Retain `stateDir/wechat-group-bridge` across restarts, run only one worker per node,
+and verify uncertain creation results before using the recovery mapping action.
+
+The following local HTTP interface remains available for compatible trusted clients.
+
 The plugin also registers `GET/POST /api/plugins/wechat-group-push/groups`, protected
 by Gateway authentication with the trusted-operator scope. Only a trusted server
 should call it; never put a Gateway token in browser code. GET returns only the
@@ -26,6 +53,7 @@ do not participate in this serialization; avoid simultaneous direct file edits.
 Restart once after deploying this code to register the new HTTP route.
 
 ## Sending
+
 The tool requires `groupName`, `destinationVersion`, `confirmed: true`, and `content`. There is no
 default destination. Before each send, the agent must repeat the target group
 name and wait for user confirmation, even when the initial request names a group.

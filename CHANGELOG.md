@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 - Monitoring permissions: allow level 1 and level 2 administrators, alongside superusers, to view all active daily-monitoring projects in chat context and feed queries.
 - WeChat group push: add authenticated group configuration management and WeCom group creation with revision checks and recovery when configuration saving fails.
+- WeChat group push: support cloud administration through a leading-v2.0 task bridge with outbound polling, dedicated RabbitMQ wakeups, durable result delivery, and recovery without repeating uncertain group creation.
 
 ### Fixes
 

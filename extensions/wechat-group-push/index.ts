@@ -18,6 +18,17 @@ export default definePluginEntry({
   configSchema: buildPluginConfigSchema(configSchema),
   register(api) {
     configSchema.parse(api.pluginConfig);
+    let stopBridge: (() => Promise<void>) | undefined;
+    api.registerService({
+      id: "wechat-group-bridge",
+      async start(ctx) {
+        const { startGroupBridge } = await import("./src/bridge.runtime.js");
+        stopBridge = await startGroupBridge(ctx);
+      },
+      async stop() {
+        await stopBridge?.();
+      },
+    });
     api.registerHttpRoute({
       path: "/api/plugins/wechat-group-push/groups",
       auth: "gateway",
