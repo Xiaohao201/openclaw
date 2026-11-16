@@ -190,13 +190,41 @@ export function createMessageConsumer(
             );
           }
         }
-        await deps.runChat(chatMsg, controller.signal);
+        const running = deps.runChat(chatMsg, controller.signal);
+        // Cancellation releases the conversation lane, not the cleanup ownership.
+        // The pipeline uses an isolated execution session and suppresses late output.
+        let releaseLane!: () => void;
+        const cancelled = new Promise<void>((resolve) => {
+          releaseLane = resolve;
+        });
+        controller.signal.addEventListener("abort", releaseLane, { once: true });
+        if (controller.signal.aborted) {
+          releaseLane();
+        }
+        const cleanup = () => {
+          controller.signal.removeEventListener("abort", releaseLane);
+          if (registeredTurns.get(chatMsg.historyId)?.controller === controller) {
+            registeredTurns.delete(chatMsg.historyId);
+          }
+        };
+        void running.then(cleanup, (error) => {
+          cleanup();
+          if (controller.signal.aborted) {
+            deps.logger.warn(
+              `[RABBITMQ_CONSUMER] Cancelled execution cleanup failed: historyId=${chatMsg.historyId} error=${String(error)}`,
+            );
+          }
+        });
+        await Promise.race([running, cancelled]);
       } finally {
         settled = true;
         if (timer) {
           clearTimeout(timer);
         }
-        if (registeredTurns.get(chatMsg.historyId)?.controller === controller) {
+        if (
+          !controller.signal.aborted &&
+          registeredTurns.get(chatMsg.historyId)?.controller === controller
+        ) {
           registeredTurns.delete(chatMsg.historyId);
         }
       }

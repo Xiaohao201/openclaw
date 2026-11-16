@@ -62,6 +62,16 @@ describe("HistoryManager retried reads and response writes", () => {
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 
+  it("checks durable cancellation in the response UPDATE and allows only explicit frozen cancellation writes", async () => {
+    mockExecute.mockResolvedValue([[], undefined]);
+    await manager.updateResponse(42, "late", context);
+    expect(mockExecute.mock.calls[0][0]).toContain("$.cancelRequested");
+    await manager.updateResponse(42, "frozen partial", context, "cancelled");
+    expect(mockExecute.mock.calls[1][0]).not.toContain("$.cancelRequested");
+    await manager.updateMetadata(42, { completionStatus: "completed" }, context);
+    expect(mockExecute.mock.calls[2][0]).toContain("$.cancelRequested");
+  });
+
   it("keeps an older response retry ahead of a newer response without blocking other rows", async () => {
     mockExecute.mockRejectedValueOnce(
       Object.assign(new Error("reset after commit"), { code: "ECONNRESET" }),
@@ -538,7 +548,7 @@ describe("HistoryManager test-table isolation", () => {
       "SELECT 1 FROM `history_test` LIMIT 0",
       "CREATE TABLE IF NOT EXISTS `history_test` LIKE `history_messages`",
       expect.stringContaining("INSERT INTO `history_test`"),
-      "UPDATE `history_test` SET response = ? WHERE id = ?",
+      expect.stringContaining("UPDATE `history_test` SET response = ? WHERE id = ? AND"),
     ]);
     expect(mockExecute.mock.calls[2]?.[1]).toEqual([
       1_234,

@@ -32,6 +32,31 @@ function makeDeps(overrides?: Partial<MessageConsumerDeps>): MessageConsumerDeps
 }
 
 describe("createMessageConsumer", () => {
+  it("releases the conversation lane on cancellation while cleanup is still running", async () => {
+    const cleanup = makeGate();
+    const started: number[] = [];
+    const runChat = vi.fn(async (message: { historyId: number }) => {
+      started.push(message.historyId);
+      if (message.historyId === 1) {
+        await cleanup.promise;
+      }
+    });
+    const handler = createMessageConsumer(makeDeps({ runChat }));
+    const first = handler(msgOf(chatPayload(1, "1749")));
+    await tick();
+    await handler(msgOf({ type: "cancel", id: 1, user_id: "1749", session_id: "s1" }));
+    const second = handler(msgOf(chatPayload(2, "1749")));
+    try {
+      await tick();
+      expect(started).toEqual([1, 2]);
+      await first;
+      await handler(msgOf(chatPayload(1, "1749")));
+      expect(started).toEqual([1, 2]);
+    } finally {
+      cleanup.resolve();
+      await Promise.all([first, second]);
+    }
+  });
   it("serializes messages from the same user and session in delivery order", async () => {
     const gate1 = makeGate();
     const started: number[] = [];

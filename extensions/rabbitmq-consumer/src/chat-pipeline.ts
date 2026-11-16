@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   getRuntimeConfigSnapshot,
   type OpenClawConfig,
@@ -5,6 +7,7 @@ import {
   type PluginLogger,
   type SessionTurnCurrencyPolicy,
 } from "../api.js";
+import { registerActiveExecution } from "./active-execution.js";
 import { ArtifactLinks } from "./artifact-links.js";
 import { buildAttachmentDataPolicy } from "./attachment-data-policy.js";
 import { materializeAttachments } from "./attachment-materializer.js";
@@ -19,6 +22,7 @@ import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import { describeHistoryDbError } from "./history-db-retry.js";
 import type { HistoryManager } from "./history-manager.js";
+import { commitIsolatedSession, prepareIsolatedSession } from "./isolated-session.js";
 import { mediaLinesToMarkdown } from "./media-lines.js";
 import {
   MercurePusher,
@@ -31,7 +35,6 @@ import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { normalizeChineseProseQuotes, sanitizeInternalRefs } from "./sanitize-output.js";
 import { deduplicateSkillContext, readActiveSkillHistory } from "./session-skill-context.js";
-import { prepareHistorySessionSnapshot } from "./session-snapshot.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext, suhengDesignReason } from "./suheng-design-context.js";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
@@ -40,6 +43,7 @@ import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./to
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
 import type { TopicInfo, TopicResolver } from "./topic-resolver.js";
+import { guardTurnDelivery } from "./turn-delivery.js";
 import { persistTurnUsage } from "./turn-usage-writer.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 import { extractUserTask } from "./user-task.js";
@@ -522,7 +526,8 @@ export async function processChatMessage(
   options?: ChatTurnOptions,
 ): Promise<string> {
   const turnTimeoutMs = resolveTurnTimeoutMs(options?.turnTimeoutMs);
-  const mercure = options?.eventPusher ?? new MercurePusher(mercureConfig);
+  const rawMercure = options?.eventPusher ?? new MercurePusher(mercureConfig);
+  const mercure = guardTurnDelivery(rawMercure, () => options?.abortSignal?.aborted === true);
   const pluginConfig = config?.plugins?.entries?.["rabbitmq-consumer"]?.config;
   const oss = pluginConfig?.oss as { customDomain?: unknown; pathPrefix?: unknown } | undefined;
   const artifactLinks = new ArtifactLinks(
@@ -533,6 +538,13 @@ export async function processChatMessage(
   // Declare streamPusherCtx early so it's available in catch block
   const streamPusherCtx: { streamPusher: StreamingMercurePusher | null } = { streamPusher: null };
   let mercureTopic = chatMsg.topic || chatMsg.userId;
+  const stopVisibleOutput = () => {
+    streamPusherCtx.streamPusher?.stop();
+    // UI completion is independent of execution settlement; metadata remains cancelling.
+    void rawMercure.pushDone(mercureTopic, chatMsg.historyId).catch(() => {});
+  };
+  const incomingSignal = options?.abortSignal;
+  incomingSignal?.addEventListener("abort", stopVisibleOutput, { once: true });
   let stage:
     | "getRecord"
     | "prepare"
@@ -546,7 +558,11 @@ export async function processChatMessage(
   const failureContext = (error: unknown) =>
     `historyId=${chatMsg.historyId} userId=${JSON.stringify(chatMsg.userId)} stage=${stage} ${describeHistoryDbError(error)}`;
   const saveResponse = (response: string) =>
-    historyManager.updateResponse(chatMsg.historyId, response, historyDbContext);
+    options?.abortSignal?.aborted
+      ? Promise.resolve()
+      : historyManager.updateResponse(chatMsg.historyId, response, historyDbContext);
+  const saveStoppedResponse = (response: string) =>
+    historyManager.updateResponse(chatMsg.historyId, response, historyDbContext, "cancelled");
   const confirmCancellation = async (runId?: string) => {
     // This marker is authoritative: a partial response or accepted abort is not.
     await historyManager.updateMetadata(
@@ -564,8 +580,8 @@ export async function processChatMessage(
   };
   const finishCancelledBeforeRun = async () => {
     await confirmCancellation();
-    await saveResponse("输出已暂停。");
-    await mercure.pushDone(mercureTopic, chatMsg.historyId);
+    await saveStoppedResponse("输出已暂停。");
+    await rawMercure.pushDone(mercureTopic, chatMsg.historyId);
     return "输出已暂停。";
   };
   let failureNotification: Promise<void> | undefined;
@@ -594,7 +610,11 @@ export async function processChatMessage(
         ),
       );
       stage = "updateResponse";
-      await saveResponse(safePartial + artifactLinks.deliveryLinks());
+      if (options?.abortSignal?.aborted) {
+        await saveStoppedResponse(safePartial + artifactLinks.deliveryLinks());
+      } else {
+        await saveResponse(safePartial + artifactLinks.deliveryLinks());
+      }
       logger.info(
         `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars): historyId=${chatMsg.historyId}`,
       );
@@ -728,8 +748,8 @@ export async function processChatMessage(
     }
     if (options?.abortSignal?.aborted) {
       await confirmCancellation();
-      await saveResponse("输出已暂停。");
-      await mercure.pushDone(mercureTopic, chatMsg.historyId);
+      await saveStoppedResponse("输出已暂停。");
+      await rawMercure.pushDone(mercureTopic, chatMsg.historyId);
       return "输出已暂停。";
     }
 
@@ -946,13 +966,14 @@ export async function processChatMessage(
     // Per-user agent isolation. Resolved before the event subscription so the
     // listener can scope itself to this run's session.
     const agentId = `rabbitmq-${userId}`;
-    const sessionKey = `agent:${agentId}:rabbitmq:${userId}:${sessionId}`;
+    const sessionKey =
+      `agent:${agentId}:rabbitmq:${userId}:${sessionId}:turn:${chatMsg.historyId}`.toLowerCase();
 
     if (options?.abortSignal?.aborted) {
       const stopped = "输出已暂停。";
       await confirmCancellation();
       stage = "updateResponse";
-      await saveResponse(stopped);
+      await saveStoppedResponse(stopped);
       stage = "notifyFrontend";
       await mercure.pushDone(mercureTopic, chatMsg.historyId);
       return stopped;
@@ -1147,6 +1168,14 @@ export async function processChatMessage(
     // runId arm catches our events even without a sessionKey, while still
     // isolating us from concurrent runs (report subagent, heartbeat, another
     // user's chat) whose runId and sessionKey both differ.
+    const workspace = runtime.agent.resolveAgentWorkspaceDir(attachmentConfig ?? {}, agentId);
+    const executionWorkspace = path.join(workspace, "runs", String(chatMsg.historyId));
+    await fs.mkdir(executionWorkspace, { recursive: true });
+    const unregisterExecution = registerActiveExecution(
+      sessionKey,
+      options?.abortSignal,
+      executionWorkspace,
+    );
     let currentRunId: string | null = null;
     const abortAttemptState: { pending: Promise<void> | null } = { pending: null };
     let abortAttempt = 0;
@@ -1183,7 +1212,10 @@ export async function processChatMessage(
     };
     options?.abortSignal?.addEventListener("abort", abortActiveRun, { once: true });
     const unsubscribe = runtime.events.onAgentEvent((evt) => {
-      if (evt.runId !== currentRunId && evt.sessionKey !== sessionKey) {
+      if (options?.abortSignal?.aborted) {
+        return;
+      }
+      if (currentRunId ? evt.runId !== currentRunId : evt.sessionKey !== sessionKey) {
         return;
       }
       if (evt.stream === "tool") {
@@ -1395,14 +1427,16 @@ export async function processChatMessage(
       // provider, agent, owner, sandbox and subagent restrictions on every run.
 
       // Continue in this history row's full snapshot before the agent appends.
-      const sessionFile = await prepareHistorySessionSnapshot({
+      const execution = await prepareIsolatedSession({
         history: record,
         userId,
-        sessionKey,
         agentId,
+        request: userMessage,
+        signal: options?.abortSignal,
         config: attachmentConfig ?? undefined,
         sessions: runtime.agent.session,
       });
+      const sessionFile = execution.sessionFile;
       try {
         const previous = await runtime.subagent.getSessionMessages({ sessionKey, limit: 200 });
         if (Array.isArray(previous.messages)) {
@@ -1436,7 +1470,7 @@ export async function processChatMessage(
       if (options?.abortSignal?.aborted) {
         const stopped = "输出已暂停。";
         await confirmCancellation();
-        await saveResponse(stopped);
+        await saveStoppedResponse(stopped);
         await persistTimeline("completed");
         await streamPusherCtx.streamPusher.finish();
         return stopped;
@@ -1445,7 +1479,7 @@ export async function processChatMessage(
       const runResult = await runtime.subagent.run({
         sessionKey,
         message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${turnSkillContext.message}${templateContext}${turnSkillContext.skillContext}`,
-        extraSystemPrompt: SUHENG_RUNTIME_SYSTEM_PROMPT,
+        extraSystemPrompt: `${SUHENG_RUNTIME_SYSTEM_PROMPT}\n本轮独立输出目录：${executionWorkspace}。所有新建脚本、中间数据及成品均写入此目录。共享工作区 ${workspace} 的资料只读；修改旧报告须先复制到本轮目录。exec 默认工作目录为本轮目录；不要通过 cd 或绝对写入路径覆盖共享文件。已经发送、上传、提交的操作不可通过暂停撤销，结果未知时先查询状态，不要自动重复执行。`,
         systemPromptMode: builtinSkillName ? "full" : "minimal",
         bootstrapContextMode: "lightweight",
         ...(builtinSkillName ? { skillFilter: [builtinSkillName] } : {}),
@@ -1496,7 +1530,7 @@ export async function processChatMessage(
           // consumer unregisters the turn and can no longer handle a retry.
           await confirmCancellation(runResult.runId);
           stage = "updateResponse";
-          await saveResponse(stopped);
+          await saveStoppedResponse(stopped);
           stage = "finalize";
           await persistTimeline("completed");
           await persistUsage();
@@ -1562,6 +1596,11 @@ export async function processChatMessage(
         artifactLinks.observeMessages(sessionMessages.messages, true);
         for (const msg of [...sessionMessages.messages].toReversed()) {
           const m = msg as { role?: string; content?: unknown };
+          // Never turn an empty current run into a success using an older
+          // answer from this conversation.
+          if (m.role === "user") {
+            break;
+          }
           if (m.role === "assistant") {
             // content is a string in simple sessions but an array of content
             // blocks in tool-using ones; extract text so downstream sanitizing
@@ -1577,7 +1616,35 @@ export async function processChatMessage(
 
       if (!fullResponse) {
         // Fall back to whatever the streaming pusher collected
-        fullResponse = streamPusherCtx.streamPusher.getFullText() || "(No response generated)";
+        fullResponse = streamPusherCtx.streamPusher.getFullText().trim();
+      }
+
+      // Template reports have a separate persisted task and report delivery
+      // path. An empty greeting must not prevent that task from being created.
+      if (!fullResponse && pendingReport) {
+        fullResponse = "已收到报告生成请求。";
+      }
+
+      if (!fullResponse) {
+        const message = "本次任务未生成可交付的回复，请稍后重试。";
+        logger.warn(
+          `[CHAT_PIPELINE] Empty response: historyId=${chatMsg.historyId}, runId=${runResult.runId}`,
+        );
+        const notification = notifyFailure(message);
+        try {
+          await historyManager.updateMetadata(
+            chatMsg.historyId,
+            { completionStatus: "failed", completedAt: new Date().toISOString() },
+            historyDbContext,
+          );
+          stage = "updateResponse";
+          await saveResponse(message);
+          await persistTimeline("failed");
+          await persistUsage();
+        } finally {
+          await notification;
+        }
+        return `Error: ${message}`;
       }
 
       // Split off the machine citations block (marker + JSON) the model appends,
@@ -1604,6 +1671,9 @@ export async function processChatMessage(
         normalizeChineseProseQuotes(sanitizeInternalRefs(artifactLinks.sanitize(visibleResponse))),
       );
       const safeResponse = safeText + artifactLinks.deliveryLinks();
+      if (options?.abortSignal?.aborted) {
+        return await finishCancelledBeforeRun();
+      }
       if (!streamPusherCtx.streamPusher.getFullText()) {
         streamPusherCtx.streamPusher.appendDelta(safeText);
       }
@@ -1696,6 +1766,16 @@ export async function processChatMessage(
       } else {
         // Persist a terminal outcome before done: a late Stop can arrive after
         // this consumer unregisters the turn and will never receive an abort ack.
+        try {
+          await commitIsolatedSession(execution, options?.abortSignal);
+        } catch (error) {
+          logger.warn(
+            `[CHAT_PIPELINE] Checkpoint commit failed; retaining recovery context: historyId=${chatMsg.historyId} error=${String(error)}`,
+          );
+        }
+        if (options?.abortSignal?.aborted) {
+          return await finishCancelledBeforeRun();
+        }
         await historyManager.updateMetadata(
           chatMsg.historyId,
           { completionStatus: "completed", completedAt: new Date().toISOString() },
@@ -1713,6 +1793,7 @@ export async function processChatMessage(
     } finally {
       options?.abortSignal?.removeEventListener("abort", abortActiveRun);
       unsubscribe();
+      unregisterExecution();
     }
   } catch (error) {
     // A socket reset can originate in MySQL, an agent RPC or another dependency;
@@ -1739,5 +1820,7 @@ export async function processChatMessage(
     await persistUsage();
     await notification;
     return `Error: ${message}`;
+  } finally {
+    incomingSignal?.removeEventListener("abort", stopVisibleOutput);
   }
 }
