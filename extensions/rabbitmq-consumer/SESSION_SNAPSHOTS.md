@@ -7,22 +7,40 @@ sessions directory:
 agents/rabbitmq-<user_id>/sessions/<history_messages.session_id>/<history_messages.id>.jsonl
 ```
 
-Before each run, the consumer copies the active transcript byte for byte into the
-new row's file, then updates `sessions.json` to select it. The run appends its user,
-assistant, and tool entries through OpenClaw's normal session machinery. Each
-completed file therefore contains the conversation through that turn and can be
-opened independently by Pi's SessionManager. Internal session and entry IDs stay
-unchanged to preserve parent links and the existing context prefix.
+Each history row has a unique execution key ending in `:turn:<history_id>` and a
+new runtime session ID. The conversation key points only to an immutable
+`<id>.recovery.jsonl` or `<id>.completed.jsonl` checkpoint. New turns copy that
+checkpoint byte for byte, preserving the previous prompt prefix without acquiring
+the old execution's transcript lock.
 
-Existing transcripts are not renamed, moved, or deleted. When an existing
-conversation continues, its old transcript supplies the initial context for the
-first new snapshot. Later turns leave earlier snapshots unchanged. A retry may
-continue its currently selected file, but cannot overwrite an older snapshot.
+Before launching a turn, the consumer publishes a recovery checkpoint containing
+the previous context, the new user request, and an explicit note that execution
+has not been confirmed. A canceled turn therefore retains its user's intent,
+but unfinished tool calls and unconfirmed results are not treated as successful.
+This is a pre-run checkpoint, not a snapshot of every intermediate tool result.
+Unknown external outcomes must be checked before retrying an operation.
 
-The consumer prepares snapshots between serialized chat turns. It verifies that
-the database record belongs to the requested user and session, rejects unsafe
-directory names and linked transcript files, and locks the source while copying.
-A preparation failure prevents the new agent run from starting.
+After successful execution, the consumer locks its own transcript, freezes a
+completed copy, and advances the conversation only if that execution still owns
+the conversation head. A canceled or superseded execution cannot replace a newer
+head. Replaying an already prepared history row is rejected rather than risking
+duplicate external operations. Existing transcript files are not deleted.
+
+On cancellation, the consumer releases the conversation queue independently of
+backend cleanup. Output dispatch checks the turn's cancellation signal; ordinary
+response and completion writes also check durable cancellation intent in SQL.
+Frontend filtering by history ID remains necessary for already dispatched events.
+New tool calls from canceled or orphaned isolated executions are blocked. Writes
+and edits are scoped to a per-turn output directory, and `exec` defaults to that
+directory. These checks are not an OS sandbox: an already running shell command
+or external service operation may continue and cannot be undone by Stop.
+
+Deployment must first drain old executions and detached child callbacks before
+switching consumers. Importing a legacy live transcript still requires its write
+lock (one-second timeout); a failed migration prevents the new run from starting.
+Subsequent isolated turns do not acquire that legacy lock. Deploy the matching
+frontend change so clicking Stop immediately restores input while cancellation
+confirmation and retries continue in the background.
 
 Before appending a chat turn, the consumer resolves the snapshot's active Pi
 branch and compaction boundary. If the latest enterprise skill envelope or custom

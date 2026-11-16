@@ -26,6 +26,8 @@ const ER_BAD_FIELD_ERROR = "ER_BAD_FIELD_ERROR";
 const ER_NO_SUCH_TABLE = "ER_NO_SUCH_TABLE";
 const ER_TABLEACCESS_DENIED_ERROR = "ER_TABLEACCESS_DENIED_ERROR";
 const DEFAULT_HISTORY_TABLE = "history_messages";
+const ACTIVE_RESPONSE =
+  " AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID(metadata) THEN metadata ELSE JSON_OBJECT() END, '$.cancelRequested')), 'false') <> 'true'";
 const MYSQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 function quoteTableIdentifier(tableName: string): string {
@@ -253,6 +255,7 @@ export class HistoryManager {
     historyId: number,
     response: string,
     context?: HistoryDbContext,
+    mode: "active" | "cancelled" = "active",
   ): Promise<void> {
     this.shutdown.signal.throwIfAborted();
     // A lost acknowledgement may follow a committed UPDATE. Repeating the same
@@ -261,7 +264,7 @@ export class HistoryManager {
       retryHistoryDbOperation(
         async () => {
           await this.getWriterPool().execute(
-            `UPDATE ${this.tableSql} SET response = ? WHERE id = ?`,
+            `UPDATE ${this.tableSql} SET response = ? WHERE id = ?${mode === "active" ? ACTIVE_RESPONSE : ""}`,
             [response, historyId],
           );
         },
@@ -294,7 +297,7 @@ export class HistoryManager {
           // mysql2 evicts fatal connections. Reacquire from the pool on each attempt;
           // destroying the shared pool would disrupt other conversations.
           await this.getWriterPool().execute(
-            `UPDATE ${this.tableSql} SET metadata = ${update.expression} WHERE id = ?`,
+            `UPDATE ${this.tableSql} SET metadata = ${update.expression} WHERE id = ?${patch.completionStatus === "completed" ? ACTIVE_RESPONSE : ""}`,
             [...update.values, historyId],
           );
         },

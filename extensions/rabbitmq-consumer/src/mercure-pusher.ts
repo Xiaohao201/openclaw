@@ -236,6 +236,13 @@ export class StreamingMercurePusher {
     return this.fullText;
   }
 
+  /** Freeze output immediately without waiting for backend execution to settle. */
+  stop(): void {
+    this.stopped = true;
+    this.cancelTimer();
+    this.pushedLen = this.fullText.length;
+  }
+
   /**
    * End of the visible region: the citations marker if the model has started the
    * machine block, otherwise the whole accumulated text. Everything at/after the

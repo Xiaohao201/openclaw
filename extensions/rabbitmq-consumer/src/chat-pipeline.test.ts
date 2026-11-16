@@ -35,9 +35,15 @@ const SESSION_ID = "s1";
 const CITATION_DIRECTIVE = buildCitationDirective();
 const withoutCitation = (message: string): string =>
   message.startsWith(CITATION_DIRECTIVE) ? message.slice(CITATION_DIRECTIVE.length) : message;
-const SESSION_KEY = `agent:rabbitmq-${USER_ID}:rabbitmq:${USER_ID}:${SESSION_ID}`;
-const snapshotMocks = vi.hoisted(() => ({ prepare: vi.fn(async () => "snapshot.jsonl") }));
-vi.mock("./session-snapshot.js", () => ({ prepareHistorySessionSnapshot: snapshotMocks.prepare }));
+const SESSION_KEY = `agent:rabbitmq-${USER_ID}:rabbitmq:${USER_ID}:${SESSION_ID}:turn:1`;
+const snapshotMocks = vi.hoisted(() => ({
+  prepare: vi.fn(async () => ({ sessionFile: "snapshot.jsonl" })),
+  commit: vi.fn(async () => true),
+}));
+vi.mock("./isolated-session.js", () => ({
+  prepareIsolatedSession: snapshotMocks.prepare,
+  commitIsolatedSession: snapshotMocks.commit,
+}));
 
 function createChatMessage(): ChatMessage {
   return {
@@ -161,6 +167,65 @@ describe("processChatMessage", () => {
         ? [{ ...event, topic: body.get("topic") }]
         : [];
     });
+
+  it("reports an empty settled run as failed instead of saving a successful placeholder", async () => {
+    const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();
+    const runtime = createRuntimeMock({ workspaceDir, onRun: () => {} });
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+    expect(result).toMatch(/^Error:/);
+    expect(updateResponse).not.toHaveBeenCalledWith(
+      1,
+      "(No response generated)",
+      expect.anything(),
+    );
+    expect(updateMetadata).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ completionStatus: "failed" }),
+      expect.anything(),
+    );
+    expect(
+      updateMetadata.mock.calls.some(([, patch]) => patch.completionStatus === "completed"),
+    ).toBe(false);
+    expect(terminalEvents().map(({ type, historyId }) => ({ type, historyId }))).toEqual([
+      { type: "error", historyId: 1 },
+      { type: "done", historyId: 1 },
+    ]);
+  });
+
+  it("does not reuse an older turn's answer when the current turn has only tool calls", async () => {
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      sessionMessages: [
+        { role: "assistant", content: "previous task completed" },
+        { role: "user", content: "a new task" },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "full_text_search", arguments: {} }],
+        },
+        { role: "toolResult", content: "search results" },
+      ],
+    });
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+    expect(result).toMatch(/^Error:/);
+    expect(
+      updateResponse.mock.calls.some(([, text]) => text.includes("previous task completed")),
+    ).toBe(false);
+    expect(terminalEvents().map((event) => event.type)).toEqual(["error", "done"]);
+  });
 
   it.each(["reset", "missing"])(
     "ends the frontend turn when the initial history read is %s",
@@ -452,7 +517,12 @@ describe("processChatMessage", () => {
         }),
         expect.anything(),
       );
-      expect(updateResponse).toHaveBeenCalledWith(1, "Already generated report", expect.anything());
+      expect(updateResponse).toHaveBeenCalledWith(
+        1,
+        "Already generated report",
+        expect.anything(),
+        "cancelled",
+      );
       expect(
         updateMetadata.mock.calls.some(([, patch]) => patch.completionStatus === "completed"),
       ).toBe(false);
@@ -691,12 +761,21 @@ describe("processChatMessage", () => {
       expect(response).toContain(`[下载报告](${url})`);
       expect(response).toContain(`[报告.html](${url})`);
       expect(response).not.toContain(wrong);
-      expect(updateResponse).toHaveBeenCalledWith(1, response, { userId: USER_ID, logger });
+      expect(updateResponse).toHaveBeenCalledWith(
+        1,
+        response,
+        { userId: USER_ID, logger },
+        ...(cancelled ? ["cancelled"] : []),
+      );
       const requests = vi
         .mocked(fetch)
         .mock.calls.map(([, init]) => (typeof init?.body === "string" ? init.body : ""));
       expect(decodeURIComponent(requests.join("\n"))).not.toContain(wrong);
-      expect(decodeURIComponent(requests.join("\n"))).toContain(url);
+      if (cancelled) {
+        expect(decodeURIComponent(requests.join("\n"))).not.toContain(url);
+      } else {
+        expect(decodeURIComponent(requests.join("\n"))).toContain(url);
+      }
     },
   );
 
@@ -729,7 +808,7 @@ describe("processChatMessage", () => {
     }
     expect(calls).toHaveLength(6);
     for (const call of calls) {
-      expect(call.sessionKey).toBe(SESSION_KEY);
+      expect(call.sessionKey).toMatch(/^agent:rabbitmq-42:rabbitmq:42:s1:turn:[1-6]$/);
       // No content-derived second filter may remove tools allowed by runtime policy.
       expect(call).not.toHaveProperty("toolsAllow");
       expect(call.extraSystemPrompt).toContain("工具可用性以本轮实际工具列表为准");
@@ -760,7 +839,7 @@ describe("processChatMessage", () => {
     expect(snapshotMocks.prepare).toHaveBeenCalledWith(
       expect.objectContaining({
         history: expect.objectContaining({ id: 1, sessionId: SESSION_ID, userId: USER_ID }),
-        sessionKey: SESSION_KEY,
+        request: expect.any(String),
         agentId: "rabbitmq-42",
       }),
     );
@@ -782,7 +861,7 @@ describe("processChatMessage", () => {
     snapshotMocks.prepare.mockImplementationOnce(async () => {
       await Promise.resolve();
       order.push("snapshot");
-      return "snapshot.jsonl";
+      return { sessionFile: "snapshot.jsonl" };
     });
     const runtime = createRuntimeMock({
       workspaceDir,
@@ -832,8 +911,73 @@ describe("processChatMessage", () => {
     );
 
     expect(aborted).toEqual([SESSION_KEY]);
-    expect(updateResponse).toHaveBeenCalledWith(1, "输出已暂停。", { userId: USER_ID, logger });
+    expect(updateResponse).toHaveBeenCalledWith(
+      1,
+      "输出已暂停。",
+      { userId: USER_ID, logger },
+      "cancelled",
+    );
     expect(result).toBe("输出已暂停。");
+  });
+
+  it("freezes output immediately and never commits a cancelled execution's late completion", async () => {
+    const controller = new AbortController();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let waiting!: () => void;
+    const started = new Promise<void>((resolve) => {
+      waiting = resolve;
+    });
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onWait: async (listener) => {
+        waiting();
+        await blocked;
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "assistant",
+          ts: Date.now(),
+          data: { delta: "late answer" },
+        });
+      },
+      sessionMessages: [{ role: "assistant", content: "late answer" }],
+    });
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+    const result = processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { abortSignal: controller.signal, abortRun: () => false },
+    );
+    await started;
+    controller.abort();
+    try {
+      await vi.waitFor(() =>
+        expect(terminalEvents()).toContainEqual(
+          expect.objectContaining({ type: "done", historyId: 1 }),
+        ),
+      );
+      expect(updateResponse).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+    await result;
+    expect(snapshotMocks.commit).not.toHaveBeenCalled();
+    expect(JSON.stringify(updateResponse.mock.calls)).not.toContain("late answer");
   });
 
   it.each([false, true])(
@@ -2626,7 +2770,7 @@ describe("processChatMessage", () => {
       }) + "\n";
     for (let turn = 0; turn < 3; turn++) {
       await writeFile(file, transcript);
-      snapshotMocks.prepare.mockResolvedValueOnce(file);
+      snapshotMocks.prepare.mockResolvedValueOnce({ sessionFile: file });
       await processChatMessage(
         {
           ...createChatMessage(),

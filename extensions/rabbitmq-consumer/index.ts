@@ -4,6 +4,7 @@ import { createCollaborationHistoryToolFactory } from "./src/collaboration-histo
 import { DownloadManager } from "./src/download-manager.js";
 import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
+import { registerInteractiveAgentPolicy } from "./src/interactive-agent-policy.js";
 import {
   collectLocalDebugUsage,
   createLocalDebugExecutor,
@@ -110,6 +111,7 @@ export default definePluginEntry({
   name: "RabbitMQ Consumer",
   description: "Consume chat messages from RabbitMQ and process them via OpenClaw subagent.",
   register(api: OpenClawPluginApi) {
+    registerInteractiveAgentPolicy(api);
     api.registerTool(createVideoLinkParseToolFactory(api), { name: "video_link_parse" });
     api.registerTool(
       createCollaborationHistoryToolFactory({
