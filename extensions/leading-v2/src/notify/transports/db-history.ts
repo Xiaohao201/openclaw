@@ -30,7 +30,13 @@ export class DbHistoryTransport implements NotificationTransport {
     const text = n.link ? `${body}\n\n[查看详情](${n.link})` : body;
     await insertHistoryRow(
       this.db,
-      { sessionId, uid: n.uid, response: text, usage: n.usage },
+      {
+        sessionId,
+        uid: n.uid,
+        response: text,
+        usage: n.usage,
+        ...(n.schedule ? { title: n.title, schedule: n.schedule } : {}),
+      },
       this.logger,
     );
     return { ok: true };

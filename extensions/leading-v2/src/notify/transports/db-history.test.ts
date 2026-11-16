@@ -64,3 +64,13 @@ describe("DbHistoryTransport", () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 });
+
+it("persists the scheduled title snapshot and execution identity", async () => {
+  const schedule = { taskId: "task-a", runId: "run-a", firedAt: 123 };
+  await new DbHistoryTransport(db).deliver({ ...note, category: "scheduled", schedule }, to);
+  expect(mockInsert).toHaveBeenCalledWith(
+    db,
+    expect.objectContaining({ title: note.title, schedule }),
+    undefined,
+  );
+});

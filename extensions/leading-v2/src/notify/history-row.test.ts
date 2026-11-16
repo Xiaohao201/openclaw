@@ -60,7 +60,7 @@ describe("insertHistoryRow", () => {
     const [, sql, params] = mockExecute.mock.calls[0] as [unknown, string, unknown[]];
     expect(sql).toContain("INSERT INTO history_messages");
     expect(sql).not.toContain("total_tokens");
-    expect(params).toEqual(["session_9_z", "1749", "早安", null]);
+    expect(params).toEqual(["session_9_z", "1749", "早安", null, null]);
   });
 
   it("writes the token/cost columns and metadata.usage when the run was billed", async () => {
@@ -72,9 +72,9 @@ describe("insertHistoryRow", () => {
     expect(sql).toContain("total_tokens");
     expect(sql).toContain("cost_currency");
     expect(JSON.parse(String(params[3]))).toEqual({ usage: usage.detail });
-    expect(params.slice(4, 9)).toEqual([1200, 340, 8000, 0, 9540]);
-    expect(params.slice(9, 14)).toEqual([0.0036, 0.00408, 0.0024, 0, 0.01008]);
-    expect(params.slice(14)).toEqual(["CNY", "qwen", "qwen3.6-plus", 4]);
+    expect(params.slice(5, 10)).toEqual([1200, 340, 8000, 0, 9540]);
+    expect(params.slice(10, 15)).toEqual([0.0036, 0.00408, 0.0024, 0, 0.01008]);
+    expect(params.slice(15)).toEqual(["CNY", "qwen", "qwen3.6-plus", 4]);
   });
 
   it("keeps an accounting-only row out of the chat by leaving the response empty", async () => {
@@ -84,7 +84,7 @@ describe("insertHistoryRow", () => {
     const [, sql, params] = mockExecute.mock.calls[0] as [unknown, string, unknown[]];
     // message is hardcoded empty (kind=schedule) and response is empty too, so
     // the history loader emits neither bubble.
-    expect(sql).toContain("VALUES (?, ?, '', ?, NULL, ?, NOW()");
+    expect(sql).toContain("VALUES (?, ?, '', ?, NULL, ?, ?, NOW()");
     expect(params[2]).toBe("");
   });
 
@@ -102,7 +102,7 @@ describe("insertHistoryRow", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     const [, retrySql, retryParams] = mockExecute.mock.calls[1] as [unknown, string, unknown[]];
     expect(retrySql).not.toContain("total_tokens");
-    expect(retryParams).toHaveLength(4);
+    expect(retryParams).toHaveLength(5);
 
     // Latched: the next row skips the usage attempt entirely.
     mockExecute.mockClear();
@@ -117,4 +117,40 @@ describe("insertHistoryRow", () => {
     await expect(insertHistoryRow(db, { ...row, usage })).rejects.toThrow("gone");
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
+});
+
+it("preserves distinct task identities sharing a chat session, with or without usage", async () => {
+  for (const taskId of ["task-a", "task-b"]) {
+    const schedule = { taskId, runId: `run-${taskId}`, firedAt: 123 };
+    await insertHistoryRow(db, {
+      ...row,
+      title: taskId,
+      schedule,
+      ...(taskId === "task-a" ? { usage } : {}),
+    });
+  }
+  for (const [index, taskId] of ["task-a", "task-b"].entries()) {
+    const [, sql, params] = mockExecute.mock.calls[index] as [unknown, string, unknown[]];
+    expect(sql).toContain("title");
+    expect(params[4]).toBe(taskId);
+    expect(JSON.parse(String(params[3]))).toEqual({
+      ...(index === 0 ? { usage: usage.detail } : {}),
+      schedule: { taskId, runId: `run-${taskId}`, firedAt: 123 },
+    });
+  }
+});
+
+it("retains schedule identity when usage columns are unavailable", async () => {
+  mockExecute
+    .mockRejectedValueOnce(
+      Object.assign(new Error("Unknown column"), { code: "ER_BAD_FIELD_ERROR" }),
+    )
+    .mockResolvedValue({ insertId: 9 });
+  const schedule = { taskId: "task-a", runId: null, firedAt: 123 };
+  await insertHistoryRow(db, { ...row, title: "Saved title", response: "", schedule, usage });
+  const [, sql, params] = mockExecute.mock.calls[1] as [unknown, string, unknown[]];
+  expect(sql).not.toContain("total_tokens");
+  expect(params[2]).toBe("");
+  expect(params[4]).toBe("Saved title");
+  expect(JSON.parse(String(params[3]))).toEqual({ usage: usage.detail, schedule });
 });

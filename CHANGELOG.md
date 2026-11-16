@@ -102,6 +102,7 @@ Docs: https://docs.openclaw.ai
 - Email: correct OSS output date directories without reading session history, preventing runtime-scope errors from blocking SMTP delivery; distinguish content and SMTP failures and bound SMTP timeouts.
 
 - Gateway/sessions: filter and limit session listings before reading transcript usage, titles, and previews, preserving search results, stable ordering, and cross-agent child links while reducing work for large histories.
+- Leading v2/schedules: preserve task titles and execution identity in history records, including billed failures, so tasks sharing a conversation can be attributed accurately.
 
 ## 2026.4.15
 

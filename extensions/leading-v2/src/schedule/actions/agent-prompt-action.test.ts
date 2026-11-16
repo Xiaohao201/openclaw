@@ -233,6 +233,7 @@ describe("agentPromptAction runner", () => {
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
         category: "scheduled",
+        schedule: { taskId: "t1", runId: "r1", firedAt: expect.any(Number) },
         body: "早安！今天有 3 件待办。",
         title: "每天道早安",
       }),
@@ -329,7 +330,13 @@ describe("agentPromptAction billing", () => {
       { uid: string; response: string; usage: TurnUsageRecord },
     ];
     // Empty response = the row bills but never renders in the user's chat.
-    expect(row).toMatchObject({ sessionId: "session_1", uid: "1749", response: "" });
+    expect(row).toMatchObject({
+      sessionId: "session_1",
+      uid: "1749",
+      response: "",
+      title: task().title,
+      schedule: { taskId: "t1", runId: "r1", firedAt: expect.any(Number) },
+    });
     expect(row.usage.totalCost).toBe(usage.totalCost);
     expect(row.usage.detail).toMatchObject({ outcome: "timeout" });
   });
@@ -364,6 +371,10 @@ describe("agentPromptAction billing", () => {
     expect(res.ok).toBe(false);
     const [, row] = mockInsertHistoryRow.mock.calls[0] as [unknown, { usage: TurnUsageRecord }];
     expect(row.usage.detail).toMatchObject({ outcome: "error" });
+    expect(row).toMatchObject({
+      title: task().title,
+      schedule: { taskId: "t1", runId: null, firedAt: expect.any(Number) },
+    });
   });
 
   it("does not fail the run when the billing write itself fails", async () => {
