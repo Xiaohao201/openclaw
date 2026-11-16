@@ -1,4 +1,5 @@
 import type { PluginLogger } from "../../api.js";
+import type { ScheduleRunMetadata } from "./history-row.js";
 import type { TurnUsageRecord } from "./usage.js";
 
 /** A thing that happened and should be surfaced to a user. Transport-agnostic. */
@@ -18,6 +19,7 @@ export interface Notification {
    * cost never reaches the user's screen or inbox.
    */
   usage?: TurnUsageRecord;
+  schedule?: ScheduleRunMetadata;
 }
 
 /** Where a notification can be delivered for a given user (captured at submit time). */

@@ -1,6 +1,7 @@
 import { ArtifactLinks } from "../../../api.js";
 import { agentIdFromSessionKey } from "../../client/agent-id.js";
 import { asString } from "../../client/envelope.js";
+import type { ScheduleRunMetadata } from "../../notify/history-row.js";
 import { insertHistoryRow, sessionIdFromKey } from "../../notify/history-row.js";
 import { collectTurnUsage, formatUsage, markUsageOutcome } from "../../notify/usage.js";
 import type { TurnUsageRecord } from "../../notify/usage.js";
@@ -129,6 +130,7 @@ export const agentPromptAction: ScheduleActionType = {
       // Derived session: keeps scheduled turns off the user's live chat session.
       const sessionKey = `${task.sessionKey}:sched`;
       const firedAt = Date.now();
+      const schedule: ScheduleRunMetadata = { taskId: task.id, runId: null, firedAt };
       // Token/cost accounting window. A scheduled run bills the same as a chat
       // turn — it is a full agent turn with the full toolset — but no chat
       // pipeline is watching it, so this action bills itself. Opened BEFORE the
@@ -177,6 +179,8 @@ export const agentPromptAction: ScheduleActionType = {
             {
               sessionId,
               uid: task.uid,
+              title: task.title || "定时任务",
+              schedule,
               response: "", // accounting-only: invisible in the chat history
               usage: markUsageOutcome(spent, outcome),
             },
@@ -193,6 +197,7 @@ export const agentPromptAction: ScheduleActionType = {
           deliver: false,
           lane: execution?.lane ?? "leading-v2-schedule-0",
         });
+        schedule.runId = runId;
         logger.info(`[LEADING_V2_SCHED] task ${task.id} started run ${runId}`);
         const { result: wait, stopped } = await waitUntilSettled(subagent, runId, task.id, logger, {
           sessionKey,
@@ -227,6 +232,7 @@ export const agentPromptAction: ScheduleActionType = {
             id: `schedule:${task.id}:${firedAt}`, // dedupe per fire
             uid: task.uid,
             category: "scheduled",
+            schedule,
             level: "info",
             title: task.title || "定时任务",
             body: text,

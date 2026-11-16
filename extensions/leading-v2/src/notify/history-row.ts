@@ -39,16 +39,17 @@ const roundCost = (value: number): number =>
 const roundTokens = (value: number): number =>
   Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 
-const BASE_COLUMNS = "session_id, user_id, message, response, tools_used, metadata, created_at";
+const BASE_COLUMNS =
+  "session_id, user_id, message, response, tools_used, metadata, title, created_at";
 
-const PLAIN_SQL = `INSERT INTO history_messages (${BASE_COLUMNS}) VALUES (?, ?, '', ?, NULL, ?, NOW())`;
+const PLAIN_SQL = `INSERT INTO history_messages (${BASE_COLUMNS}) VALUES (?, ?, '', ?, NULL, ?, ?, NOW())`;
 
 const USAGE_SQL =
   `INSERT INTO history_messages (${BASE_COLUMNS}, ` +
   "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, " +
   "input_cost, output_cost, cache_read_cost, cache_write_cost, total_cost, " +
   "cost_currency, llm_provider, llm_model, llm_calls) " +
-  "VALUES (?, ?, '', ?, NULL, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "VALUES (?, ?, '', ?, NULL, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 /** Column values for the usage-carrying insert, in USAGE_SQL's placeholder order. */
 function usageParams(usage: TurnUsageRecord): unknown[] {
@@ -79,7 +80,16 @@ export function sessionIdFromKey(sessionKey?: string): string | undefined {
   return tail && tail.startsWith("session_") ? tail : undefined;
 }
 
+/** Identity of a scheduled execution; null means dispatch did not return a run ID. */
+export type ScheduleRunMetadata = {
+  taskId: string;
+  runId: string | null;
+  firedAt: number;
+};
+
 export type HistoryRowInsert = {
+  title?: string;
+  schedule?: ScheduleRunMetadata;
   sessionId: string;
   uid: string;
   /** Assistant bubble text; empty writes an accounting-only (invisible) row. */
@@ -98,8 +108,14 @@ export async function insertHistoryRow(
   row: HistoryRowInsert,
   logger?: PluginLogger,
 ): Promise<void> {
-  const metadata = row.usage ? JSON.stringify({ usage: row.usage.detail }) : null;
-  const base = [row.sessionId, row.uid, row.response, metadata];
+  const metadata =
+    row.usage || row.schedule
+      ? JSON.stringify({
+          ...(row.usage ? { usage: row.usage.detail } : {}),
+          ...(row.schedule ? { schedule: row.schedule } : {}),
+        })
+      : null;
+  const base = [row.sessionId, row.uid, row.response, metadata, row.title ?? null];
 
   if (row.usage && !usageColumnsMissing) {
     try {
