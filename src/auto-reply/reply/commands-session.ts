@@ -18,7 +18,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { formatTokenCount, formatCny } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
@@ -278,7 +278,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     });
     const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
 
-    const sessionCost = formatUsd(sessionSummary?.totalCost);
+    const sessionCost = formatCny(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
       ? formatTokenCount(sessionSummary.totalTokens)
       : undefined;
@@ -291,12 +291,12 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
     const todayKey = new Date().toLocaleDateString("en-CA");
     const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
-    const todayCost = formatUsd(todayEntry?.totalCost);
+    const todayCost = formatCny(todayEntry?.totalCost);
     const todayMissing = todayEntry?.missingCostEntries ?? 0;
     const todaySuffix = todayMissing > 0 ? " (partial)" : "";
     const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
 
-    const last30Cost = formatUsd(summary.totals.totalCost);
+    const last30Cost = formatCny(summary.totals.totalCost);
     const last30Missing = summary.totals.missingCostEntries;
     const last30Suffix = last30Missing > 0 ? " (partial)" : "";
     const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;

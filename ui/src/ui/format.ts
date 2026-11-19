@@ -1,5 +1,6 @@
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
+import { formatCny } from "../../../src/shared/model-cost-format.js";
 import { stripAssistantInternalScaffolding } from "../../../src/shared/text/assistant-visible-text.js";
 import { t } from "../i18n/index.ts";
 
@@ -84,20 +85,20 @@ export function stripThinkingTags(value: string): string {
   return stripAssistantInternalScaffolding(value);
 }
 
-export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {
+export function formatCost(cost: number | null | undefined, fallback = "¥0.00"): string {
   if (cost == null || !Number.isFinite(cost)) {
     return fallback;
   }
   if (cost === 0) {
-    return "$0.00";
+    return "¥0.00";
   }
   if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`;
+    return formatCny(cost, 4) ?? fallback;
   }
   if (cost < 1) {
-    return `$${cost.toFixed(3)}`;
+    return formatCny(cost, 3) ?? fallback;
   }
-  return `$${cost.toFixed(2)}`;
+  return formatCny(cost, 2) ?? fallback;
 }
 
 export function formatTokens(tokens: number | null | undefined, fallback = "0"): string {

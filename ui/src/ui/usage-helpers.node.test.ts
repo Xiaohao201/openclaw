@@ -31,6 +31,15 @@ describe("usage-helpers", () => {
     expect(res.warnings.some((w) => w.includes("Invalid number"))).toBe(true);
   });
 
+  it("accepts yuan symbols in cost filters", () => {
+    const low = { key: "low", usage: { totalCost: 0.5 } };
+    const high = { key: "high", usage: { totalCost: 2 } };
+    for (const symbol of ["¥", "￥"]) {
+      expect(filterSessionsByQuery([low, high], `mincost:${symbol}1`).sessions).toEqual([high]);
+      expect(filterSessionsByQuery([low, high], `maxcost:${symbol}1`).sessions).toEqual([low]);
+    }
+  });
+
   it("parses tool summaries from compact session logs", () => {
     const res = parseToolSummary(
       "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",

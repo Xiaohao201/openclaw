@@ -105,9 +105,27 @@ Costs are estimated from your model pricing config:
 models.providers.<provider>.models[].cost
 ```
 
-These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
-never show dollar cost.
+This deployment uses **CNY per 1M tokens** for `input`, `output`, `cacheRead`, and
+`cacheWrite`. Enter all configured model prices in yuan. Usage displays use `¥`,
+and usage CSV exports include a `currency` column containing `CNY`. Formatting
+does not perform an exchange-rate conversion: convert foreign-currency catalog
+prices to CNY before using them with these reports. If pricing is missing,
+OpenClaw shows tokens only. OAuth tokens never show estimated cost.
+
+Changing prices applies to future estimates; it does not convert amounts already
+stored in session history. The separate per-turn billing API supports an explicit
+currency conversion policy when combining prices in different currencies.
+
+For the DashScope Beijing endpoint, the following published prices were checked
+on November 19, 2026. Each value is CNY per 1M tokens:
+
+| Model                                                                  | `input` | `output` | `cacheRead` | `cacheWrite` |
+| ---------------------------------------------------------------------- | ------: | -------: | ----------: | -----------: |
+| [qwen3.8-flash](https://help.aliyun.com/zh/model-studio/qwen3-8-flash) |     0.8 |      2.7 |         0.1 |         1.25 |
+| [qwen4-max](https://www.qianwenai.com/models/qwen4-max)                |      10 |       30 |         0.5 |         12.5 |
+
+The `qwen4-max` cache-write price above assumes a five-minute TTL. A one-hour
+explicit cache costs 20 CNY per 1M tokens to create; use that price when applicable.
 
 ## Cache TTL and pruning impact
 

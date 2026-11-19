@@ -1,4 +1,4 @@
-import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { estimateUsageCost, formatTokenCount, formatCny } from "../../utils/usage-format.js";
 import type { ReplyPayload } from "../types.js";
 
 export const formatResponseUsageLine = (params: {
@@ -41,7 +41,7 @@ export const formatResponseUsageLine = (params: {
           cost: params.costConfig,
         })
       : undefined;
-  const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const costLabel = params.showCost ? formatCny(cost) : undefined;
   const cacheSuffix =
     (typeof cacheRead === "number" && cacheRead > 0) ||
     (typeof cacheWrite === "number" && cacheWrite > 0)

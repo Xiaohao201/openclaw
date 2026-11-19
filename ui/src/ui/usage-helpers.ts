@@ -66,7 +66,7 @@ const parseQueryNumber = (value: string): number | null => {
   if (!raw) {
     return null;
   }
-  if (raw.startsWith("$")) {
+  if (/^[$¥￥]/.test(raw)) {
     raw = raw.slice(1);
   }
   let multiplier = 1;

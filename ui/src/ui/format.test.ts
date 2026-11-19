@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTimestamp, formatUnknownText, stripThinkingTags } from "./format.ts";
+import {
+  formatCost,
+  formatRelativeTimestamp,
+  formatUnknownText,
+  stripThinkingTags,
+} from "./format.ts";
+
+describe("formatCost", () => {
+  it.each([
+    [0, "¥0.00"],
+    [0.0042, "¥0.0042"],
+    [0.125, "¥0.125"],
+    [40, "¥40.00"],
+  ])("formats CNY costs without converting the amount: %s", (value, expected) => {
+    expect(formatCost(value)).toBe(expected);
+  });
+
+  it("uses a CNY fallback for missing or invalid costs", () => {
+    for (const value of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(formatCost(value)).toBe("¥0.00");
+      expect(formatCost(value, "n/a")).toBe("n/a");
+    }
+  });
+});
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {

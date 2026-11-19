@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { formatCny } from "../../../../src/shared/model-cost-format.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -328,7 +329,7 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
   // Cost
   if (meta.cost > 0) {
-    parts.push(html`<span class="msg-meta__cost">$${meta.cost.toFixed(4)}</span>`);
+    parts.push(html`<span class="msg-meta__cost">${formatCny(meta.cost, 4)}</span>`);
   }
 
   // Context %
