@@ -103,7 +103,7 @@ vi.mock("../../terminal/theme.js", () => ({
 
 vi.mock("../../utils/usage-format.js", () => ({
   formatTokenCount: () => "0",
-  formatUsd: () => "$0.00",
+  formatCny: () => "¥0.00",
 }));
 
 vi.mock("../help-format.js", () => ({

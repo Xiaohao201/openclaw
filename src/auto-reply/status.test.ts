@@ -89,7 +89,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Model: anthropic/pi:opus");
     expect(normalized).toContain("api-key");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
-    expect(normalized).toContain("Cost: $0.0020");
+    expect(normalized).toContain("Cost: ¥0.0020");
     expect(normalized).toContain("Context: 16k/32k (50%)");
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");

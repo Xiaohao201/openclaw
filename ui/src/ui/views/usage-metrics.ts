@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { formatCny } from "../../../../src/shared/model-cost-format.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -299,7 +300,7 @@ function renderUsageMosaic(
 }
 
 function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
+  return formatCny(n, decimals) ?? "—";
 }
 
 function formatIsoDate(date: Date): string {

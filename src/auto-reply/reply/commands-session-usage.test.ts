@@ -130,6 +130,8 @@ describe("handleUsageCommand", () => {
     const result = await handleUsageCommand(buildUsageParams(), true);
 
     expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Session ¥1.23");
+    expect(result?.reply?.text).toContain("Last 30d ¥4.56");
     expect(loadSessionCostSummaryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "target",

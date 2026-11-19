@@ -1,3 +1,4 @@
+import { MODEL_COST_CURRENCY } from "../../../../src/shared/model-cost-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractQueryTerms } from "../usage-helpers.ts";
 import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
@@ -50,6 +51,7 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
       "cacheWriteTokens",
       "totalTokens",
       "totalCost",
+      "currency",
     ]),
   ];
 
@@ -74,6 +76,7 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
         usage?.cacheWrite ?? "",
         usage?.totalTokens ?? "",
         usage?.totalCost ?? "",
+        MODEL_COST_CURRENCY,
       ]),
     );
   }
@@ -95,6 +98,7 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string => {
       "cacheReadCost",
       "cacheWriteCost",
       "totalCost",
+      "currency",
     ]),
   ];
 
@@ -112,6 +116,7 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string => {
         day.cacheReadCost ?? "",
         day.cacheWriteCost ?? "",
         day.totalCost,
+        MODEL_COST_CURRENCY,
       ]),
     );
   }

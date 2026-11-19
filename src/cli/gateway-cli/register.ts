@@ -108,8 +108,8 @@ async function renderCostUsageSummaryAsync(
   days: number,
   rich: boolean,
 ): Promise<string[]> {
-  const { formatTokenCount, formatUsd } = await loadUsageFormatModule();
-  const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
+  const { formatTokenCount, formatCny } = await loadUsageFormatModule();
+  const totalCost = formatCny(summary.totals.totalCost) ?? "¥0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),
@@ -124,7 +124,7 @@ async function renderCostUsageSummaryAsync(
 
   const latest = summary.daily.at(-1);
   if (latest) {
-    const latestCost = formatUsd(latest.totalCost) ?? "$0.00";
+    const latestCost = formatCny(latest.totalCost) ?? "¥0.00";
     const latestTokens = formatTokenCount(latest.totalTokens) ?? "0";
     lines.push(
       `${colorize(rich, theme.muted, "Latest day:")} ${latest.date} · ${latestCost} · ${latestTokens} tokens`,

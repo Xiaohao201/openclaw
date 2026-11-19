@@ -42,7 +42,7 @@ import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
-  formatUsd,
+  formatCny,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
@@ -760,7 +760,7 @@ export function buildStatusMessage(args: StatusArgs): string {
           cost: costConfig,
         })
       : undefined;
-  const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
+  const costLabel = showCost && hasUsage ? formatCny(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const channelModelNote = (() => {

@@ -8,6 +8,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
+export { formatCny } from "../shared/model-cost-format.js";
+
 export type ModelCostConfig = {
   input: number;
   output: number;
