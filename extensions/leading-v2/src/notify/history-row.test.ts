@@ -50,6 +50,28 @@ describe("sessionIdFromKey", () => {
     expect(sessionIdFromKey("agent:rabbitmq-1749:rabbitmq:1749:nope")).toBeUndefined();
     expect(sessionIdFromKey(undefined)).toBeUndefined();
   });
+
+  it.each([":turn:42", ":sched", ":turn:42:sched"])(
+    "extracts the chat session before the execution suffix %s",
+    (suffix) => {
+      expect(sessionIdFromKey(`agent:rabbitmq-1749:rabbitmq:1749:session_123_abc${suffix}`)).toBe(
+        "session_123_abc",
+      );
+    },
+  );
+
+  it.each([
+    "",
+    "agent:rabbitmq-1749:rabbitmq:1749:turn:42",
+    "agent:rabbitmq-1749:rabbitmq:1749:session_123_abc:turn:",
+    "agent:rabbitmq-1749:rabbitmq:1749:session_123_abc:turn:invalid",
+    "agent:rabbitmq-1749:rabbitmq:1749:session_123_abc:turn:0",
+    "agent:rabbitmq-1749:rabbitmq:1749:session_123_abc:turn:-1",
+    "agent:rabbitmq-1749:rabbitmq:1749:session_123_abc:unknown",
+    "agent:rabbitmq-1749:rabbitmq:1749:session_123_abc:turn:42:unknown",
+  ])("rejects an unresolvable execution key: %s", (sessionKey) => {
+    expect(sessionIdFromKey(sessionKey)).toBeUndefined();
+  });
 });
 
 describe("insertHistoryRow", () => {

@@ -71,13 +71,14 @@ function usageParams(usage: TurnUsageRecord): unknown[] {
   ];
 }
 
-/** Pull the chat sessionId out of an agent sessionKey (…:<sessionId> tail). */
+/** Resolve the chat session ID from legacy keys and isolated execution keys. */
 export function sessionIdFromKey(sessionKey?: string): string | undefined {
   if (!sessionKey) {
     return undefined;
   }
-  const tail = sessionKey.split(":").pop();
-  return tail && tail.startsWith("session_") ? tail : undefined;
+  // Schedules retain their creator's execution key; delivery must target the
+  // original chat even when :turn:<historyId> and :sched suffixes are present.
+  return /(?:^|:)(session_[^:]+)(?::turn:[1-9]\d*)?(?::sched)?$/u.exec(sessionKey)?.[1];
 }
 
 /** Identity of a scheduled execution; null means dispatch did not return a run ID. */
