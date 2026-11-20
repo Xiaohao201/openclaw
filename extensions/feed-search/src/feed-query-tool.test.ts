@@ -297,6 +297,10 @@ describe("createFeedQueryToolFactory", () => {
     const searchCall = mockExecuteQuery.mock.calls[4];
     expect(searchCall[1]).toContain("WHERE f.slaveTopicId = ? AND f.skip = 0");
     expect(searchCall[2]).toEqual([585, "%裁员%", "%裁员%", "%裁员%"]);
+    for (const [, sql] of [countCall, searchCall]) {
+      expect(sql).toContain("d.title LIKE ?");
+      expect(sql).not.toMatch(/\bMATCH\s*\(|\bAGAINST\s*\(/i);
+    }
   });
 
   it("returns zero total without running a detail query", async () => {
@@ -458,7 +462,7 @@ describe("createFeedQueryToolFactory", () => {
     expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
   });
 
-  it("aggregates stats with a total and per-dimension buckets", async () => {
+  it("aggregates keyword-filtered stats without requiring a full-text index", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
     mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
@@ -473,6 +477,7 @@ describe("createFeedQueryToolFactory", () => {
       topicId: 585,
       mode: "stats",
       groupBy: ["level"],
+      keyword: "裁员",
     });
 
     expect(result.details).toMatchObject({
@@ -488,6 +493,12 @@ describe("createFeedQueryToolFactory", () => {
         },
       ],
     });
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(5);
+    for (const [, sql, values] of mockExecuteQuery.mock.calls.slice(3)) {
+      expect(sql).toContain("d.title LIKE ?");
+      expect(sql).not.toMatch(/\bMATCH\s*\(|\bAGAINST\s*\(/i);
+      expect(values).toEqual([585, "%裁员%", "%裁员%", "%裁员%"]);
+    }
   });
 
   it("rejects an unauthorized topicId in stats mode as well", async () => {

@@ -32,7 +32,10 @@ const FeedListSchema = Type.Object(
     topicId: Type.Number({ description: "主监测方案 ID (required). Get it from topic_list." }),
     slaveTopicId: Type.Optional(Type.Number({ description: "子监测方案 ID (optional)." })),
     q: Type.Optional(
-      Type.String({ description: "Full-text keyword over title/author/summary/content." }),
+      Type.String({
+        description:
+          "Temporarily unavailable: nonblank article keywords return KEYWORD_SEARCH_UNAVAILABLE. Omit only for requests that do not require article keyword filtering.",
+      }),
     ),
     page: Type.Optional(Type.Number({ description: "Page number. Default 1." })),
     size: Type.Optional(Type.Number({ description: "Page size. Default 20." })),
@@ -117,7 +120,8 @@ export function createFeedListToolFactory(api: OpenClawPluginApi, resolver: ApiK
       name: "feed_list",
       label: "List 舆情 Feeds",
       description:
-        "Read the 舆情 monitoring items for a 监测方案 (topicId), with optional keyword/time/platform/risk/emotion filters. " +
+        "Read the 舆情 monitoring items for a 监测方案 (topicId), with optional time/platform/risk/emotion filters. " +
+        "Article keyword search through feed_list is temporarily unavailable. Nonblank q returns KEYWORD_SEARCH_UNAVAILABLE; report this tool's limitation instead of silently dropping the filter or claiming zero matches. " +
         "Returns each item's title, platform, emotion, risk level, AI summary and link. Read-only.",
       parameters: FeedListSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -129,12 +133,23 @@ export function createFeedListToolFactory(api: OpenClawPluginApi, resolver: ApiK
         if (!Number.isInteger(topicId) || topicId <= 0) {
           return jsonResult({ success: false, error: "topicId is required (from topic_list)." });
         }
+        // The backend's feed_monitor_item_data full-text index has been removed.
+        // Do not forward keyword requests or silently broaden them to all articles.
+        if (asString(rawParams.q)) {
+          return jsonResult({
+            success: false,
+            code: "KEYWORD_SEARCH_UNAVAILABLE",
+            error: "feed_list keyword search is temporarily unavailable.",
+            retryable: false,
+            guidance:
+              "Report this limitation. Do not retry by dropping the keyword or treat this failure as zero matches. Queries that do not require article keyword filtering remain available.",
+          });
+        }
         const params: Record<string, FieldValue> = {
           topicId,
           slaveTopicId: Number.isInteger(Number(rawParams.slaveTopicId))
             ? Number(rawParams.slaveTopicId)
             : undefined,
-          q: asString(rawParams.q),
           page: Math.max(1, Number(rawParams.page ?? 1) || 1),
           size: Math.min(100, Math.max(1, Number(rawParams.size ?? 20) || 20)),
           from: Number.isInteger(Number(rawParams.from)) ? Number(rawParams.from) : undefined,
