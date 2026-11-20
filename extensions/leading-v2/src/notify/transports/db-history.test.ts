@@ -51,12 +51,22 @@ describe("DbHistoryTransport", () => {
     expect(row.response).toContain("[查看详情](https://x.test/r/1)");
   });
 
-  it("passes the run's usage through so the row is billed", async () => {
-    const usage = { totalCost: 1, currency: "CNY" } as TurnUsageRecord;
-    await new DbHistoryTransport(db).deliver({ ...note, usage }, to);
-    const [, row] = mockInsert.mock.calls[0] as [unknown, { usage?: TurnUsageRecord }];
-    expect(row.usage).toBe(usage);
-  });
+  it.each(["", ":turn:42", ":turn:42:sched"])(
+    "persists usage under the chat session for execution suffix %s",
+    async (suffix) => {
+      const usage = { totalCost: 1, currency: "CNY" } as TurnUsageRecord;
+      const res = await new DbHistoryTransport(db).deliver(
+        { ...note, usage },
+        { sessionKey: `${to.sessionKey}${suffix}` },
+      );
+      expect(res.ok).toBe(true);
+      expect(mockInsert).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ sessionId: "session_9_z", uid: note.uid, usage }),
+        undefined,
+      );
+    },
+  );
 
   it("skips when no session id is resolvable", async () => {
     const res = await new DbHistoryTransport(db).deliver(note, {});

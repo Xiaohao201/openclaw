@@ -16,6 +16,7 @@ vi.mock("../../notify/history-row.js", async (importOriginal) => ({
 }));
 
 import type { PluginLogger } from "../../../api.js";
+import { DbHistoryTransport } from "../../notify/transports/db-history.js";
 import type { TurnUsageRecord } from "../../notify/usage.js";
 import type { ScheduledTask } from "../types.js";
 import { agentPromptAction } from "./agent-prompt-action.js";
@@ -81,8 +82,9 @@ function makeSubagent(assistantText: string, status: "ok" | "error" | "timeout" 
 }
 
 /** A backend config with a write-capable db, so failed-run billing can persist. */
+const historyDb = { host: "h", port: 3306, user: "u", password: "p", database: "superworker" };
 const configWithDb = {
-  db: { host: "h", port: 3306, user: "u", password: "p", database: "superworker" },
+  db: historyDb,
 } as ActionRunnerDeps["config"];
 
 function deps(over: Partial<ActionRunnerDeps> = {}): ActionRunnerDeps {
@@ -269,6 +271,42 @@ describe("agentPromptAction runner", () => {
 });
 
 describe("agentPromptAction billing", () => {
+  it("persists an isolated scheduled reply and its usage in the original chat session", async () => {
+    mockCollectTurnUsage.mockResolvedValue(usage);
+    const subagent = makeSubagent("早安！");
+    const transport = new DbHistoryTransport(historyDb, logger);
+    const scheduledTask = task({ sessionKey: `${task().sessionKey}:turn:42` });
+    const runner = agentPromptAction.makeRunner(
+      deps({
+        config: configWithDb,
+        subagent,
+        usagePolicy,
+        deliver: async (notification, addressing) =>
+          (await transport.deliver(notification, addressing)).ok,
+      }),
+    );
+
+    expect(await runner(scheduledTask)).toMatchObject({ ok: true });
+    expect(subagent.run).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: `${scheduledTask.sessionKey}:sched` }),
+    );
+    expect(mockCollectTurnUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: `${scheduledTask.sessionKey}:sched` }),
+    );
+    expect(mockInsertHistoryRow).toHaveBeenCalledExactlyOnceWith(
+      historyDb,
+      expect.objectContaining({
+        sessionId: "session_1",
+        uid: scheduledTask.uid,
+        title: scheduledTask.title,
+        response: expect.stringContaining("早安！"),
+        schedule: { taskId: scheduledTask.id, runId: "r1", firedAt: expect.any(Number) },
+        usage,
+      }),
+      logger,
+    );
+  });
+
   it("bills the run onto the delivered notification", async () => {
     mockCollectTurnUsage.mockResolvedValue(usage);
     const subagent = makeSubagent("早安！");
@@ -306,40 +344,44 @@ describe("agentPromptAction billing", () => {
     expect(deliver.mock.calls[0][0]).not.toHaveProperty("usage");
   });
 
-  it("bills a timed-out run onto an accounting-only row", async () => {
-    mockCollectTurnUsage.mockResolvedValue(usage);
-    const warn = vi.fn();
-    const deliver = vi.fn(async () => true);
-    const runner = agentPromptAction.makeRunner(
-      deps({
-        config: configWithDb,
-        subagent: makeSubagent("", "timeout"),
-        deliver,
-        usagePolicy,
-        logger: { info() {}, warn, error() {}, debug() {} } as unknown as PluginLogger,
-      }),
-    );
+  it.each(["", ":turn:42"])(
+    "bills a timed-out run with execution suffix %s onto the chat session",
+    async (suffix) => {
+      mockCollectTurnUsage.mockResolvedValue(usage);
+      const warn = vi.fn();
+      const deliver = vi.fn(async () => true);
+      const runner = agentPromptAction.makeRunner(
+        deps({
+          config: configWithDb,
+          subagent: makeSubagent("", "timeout"),
+          deliver,
+          usagePolicy,
+          logger: { info() {}, warn, error() {}, debug() {} } as unknown as PluginLogger,
+        }),
+      );
 
-    const res = await runner(task());
+      const res = await runner(task({ sessionKey: `${task().sessionKey}${suffix}` }));
 
-    expect(res.ok).toBe(false);
-    expect(deliver).not.toHaveBeenCalled();
-    expect(warn.mock.calls[0][0]).toContain("spent tokens without delivering");
-    const [, row] = mockInsertHistoryRow.mock.calls[0] as [
-      unknown,
-      { uid: string; response: string; usage: TurnUsageRecord },
-    ];
-    // Empty response = the row bills but never renders in the user's chat.
-    expect(row).toMatchObject({
-      sessionId: "session_1",
-      uid: "1749",
-      response: "",
-      title: task().title,
-      schedule: { taskId: "t1", runId: "r1", firedAt: expect.any(Number) },
-    });
-    expect(row.usage.totalCost).toBe(usage.totalCost);
-    expect(row.usage.detail).toMatchObject({ outcome: "timeout" });
-  });
+      expect(res.ok).toBe(false);
+      expect(deliver).not.toHaveBeenCalled();
+      expect(warn.mock.calls[0][0]).toContain("spent tokens without delivering");
+      expect(mockInsertHistoryRow).toHaveBeenCalledTimes(1);
+      const [, row] = mockInsertHistoryRow.mock.calls[0] as [
+        unknown,
+        { uid: string; response: string; usage: TurnUsageRecord },
+      ];
+      // Empty response = the row bills but never renders in the user's chat.
+      expect(row).toMatchObject({
+        sessionId: "session_1",
+        uid: "1749",
+        response: "",
+        title: task().title,
+        schedule: { taskId: "t1", runId: "r1", firedAt: expect.any(Number) },
+      });
+      expect(row.usage.totalCost).toBe(usage.totalCost);
+      expect(row.usage.detail).toMatchObject({ outcome: "timeout" });
+    },
+  );
 
   it("bills a run that answered with nothing", async () => {
     mockCollectTurnUsage.mockResolvedValue(usage);
