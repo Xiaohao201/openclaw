@@ -51,6 +51,32 @@ describe("gating", () => {
 });
 
 describe("feed_list", () => {
+  it.each(["食堂", "  裁员  ", "100%_增长\\"])(
+    "rejects keyword %j without calling the backend",
+    async (q) => {
+      const tool = createFeedListToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+      const result = parse(await tool.execute("keyword", { topicId: 553, q }));
+      expect(result).toMatchObject({
+        success: false,
+        code: "KEYWORD_SEARCH_UNAVAILABLE",
+        retryable: false,
+        error: expect.stringMatching(/keyword search is temporarily unavailable/i),
+      });
+      expect(result).not.toHaveProperty("total");
+      expect(mockGetJson).not.toHaveBeenCalled();
+      expect(mockPostForm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "", " \t\n "])("allows absent or blank keyword %j", async (q) => {
+    const tool = createFeedListToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
+    mockGetJson.mockResolvedValueOnce({ total: 0, list: [] });
+    const result = parse(await tool.execute("blank", { topicId: 553, q }));
+    expect(result).toMatchObject({ success: true, total: 0, list: [] });
+    expect(mockGetJson).toHaveBeenCalledTimes(1);
+    expect(mockGetJson.mock.calls[0][2]).not.toHaveProperty("q");
+  });
+
   it("requires topicId and forwards array filters", async () => {
     const tool = createFeedListToolFactory(fakeApi, resolver)({ agentId: "rabbitmq-1749" })!;
     expect(parse(await tool.execute("f0", {})).success).toBe(false);

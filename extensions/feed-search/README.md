@@ -3,6 +3,19 @@
 `feed_query` is available to authenticated `rabbitmq-<userId>` agents. Authorization
 is resolved server-side for each call; tool arguments cannot change user identity.
 
+## Keyword search
+
+`feed_query` supports `keyword` in both search and stats mode using parameterized
+`LIKE` filters on article title, summary, and content within the authorized
+project. It does not require a FULLTEXT index. Use relevant date and other filters
+to narrow the records examined by substring searches.
+
+The separate `leading-v2` tool `feed_list` temporarily rejects nonblank `q` with
+`KEYWORD_SEARCH_UNAVAILABLE` because its backend's default search uses
+`MATCH ... AGAINST` and the data table's FULLTEXT index has been removed.
+Queries without `q` remain available. Do not silently drop a requested keyword
+or interpret that error as zero matches.
+
 ## Select a project before querying its contents
 
 1. Discover authorized projects with `{"mode":"topics","topicName":"莱州一中"}`.
