@@ -1,6 +1,7 @@
-import { ArtifactLinks } from "../../../api.js";
+import { ArtifactLinks, collectSessionTurnUsage, convertSessionTurnCost } from "../../../api.js";
 import { agentIdFromSessionKey } from "../../client/agent-id.js";
 import { asString } from "../../client/envelope.js";
+import { openCreditRun } from "../../credit-reservation.js";
 import type { ScheduleRunMetadata } from "../../notify/history-row.js";
 import { insertHistoryRow, sessionIdFromKey } from "../../notify/history-row.js";
 import { collectTurnUsage, formatUsage, markUsageOutcome } from "../../notify/usage.js";
@@ -190,7 +191,28 @@ export const agentPromptAction: ScheduleActionType = {
           logger.warn(`[LEADING_V2_SCHED] failed-run billing write failed: ${String(error)}`);
         }
       };
+      const creditRun = await openCreditRun(
+        task.uid,
+        `schedule:${task.id}:${firedAt}`,
+        logger,
+        execution?.signal,
+      );
+      let creditRunStarted = false;
+      let creditRunSettled = false;
+      const readCreditCost = async (final = false) => {
+        if (!creditRunStarted) return 0;
+        if (!billing || billing.policy.currency !== "CNY")
+          throw new Error("Usage policy unavailable");
+        const usage = await collectSessionTurnUsage(billing);
+        if (usage.missingCost) throw new Error("Model pricing unavailable");
+        if (final && usage.calls <= 0) throw new Error("Final usage unavailable");
+        return convertSessionTurnCost(usage, billing.policy).total;
+      };
       try {
+        if (creditRun && (!billing || usagePolicy?.currency !== "CNY"))
+          throw new Error("CNY billing policy required");
+        creditRunStarted = true;
+        creditRun?.monitor(readCreditCost, () => deps.abortRun?.(sessionKey));
         const { runId } = await subagent.run({
           sessionKey,
           message: `[scheduled-task][userId:${task.uid}] ${instruction}`,
@@ -205,6 +227,7 @@ export const agentPromptAction: ScheduleActionType = {
           signal: execution?.signal,
           abortRun: deps.abortRun,
         });
+        creditRunSettled = true;
         if (stopped) {
           await billUnattended(stopped);
           return { ok: false, code: stopped, note: `${stopped}; run ${runId} settled` };
@@ -261,6 +284,19 @@ export const agentPromptAction: ScheduleActionType = {
         // mid-run, a gateway error): bill what the transcript shows.
         await billUnattended("error");
         return { ok: false, note: String(error) };
+      } finally {
+        if (creditRun) {
+          try {
+            if (!creditRunStarted || creditRunSettled)
+              await creditRun.settle(() => readCreditCost(true));
+            else {
+              creditRun.retain();
+              logger.warn("[CREDITS] Scheduled termination unknown; reservation retained");
+            }
+          } catch {
+            logger.warn("[CREDITS] Scheduled settlement pending reconciliation");
+          }
+        }
       }
     };
   },

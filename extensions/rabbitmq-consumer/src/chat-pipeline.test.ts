@@ -1,3 +1,7 @@
+const creditMocks = vi.hoisted(() => ({
+  open: vi.fn<typeof import("./credit-reservation.js").openCreditRun>().mockResolvedValue(null),
+}));
+vi.mock("./credit-reservation.js", () => ({ openCreditRun: creditMocks.open }));
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -167,6 +171,55 @@ describe("processChatMessage", () => {
         ? [{ ...event, topic: body.get("topic") }]
         : [];
     });
+
+  it("checks execution-time credits before starting any model work", async () => {
+    const { historyManager } = createHistoryManagerMock();
+    const run = vi.fn();
+    const runtime = createRuntimeMock({ workspaceDir, onRun: run });
+    creditMocks.open.mockRejectedValueOnce(new Error("credits expired"));
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+    expect(result).toMatch(/^Error:/);
+    expect(run).not.toHaveBeenCalled();
+    expect(creditMocks.open).toHaveBeenCalledWith(USER_ID, "chat:1", logger, undefined);
+  });
+
+  it("settles reserved credits only after the model reaches a terminal state", async () => {
+    const { historyManager } = createHistoryManagerMock();
+    const run = vi.fn();
+    const runtime = createRuntimeMock({ workspaceDir, onRun: run, waitStatus: "error" });
+    const lease = {
+      budgetPoints: 1000,
+      monitor: vi.fn(),
+      settle: vi.fn(async () => {}),
+      retain: vi.fn(),
+    };
+    creditMocks.open.mockResolvedValueOnce(lease);
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { currency: "CNY", rate: 7, foreignProviders: [] },
+    );
+    expect(run).toHaveBeenCalledOnce();
+    expect(lease.monitor).toHaveBeenCalledOnce();
+    expect(lease.settle).toHaveBeenCalledOnce();
+    expect(lease.retain).not.toHaveBeenCalled();
+  });
 
   it("reports an empty settled run as failed instead of saving a successful placeholder", async () => {
     const { historyManager, updateResponse, updateMetadata } = createHistoryManagerMock();

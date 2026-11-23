@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   getRuntimeConfigSnapshot,
+  abortAgentHarnessRun,
+  collectSessionTurnUsage,
+  convertSessionTurnCost,
   type OpenClawConfig,
   type PluginRuntime,
   type PluginLogger,
@@ -18,6 +21,7 @@ import {
   splitCitations,
   stripDanglingCitationMarkers,
 } from "./citations.js";
+import { openCreditRun } from "./credit-reservation.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import { describeHistoryDbError } from "./history-db-retry.js";
@@ -699,6 +703,19 @@ export async function processChatMessage(
   // errored turn still burned tokens. Idempotent (bills at most once) and
   // best-effort (see persistTurnUsage).
   let usageContext: { sessionKey: string; agentId: string; sinceMs: number } | null = null;
+  let creditRun: Awaited<ReturnType<typeof openCreditRun>> = null;
+  let creditExecutionStarted = false;
+  let creditExecutionSettled = false;
+  const readCreditCost = async (final = false) => {
+    if (!creditExecutionStarted) return 0;
+    if (!usageContext) throw new Error("Final usage unavailable");
+    if (!usageCurrency || usageCurrency.currency !== "CNY")
+      throw new Error("CNY billing policy required");
+    const usage = await collectSessionTurnUsage({ ...usageContext, config });
+    if (usage.missingCost) throw new Error("Model pricing unavailable");
+    if (final && usage.calls <= 0) throw new Error("Final usage unavailable");
+    return convertSessionTurnCost(usage, usageCurrency).total;
+  };
   let usageBilled = false;
   const persistUsage = async (): Promise<void> => {
     const ctx = usageContext;
@@ -759,6 +776,14 @@ export async function processChatMessage(
       return record.response;
     }
 
+    creditRun = await openCreditRun(
+      String(record.userId),
+      `chat:${chatMsg.historyId}`,
+      logger,
+      options?.abortSignal,
+    );
+    if (creditRun && (!usageCurrency || usageCurrency.currency !== "CNY"))
+      throw new Error("CNY billing policy required");
     // Resolve the user message (prefer from chat body, fallback to record)
     const userMessage = chatMsg.message?.trim() || record.message;
     const userTask = extractUserTask(userMessage, !!chatMsg.hasAttachment);
@@ -1475,6 +1500,8 @@ export async function processChatMessage(
         await streamPusherCtx.streamPusher.finish();
         return stopped;
       }
+      creditRun?.monitor(readCreditCost, () => abortAgentHarnessRun(sessionKey));
+      creditExecutionStarted = true;
       stage = "agent.run";
       const runResult = await runtime.subagent.run({
         sessionKey,
@@ -1517,6 +1544,7 @@ export async function processChatMessage(
         runSettled =
           waitResult.status !== "timeout" ||
           (typeof waitResult.endedAt === "number" && Number.isFinite(waitResult.endedAt));
+        creditExecutionSettled = runSettled;
         if (options?.abortSignal?.aborted && runSettled) {
           const pendingAbort = abortActiveRun();
           if (pendingAbort) {
@@ -1822,5 +1850,17 @@ export async function processChatMessage(
     return `Error: ${message}`;
   } finally {
     incomingSignal?.removeEventListener("abort", stopVisibleOutput);
+    if (creditRun) {
+      try {
+        if (!creditExecutionStarted || creditExecutionSettled)
+          await creditRun.settle(() => readCreditCost(true));
+        else {
+          creditRun.retain();
+          logger.warn("[CREDITS] Run termination unknown; reservation retained");
+        }
+      } catch {
+        logger.warn("[CREDITS] Chat settlement pending reconciliation");
+      }
+    }
   }
 }
