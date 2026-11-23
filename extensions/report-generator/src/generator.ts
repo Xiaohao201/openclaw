@@ -3,11 +3,14 @@ import {
   resolveDefaultAgentId,
   collectSessionTurnUsage,
   mergeSessionTurnUsage,
+  convertSessionTurnCost,
+  type SessionTurnCurrencyPolicy,
   type OpenClawConfig,
   type SessionTurnUsage,
 } from "../api.js";
 import type { PluginRuntime } from "../api.js";
 import type { PluginLogger } from "../api.js";
+import { openCreditRun } from "./credit-reservation.js";
 import { buildStatsDigest, computeDailyAverage } from "./data-digest.js";
 import {
   buildPlanPrompt,
@@ -21,6 +24,8 @@ import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./to
 import type { GeneratedReport, ReportPeriod } from "./types.js";
 
 interface GenerateOptions {
+  creditRunKey?: string;
+  creditPolicy?: SessionTurnCurrencyPolicy;
   abortSignal?: AbortSignal;
   period: ReportPeriod;
   requirement: string;
@@ -187,6 +192,8 @@ export class ReportGenerator {
    * writes the report from the real results.
    */
   async generate(options: GenerateOptions, logger: PluginLogger): Promise<GeneratedReport> {
+    if (process.env.LOBSTER_CREDIT_EXPIRY_ENABLED === "true" && !options.abortSignal)
+      options = { ...options, abortSignal: new AbortController().signal };
     options.abortSignal?.throwIfAborted();
     const {
       period,
@@ -234,6 +241,8 @@ export class ReportGenerator {
       userId,
       logger,
       options.abortSignal,
+      options.creditRunKey,
+      options.creditPolicy,
     );
     options.abortSignal?.throwIfAborted();
     endPlanStep("completed");
@@ -318,7 +327,18 @@ export class ReportGenerator {
     // Accounting window for the writing run; opened before run() so every model
     // call it makes (one per tool-loop iteration) lands inside it.
     const writeSinceMs = Date.now();
+    let writeCredit: Awaited<ReturnType<typeof this.openPhaseCredit>> = null;
     try {
+      writeCredit = await this.openPhaseCredit(
+        userId,
+        options.creditRunKey,
+        "write",
+        sessionKey,
+        writeSinceMs,
+        logger,
+        options.creditPolicy,
+        options.abortSignal,
+      );
       const reportPrompt = this.buildReportPrompt({
         period,
         requirement,
@@ -330,6 +350,7 @@ export class ReportGenerator {
         slaveTopicId: options.slaveTopicId,
       });
 
+      writeCredit?.started();
       const runResult = await this.runtime.subagent.run({
         sessionKey,
         message: reportPrompt,
@@ -346,8 +367,8 @@ export class ReportGenerator {
         sessionKey,
         agentId ? 300_000 : 120_000,
         options.abortSignal,
+        () => writeCredit?.settled(),
       );
-
       if (waitResult.status === "error") {
         throw new Error(waitResult.error ?? "Report generation failed");
       }
@@ -445,6 +466,7 @@ export class ReportGenerator {
       throw error;
     } finally {
       unsubscribe();
+      await writeCredit?.finish();
     }
   }
 
@@ -458,6 +480,8 @@ export class ReportGenerator {
     userId: string,
     logger: PluginLogger,
     signal?: AbortSignal,
+    creditRunKey?: string,
+    creditPolicy?: SessionTurnCurrencyPolicy,
   ): Promise<{ plan: QueryPlan; usage: SessionTurnUsage | null }> {
     const sessionKey = `agent:${resolveDefaultAgentId(this.config ?? {})}:report-plan:${userId}:${Date.now()}`;
     const sinceMs = Date.now();
@@ -465,14 +489,31 @@ export class ReportGenerator {
     // when the plan is unusable and we fall back to the default — the call was
     // still billed. Runs under the default agent (no agentId is passed).
     let usage: SessionTurnUsage | null = null;
+    const planCredit = await this.openPhaseCredit(
+      userId,
+      creditRunKey,
+      "plan",
+      sessionKey,
+      sinceMs,
+      logger,
+      creditPolicy,
+      signal,
+    );
     try {
+      planCredit?.started();
       const runResult = await this.runtime.subagent.run({
         sessionKey,
         message: buildPlanPrompt(template),
         deliver: false,
         extraSystemPrompt: PURE_PLANNING_SYSTEM_PROMPT,
       });
-      const waitResult = await this.waitForOwnedRun(runResult.runId, sessionKey, 60_000, signal);
+      const waitResult = await this.waitForOwnedRun(
+        runResult.runId,
+        sessionKey,
+        60_000,
+        signal,
+        () => planCredit?.settled(),
+      );
       usage = await this.runUsage({ sessionKey, sinceMs, logger });
       if (waitResult.status !== "ok") {
         throw new Error(`plan run ended with status ${waitResult.status}`);
@@ -496,7 +537,55 @@ export class ReportGenerator {
     } catch (error) {
       logger.warn(`[REPORT_GENERATOR] Query planning failed, using default plan: ${String(error)}`);
       return { plan: DEFAULT_QUERY_PLAN, usage };
+    } finally {
+      await planCredit?.finish();
     }
+  }
+
+  private async openPhaseCredit(
+    userId: string,
+    key: string | undefined,
+    phase: string,
+    sessionKey: string,
+    sinceMs: number,
+    logger: PluginLogger,
+    policy?: SessionTurnCurrencyPolicy,
+    signal?: AbortSignal,
+  ) {
+    if (process.env.LOBSTER_CREDIT_EXPIRY_ENABLED !== "true") return null;
+    if (!key || !policy || policy.currency !== "CNY")
+      throw new Error("Credit key and CNY policy required");
+    const lease = await openCreditRun(userId, `${key}:${phase}`, logger, signal);
+    if (!lease) return null;
+    let started = false;
+    let settled = false;
+    const cost = async (final = false) => {
+      if (!started) return 0;
+      const usage = await collectSessionTurnUsage({ sessionKey, sinceMs, config: this.config });
+      if (usage.missingCost) throw new Error("Model pricing unavailable");
+      if (final && usage.calls <= 0) throw new Error("Final usage unavailable");
+      return convertSessionTurnCost(usage, policy).total;
+    };
+    lease.monitor(cost, () => abortAgentHarnessRun(sessionKey));
+    return {
+      started: () => {
+        started = true;
+      },
+      settled: () => {
+        settled = true;
+      },
+      finish: async () => {
+        try {
+          if (!started || settled) await lease.settle(() => cost(true));
+          else {
+            lease.retain();
+            logger.warn("[CREDITS] Report termination unknown; reservation retained");
+          }
+        } catch {
+          logger.warn("[CREDITS] Report settlement pending reconciliation");
+        }
+      },
+    };
   }
 
   /** Keep cancellation pending until the owned run really settles. */
@@ -505,6 +594,7 @@ export class ReportGenerator {
     sessionKey: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    onSettled?: () => void,
   ) {
     if (!signal) {
       return this.runtime.subagent.waitForRun({ runId, timeoutMs });
@@ -522,11 +612,13 @@ export class ReportGenerator {
         }
         const result = await this.runtime.subagent.waitForRun({ runId, timeoutMs: 2_000 });
         if (result.status !== "timeout" || result.endedAt !== undefined) {
+          onSettled?.();
           signal.throwIfAborted();
           return result;
         }
         if (!signal.aborted && Date.now() >= deadline) {
-          return result;
+          if (process.env.LOBSTER_CREDIT_EXPIRY_ENABLED !== "true") return result;
+          stop();
         }
         const remainingMs = Math.max(0, 2_000 - (Date.now() - startedAt));
         if (remainingMs > 0) {

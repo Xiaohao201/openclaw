@@ -1,3 +1,7 @@
+const creditMocks = vi.hoisted(() => ({
+  open: vi.fn<typeof import("../../credit-reservation.js").openCreditRun>().mockResolvedValue(null),
+}));
+vi.mock("../../credit-reservation.js", () => ({ openCreditRun: creditMocks.open }));
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { mockCollectTurnUsage, mockInsertHistoryRow } = vi.hoisted(() => ({
@@ -451,4 +455,30 @@ describe("agentPromptAction billing", () => {
     expect(res.ok).toBe(true);
     expect(deliver.mock.calls[0][0]).not.toHaveProperty("usage");
   });
+});
+
+it("does not execute an automatic task when its credits have expired", async () => {
+  const subagent = makeSubagent("answer");
+  creditMocks.open.mockRejectedValueOnce(new Error("credits expired"));
+  await expect(
+    agentPromptAction.makeRunner(deps({ subagent, usagePolicy }))(task()),
+  ).rejects.toThrow("credits expired");
+  expect(subagent.run).not.toHaveBeenCalled();
+});
+
+it("settles scheduled usage even if delivery fails", async () => {
+  const lease = {
+    budgetPoints: 1000,
+    monitor: vi.fn(),
+    settle: vi.fn(async () => {}),
+    retain: vi.fn(),
+  };
+  creditMocks.open.mockResolvedValueOnce(lease);
+  const subagent = makeSubagent("answer");
+  const result = await agentPromptAction.makeRunner(
+    deps({ subagent, usagePolicy, deliver: vi.fn(async () => false) }),
+  )(task());
+  expect(result.ok).toBe(false);
+  expect(lease.settle).toHaveBeenCalledOnce();
+  expect(lease.retain).not.toHaveBeenCalled();
 });

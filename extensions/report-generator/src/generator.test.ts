@@ -1,3 +1,7 @@
+const creditMocks = vi.hoisted(() => ({
+  open: vi.fn<typeof import("./credit-reservation.js").openCreditRun>().mockResolvedValue(null),
+}));
+vi.mock("./credit-reservation.js", () => ({ openCreditRun: creditMocks.open }));
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginLogger, PluginRuntime } from "../api.js";
@@ -339,4 +343,118 @@ describe("salvageStreamedReport", () => {
     expect(salvageStreamedReport("没有标题的长文本".repeat(50))).toBe("");
     expect(salvageStreamedReport("# 短\n太短了")).toBe("");
   });
+});
+
+it("checks report planning credits before executing a model", async () => {
+  vi.stubEnv("LOBSTER_CREDIT_EXPIRY_ENABLED", "true");
+  try {
+    const runtime = runtimeWith([]);
+    const run = vi.spyOn(runtime.subagent, "run");
+    creditMocks.open.mockRejectedValueOnce(new Error("credits expired"));
+    await expect(
+      new ReportGenerator(runtime).generate(
+        {
+          ...baseOptions,
+          creditRunKey: "report:1",
+          creditPolicy: { currency: "CNY", rate: 7, foreignProviders: [] },
+        },
+        logger,
+      ),
+    ).rejects.toThrow("credits expired");
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("reserves and settles each report phase separately", async () => {
+  vi.stubEnv("LOBSTER_CREDIT_EXPIRY_ENABLED", "true");
+  try {
+    const lease = {
+      budgetPoints: 1000,
+      monitor: vi.fn(),
+      settle: vi.fn(async () => {}),
+      retain: vi.fn(),
+    };
+    creditMocks.open.mockResolvedValueOnce(lease).mockResolvedValueOnce(lease);
+    const runtime = runtimeWith([{ role: "assistant", content: "# Report\nResults" }]);
+    await new ReportGenerator(runtime).generate(
+      {
+        ...baseOptions,
+        creditRunKey: "report:2",
+        creditPolicy: { currency: "CNY", rate: 7, foreignProviders: [] },
+      },
+      logger,
+    );
+    expect(lease.settle).toHaveBeenCalledTimes(2);
+    expect(lease.retain).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("retains unknown report usage instead of settling it as zero", async () => {
+  vi.stubEnv("LOBSTER_CREDIT_EXPIRY_ENABLED", "true");
+  const finalCosts: Array<() => Promise<number>> = [];
+  const lease = {
+    budgetPoints: 1000,
+    monitor: vi.fn(),
+    retain: vi.fn(),
+    settle: vi.fn(async (read: () => Promise<number>) => {
+      finalCosts.push(read);
+    }),
+  };
+  creditMocks.open.mockResolvedValueOnce(lease).mockResolvedValueOnce(lease);
+  try {
+    await new ReportGenerator(
+      runtimeWith([{ role: "assistant", content: "# Report\nResults" }]),
+    ).generate(
+      {
+        ...baseOptions,
+        creditRunKey: "report:unknown",
+        creditPolicy: { currency: "CNY", rate: 7, foreignProviders: [] },
+      },
+      logger,
+    );
+    expect(finalCosts).toHaveLength(2);
+    for (const read of finalCosts) await expect(read()).rejects.toThrow("Final usage unavailable");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("keeps a report reservation until a timed-out run really ends", async () => {
+  vi.stubEnv("LOBSTER_CREDIT_EXPIRY_ENABLED", "true");
+  vi.useFakeTimers();
+  const lease = {
+    budgetPoints: 1000,
+    monitor: vi.fn(),
+    retain: vi.fn(),
+    settle: vi.fn(async () => {}),
+  };
+  creditMocks.open.mockResolvedValueOnce(lease);
+  const runtime = runtimeWith([]);
+  let waits = 0;
+  vi.spyOn(runtime.subagent, "waitForRun").mockImplementation(async () => {
+    waits++;
+    vi.setSystemTime(Date.now() + 120_000);
+    return waits === 1 ? { status: "timeout" as const } : { status: "ok" as const };
+  });
+  try {
+    await new ReportGenerator(runtime).generate(
+      {
+        ...baseOptions,
+        collectStats: async () => emptyStats,
+        creditRunKey: "report:timeout",
+        creditPolicy: { currency: "CNY", rate: 7, foreignProviders: [] },
+      },
+      logger,
+    );
+    expect(waits).toBe(2);
+    expect(lease.settle).toHaveBeenCalledOnce();
+    expect(lease.retain).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  }
 });

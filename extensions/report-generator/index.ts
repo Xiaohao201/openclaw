@@ -321,6 +321,8 @@ export default definePluginEntry({
             const report: GeneratedReport = await reportGenerator.generate(
               {
                 abortSignal: cancellation.signal,
+                creditRunKey: `report:${task.id}`,
+                creditPolicy: usageCurrency,
                 period: task.period,
                 requirement: task.requirement,
                 dateScope: `${dateScope.start} ~ ${dateScope.end}`,
