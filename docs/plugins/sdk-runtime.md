@@ -493,6 +493,41 @@ bytes and obtain authorization for storage. Imports are lazy and do not load sto
 configuration during plugin discovery. Upload failures throw and must not cause a
 caller to repeat the external action that produced the artifact.
 
+## Human browser assistance
+
+`openclaw/plugin-sdk/browser-assistance` exposes the additive v1
+`registerBrowserAssistanceSession(options)` contract for trusted execution hosts.
+The browser plugin must be enabled. Register before starting the agent run and call
+the returned asynchronous disposer in `finally` after the run ends.
+
+Options include the exact `sessionKey`, an optional `AbortSignal`, `timeoutMs`
+(default 180,000; clamped to 10,000–300,000), and two asynchronous callbacks:
+
+- `onRequest(control)` receives a public notice and control methods. Connect an
+  authenticated owner before calling `startFrames(send)`. `stopFrames()` stops
+  streaming without resuming automation.
+- `onState(notice)` delivers the request outcome. Notices contain `version: 1`, a
+  random `requestId`, `status`, `reason`, the page `origin`, and `expiresAt`.
+  Persist only this notice; do not persist frame or input payloads.
+
+`control.input(value)` accepts bounded pointer events (`move`, `down`, `up`,
+viewport `x`/`y`, button and buttons), wheel events, text up to 4,096 characters,
+and supported navigation keys. JPEG frames contain base64 `data`, viewport
+`width`/`height`, and the current `origin`. Scale display coordinates back to the
+reported viewport. Frames and input belong on an authenticated encrypted channel,
+separate from model-visible tool output.
+
+`control.complete()` checks the original tab and returns whether verification
+cleared. Success resumes the pending tool with a fresh snapshot; it never repeats
+the previous click or submission. `control.cancel()` ends the assistance request;
+the host must separately cancel the enclosing run when its user cancels the task.
+Terminal statuses are `resumed`, `cancelled`, `expired`, and `unavailable`.
+
+Sessions use isolated local managed profiles. They do not attach to a remote node,
+sandbox, or existing personal profile. Enclosing run cancellation still applies,
+and a process restart cannot resume an old request. See [Browser login](/tools/browser-login)
+for detection behavior and site limitations.
+
 ## Related
 
 - [SDK Overview](/plugins/sdk-overview) -- subpath reference

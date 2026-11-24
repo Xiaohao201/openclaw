@@ -1,4 +1,5 @@
 export { createBrowserTool } from "./src/browser-tool.js";
+export { registerBrowserAssistanceSession } from "./src/assistance/session.js";
 export * from "./src/browser-runtime.js";
 export { registerBrowserCli } from "./src/cli/browser-cli.js";
 export { createBrowserPluginService } from "./src/plugin-service.js";

@@ -432,6 +432,10 @@
       "types": "./dist/plugin-sdk/bluebubbles-policy.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles-policy.js"
     },
+    "./plugin-sdk/browser-assistance": {
+      "types": "./dist/plugin-sdk/browser-assistance.d.ts",
+      "default": "./dist/plugin-sdk/browser-assistance.js"
+    },
     "./plugin-sdk/browser-cdp": {
       "types": "./dist/plugin-sdk/browser-cdp.d.ts",
       "default": "./dist/plugin-sdk/browser-cdp.js"
@@ -720,13 +724,13 @@
       "types": "./dist/plugin-sdk/request-url.d.ts",
       "default": "./dist/plugin-sdk/request-url.js"
     },
-    "./plugin-sdk/mysql-pool": {
-      "types": "./dist/plugin-sdk/mysql-pool.d.ts",
-      "default": "./dist/plugin-sdk/mysql-pool.js"
-    },
     "./plugin-sdk/runtime-store": {
       "types": "./dist/plugin-sdk/runtime-store.d.ts",
       "default": "./dist/plugin-sdk/runtime-store.js"
+    },
+    "./plugin-sdk/mysql-pool": {
+      "types": "./dist/plugin-sdk/mysql-pool.d.ts",
+      "default": "./dist/plugin-sdk/mysql-pool.js"
     },
     "./plugin-sdk/json-store": {
       "types": "./dist/plugin-sdk/json-store.d.ts",

@@ -16,6 +16,27 @@ Do **not** give the model your credentials. Automated logins often trigger antiâ
 
 Back to the main browser docs: [Browser](/tools/browser).
 
+## Human assistance in an integrated web client
+
+An integration can opt a trusted execution session into the version 1
+`openclaw/plugin-sdk/browser-assistance` contract. The browser plugin creates a
+private managed browser for that execution. A detected verification or password
+page pauses the browser tool; `action="handoff"` provides an explicit fallback.
+The web client can show the same tab and forward bounded pointer and keyboard
+input. Completing assistance checks the page again and returns a fresh snapshot,
+without replaying the preceding click or submission.
+
+The integration owns user authentication, session ownership, the encrypted viewer
+transport, and delivery of sanitized status events. The SDK does not expose raw
+CDP access to the web client. Requests are cancellable and limited to five minutes
+at most; the enclosing run deadline still applies. Page refresh can reconnect to
+a live request, but process restarts do not restore a suspended run. Browser
+profiles are private to the execution and removed during normal cleanup.
+
+Assistance currently requires a locally managed Chromium browser and does not
+attach to an existing user profile, remote node, or sandbox browser. A visible
+verification page does not guarantee the site will accept the browser session.
+
 ## Which Chrome profile is used?
 
 OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orangeâ€‘tinted UI). This is separate from your daily browser profile.

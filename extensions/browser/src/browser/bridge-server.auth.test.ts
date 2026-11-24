@@ -82,6 +82,21 @@ describe("startBrowserBridgeServer auth", () => {
     ).rejects.toThrow(/requires auth/i);
   });
 
+  it("locks automation during human control and unlocks the same bridge afterward", async () => {
+    let locked = true;
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      isInteractionLocked: () => locked,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+    const headers = { Authorization: "Bearer secret-token" };
+    expect((await fetch(`${bridge.baseUrl}/`)).status).toBe(401);
+    expect((await fetch(`${bridge.baseUrl}/`, { headers })).status).toBe(423);
+    locked = false;
+    expect((await fetch(`${bridge.baseUrl}/`, { headers })).status).toBe(200);
+  });
+
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {
     let resolveCalls = 0;
     const bridge = await startBrowserBridgeServer({

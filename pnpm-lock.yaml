@@ -430,6 +430,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/browser:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1189,6 +1193,9 @@ importers:
       mysql2:
         specifier: ^3.12.0
         version: 3.22.0(@types/node@25.6.0)
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6

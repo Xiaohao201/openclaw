@@ -707,13 +707,22 @@ export async function processChatMessage(
   let creditExecutionStarted = false;
   let creditExecutionSettled = false;
   const readCreditCost = async (final = false) => {
-    if (!creditExecutionStarted) return 0;
-    if (!usageContext) throw new Error("Final usage unavailable");
-    if (!usageCurrency || usageCurrency.currency !== "CNY")
+    if (!creditExecutionStarted) {
+      return 0;
+    }
+    if (!usageContext) {
+      throw new Error("Final usage unavailable");
+    }
+    if (!usageCurrency || usageCurrency.currency !== "CNY") {
       throw new Error("CNY billing policy required");
+    }
     const usage = await collectSessionTurnUsage({ ...usageContext, config });
-    if (usage.missingCost) throw new Error("Model pricing unavailable");
-    if (final && usage.calls <= 0) throw new Error("Final usage unavailable");
+    if (usage.missingCost) {
+      throw new Error("Model pricing unavailable");
+    }
+    if (final && usage.calls <= 0) {
+      throw new Error("Final usage unavailable");
+    }
     return convertSessionTurnCost(usage, usageCurrency).total;
   };
   let usageBilled = false;
@@ -777,13 +786,14 @@ export async function processChatMessage(
     }
 
     creditRun = await openCreditRun(
-      String(record.userId),
+      record.userId,
       `chat:${chatMsg.historyId}`,
       logger,
       options?.abortSignal,
     );
-    if (creditRun && (!usageCurrency || usageCurrency.currency !== "CNY"))
+    if (creditRun && (!usageCurrency || usageCurrency.currency !== "CNY")) {
       throw new Error("CNY billing policy required");
+    }
     // Resolve the user message (prefer from chat body, fallback to record)
     const userMessage = chatMsg.message?.trim() || record.message;
     const userTask = extractUserTask(userMessage, !!chatMsg.hasAttachment);
@@ -1205,6 +1215,7 @@ export async function processChatMessage(
     const abortAttemptState: { pending: Promise<void> | null } = { pending: null };
     let abortAttempt = 0;
     let runSettled = false;
+    let disposeBrowserAssistance: (() => Promise<void>) | undefined;
     const abortActiveRun = () => {
       if (!currentRunId || runSettled || abortAttemptState.pending) {
         return abortAttemptState.pending;
@@ -1503,6 +1514,23 @@ export async function processChatMessage(
       creditRun?.monitor(readCreditCost, () => abortAgentHarnessRun(sessionKey));
       creditExecutionStarted = true;
       stage = "agent.run";
+      if (process.env.LOBSTER_BROWSER_RELAY_URL || process.env.LOBSTER_BROWSER_RELAY_SECRET) {
+        const { startBrowserAssistance } = await import("./browser-assistance.js");
+        disposeBrowserAssistance = startBrowserAssistance({
+          sessionKey,
+          userId: chatMsg.userId,
+          historyId: chatMsg.historyId,
+          signal: options?.abortSignal,
+          publish: async (notice) => {
+            await historyManager.updateMetadata(
+              chatMsg.historyId,
+              { browserAssistance: notice },
+              historyDbContext,
+            );
+            await mercure.pushBrowserAssistance?.(mercureTopic, notice, chatMsg.historyId);
+          },
+        });
+      }
       const runResult = await runtime.subagent.run({
         sessionKey,
         message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${turnSkillContext.message}${templateContext}${turnSkillContext.skillContext}`,
@@ -1822,6 +1850,11 @@ export async function processChatMessage(
       options?.abortSignal?.removeEventListener("abort", abortActiveRun);
       unsubscribe();
       unregisterExecution();
+      await disposeBrowserAssistance?.().catch(() => {
+        logger.warn(
+          "[CHAT_PIPELINE] Browser assistance cleanup failed; inspect the owned browser process",
+        );
+      });
     }
   } catch (error) {
     // A socket reset can originate in MySQL, an agent RPC or another dependency;
@@ -1852,9 +1885,9 @@ export async function processChatMessage(
     incomingSignal?.removeEventListener("abort", stopVisibleOutput);
     if (creditRun) {
       try {
-        if (!creditExecutionStarted || creditExecutionSettled)
+        if (!creditExecutionStarted || creditExecutionSettled) {
           await creditRun.settle(() => readCreditCost(true));
-        else {
+        } else {
           creditRun.retain();
           logger.warn("[CREDITS] Run termination unknown; reservation retained");
         }

@@ -48,6 +48,28 @@ function withLoopbackBrowserAuthImpl(
     return { ...init, headers };
   }
 
+  // Private bridges use credentials scoped to their ephemeral loopback port.
+  // Resolve those before the shared browser-control credentials in config.
+  try {
+    const parsed = new URL(url);
+    const port =
+      parsed.port && Number.parseInt(parsed.port, 10) > 0
+        ? Number.parseInt(parsed.port, 10)
+        : parsed.protocol === "https:"
+          ? 443
+          : 80;
+    const bridgeAuth = deps.getBridgeAuthForPort(port);
+    if (bridgeAuth?.token) {
+      headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
+      return { ...init, headers };
+    } else if (bridgeAuth?.password) {
+      headers.set("x-openclaw-password", bridgeAuth.password);
+      return { ...init, headers };
+    }
+  } catch {
+    // ignore
+  }
+
   try {
     const cfg = deps.loadConfig();
     const auth = deps.resolveBrowserControlAuth(cfg);
@@ -61,26 +83,6 @@ function withLoopbackBrowserAuthImpl(
     }
   } catch {
     // ignore config/auth lookup failures and continue without auth headers
-  }
-
-  // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
-  // Fall back to the in-memory registry if config auth is not available.
-  try {
-    const parsed = new URL(url);
-    const port =
-      parsed.port && Number.parseInt(parsed.port, 10) > 0
-        ? Number.parseInt(parsed.port, 10)
-        : parsed.protocol === "https:"
-          ? 443
-          : 80;
-    const bridgeAuth = deps.getBridgeAuthForPort(port);
-    if (bridgeAuth?.token) {
-      headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
-    } else if (bridgeAuth?.password) {
-      headers.set("x-openclaw-password", bridgeAuth.password);
-    }
-  } catch {
-    // ignore
   }
 
   return { ...init, headers };

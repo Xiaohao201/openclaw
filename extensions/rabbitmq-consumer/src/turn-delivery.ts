@@ -6,6 +6,10 @@ export function guardTurnDelivery(
   stopped: () => boolean,
 ): MercureEventPusher {
   return {
+    pushBrowserAssistance: (...args) =>
+      stopped()
+        ? Promise.resolve(false)
+        : (pusher.pushBrowserAssistance?.(...args) ?? Promise.resolve(false)),
     pushText: (...args) => (stopped() ? Promise.resolve(false) : pusher.pushText(...args)),
     pushProgress: (...args) => (stopped() ? Promise.resolve(false) : pusher.pushProgress(...args)),
     pushStep: (...args) => (stopped() ? Promise.resolve(false) : pusher.pushStep(...args)),

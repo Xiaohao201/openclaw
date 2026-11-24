@@ -7,6 +7,11 @@ import type { Citation, MercureConfig } from "./types.js";
 
 /** Narrow event surface shared by the real Mercure client and local debug recorder. */
 export interface MercureEventPusher {
+  pushBrowserAssistance?(
+    topic: string,
+    notice: Record<string, unknown>,
+    historyId: number,
+  ): Promise<boolean>;
   pushText(topic: string, content: string, historyId?: number): Promise<boolean>;
   pushProgress(topic: string, content: string, historyId?: number): Promise<boolean>;
   pushStep(topic: string, step: ActivityStep, historyId?: number): Promise<boolean>;
@@ -23,6 +28,13 @@ export interface MercureEventPusher {
  * Uses Node.js native fetch() to POST to the Mercure Hub.
  */
 export class MercurePusher implements MercureEventPusher {
+  async pushBrowserAssistance(
+    topic: string,
+    notice: Record<string, unknown>,
+    historyId: number,
+  ): Promise<boolean> {
+    return this.sendToMercure(topic, { type: "browser_assistance", notice, historyId });
+  }
   private readonly hubUrl: string;
   private readonly jwtSecret: string;
 

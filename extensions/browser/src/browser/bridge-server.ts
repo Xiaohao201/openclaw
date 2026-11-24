@@ -67,6 +67,7 @@ export async function startBrowserBridgeServer(params: {
   authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
+  isInteractionLocked?: () => boolean;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
@@ -118,6 +119,13 @@ export async function startBrowserBridgeServer(params: {
   const ctx = createBrowserRouteContext({
     getState: () => state,
     onEnsureAttachTarget: params.onEnsureAttachTarget,
+  });
+  app.use((_req, res, next) => {
+    if (params.isInteractionLocked?.()) {
+      res.status(423).json({ error: "Browser is reserved for human interaction" });
+      return;
+    }
+    next();
   });
   registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 

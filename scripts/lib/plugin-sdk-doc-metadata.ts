@@ -89,6 +89,9 @@ export const pluginSdkDocMetadata = {
   "file-delivery-runtime": {
     category: "runtime",
   },
+  "browser-assistance": {
+    category: "runtime",
+  },
   "allow-from": {
     category: "utilities",
   },

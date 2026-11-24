@@ -220,7 +220,8 @@ export async function browserOpenTab(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
-    timeoutMs: 15000,
+    // Opening a tab can also start a fresh profile; match browserStart.
+    timeoutMs: 60_000,
   });
 }
 
