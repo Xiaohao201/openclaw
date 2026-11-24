@@ -10,6 +10,7 @@ it("suppresses every late output surface without affecting another turn", async 
     pushReportCreated: vi.fn(async () => true),
     pushError: vi.fn(async () => true),
     pushDone: vi.fn(async () => true),
+    pushBrowserAssistance: vi.fn(async () => true),
   };
   const controller = new AbortController();
   const old = guardTurnDelivery(pusher, () => controller.signal.aborted);
@@ -22,6 +23,7 @@ it("suppresses every late output surface without affecting another turn", async 
   await old.pushReportCreated("topic", 1);
   await old.pushError("topic", "late", 1);
   await old.pushDone("topic", 1);
+  await old.pushBrowserAssistance?.("topic", { status: "waiting" }, 1);
   await old.pushStep(
     "topic",
     {
@@ -46,6 +48,7 @@ it("suppresses every late output surface without affecting another turn", async 
     pusher.pushReportCreated,
     pusher.pushError,
     pusher.pushDone,
+    pusher.pushBrowserAssistance,
   ]) {
     expect(method).not.toHaveBeenCalled();
   }

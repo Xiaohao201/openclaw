@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
-import { withSessionBrowserHandoff } from "./browser-tool.handoff.js";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { resolveAssistanceBinding, withBrowserAssistance } from "./assistance/session.js";
 import {
   executeActAction,
   executeConsoleAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
+import { withSessionBrowserHandoff } from "./browser-tool.handoff.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { BROWSER_NAVIGATION_REQUEST_TIMEOUT_MS } from "./browser/navigation-timeouts.js";
 import {
@@ -387,6 +388,7 @@ export function createBrowserTool(opts?: {
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      "When a page needs manual verification, action=handoff with targetId requests human assistance when configured. Never automate solving a verification challenge.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),
@@ -417,20 +419,24 @@ export function createBrowserTool(opts?: {
         }
       }
 
-      const nodeTarget = await resolveBrowserNodeTarget({
-        requestedNode: requestedNode ?? undefined,
-        target,
-        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-      });
+      const assistance = await resolveAssistanceBinding(opts?.agentSessionKey);
+      const nodeTarget = assistance
+        ? null
+        : await resolveBrowserNodeTarget({
+            requestedNode: requestedNode ?? undefined,
+            target,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          });
 
       const resolvedTarget = target === "node" ? undefined : target;
-      const baseUrl = nodeTarget
+      const policyBaseUrl = nodeTarget
         ? undefined
         : resolveBrowserBaseUrl({
             target: resolvedTarget,
             sandboxBridgeUrl: opts?.sandboxBridgeUrl,
             allowHostControl: opts?.allowHostControl,
           });
+      const baseUrl = assistance?.baseUrl ?? policyBaseUrl;
 
       const proxyRequest = nodeTarget
         ? async (opts: {
@@ -756,6 +762,14 @@ export function createBrowserTool(opts?: {
       }
     },
   };
-  return withSessionBrowserHandoff(tool, Boolean(opts?.agentSessionKey), (profile, targetId, fn) =>
-    browserToolDeps.browserAct(undefined, { kind: "evaluate", targetId, fn }, { profile }));
+  return withBrowserAssistance(
+    withSessionBrowserHandoff(tool, Boolean(opts?.agentSessionKey), async (profile, targetId, fn) =>
+      browserToolDeps.browserAct(
+        (await resolveAssistanceBinding(opts?.agentSessionKey))?.baseUrl,
+        { kind: "evaluate", targetId, fn },
+        { profile },
+      ),
+    ),
+    opts?.agentSessionKey,
+  );
 }

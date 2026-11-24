@@ -53,7 +53,7 @@ const mocks = vi.hoisted(() => ({
     token: "loopback-token",
     password: undefined,
   })),
-  getBridgeAuthForPort: vi.fn(() => null),
+  getBridgeAuthForPort: vi.fn<() => { token?: string; password?: string } | null>(() => null),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
@@ -86,7 +86,7 @@ vi.mock("./routes/dispatcher.js", () => ({
 }));
 
 const { fetchBrowserJson } = await import("./client-fetch.js");
-const { browserStatus } = await import("./client.js");
+const { browserStatus, browserOpenTab } = await import("./client.js");
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -169,6 +169,32 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
+  it.each([
+    {
+      auth: { token: "private-bridge-token" },
+      header: "authorization",
+      expected: "Bearer private-bridge-token",
+    },
+    {
+      auth: { password: "private-bridge-password" },
+      header: "x-openclaw-password",
+      expected: "private-bridge-password",
+    },
+  ])(
+    "uses registered bridge credentials ahead of configured gateway auth: $header",
+    async ({ auth, header, expected }) => {
+      mocks.getBridgeAuthForPort.mockReturnValue(auth);
+      const fetchMock = stubJsonFetchOk();
+
+      await fetchBrowserJson("http://127.0.0.1:18888/tabs");
+
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get(header)).toBe(expected);
+      expect(mocks.getBridgeAuthForPort).toHaveBeenCalledWith(18888);
+      expect(mocks.resolveBrowserControlAuth).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not inject auth for non-loopback absolute URLs", async () => {
     const fetchMock = stubJsonFetchOk();
 
@@ -177,6 +203,7 @@ describe("fetchBrowserJson loopback auth", () => {
     const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
+    expect(mocks.getBridgeAuthForPort).not.toHaveBeenCalled();
   });
 
   it("keeps caller-supplied auth header", async () => {
@@ -264,6 +291,33 @@ describe("fetchBrowserJson loopback auth", () => {
     const result = browserStatus("http://127.0.0.1:18888").catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(2000);
     expect(await result).toEqual({ running: true });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("allows opening a tab to initialize a fresh browser profile beyond 15 seconds", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              init?.signal?.removeEventListener("abort", onAbort);
+              resolve(new Response(JSON.stringify({ targetId: "fresh-profile-tab" })));
+            }, 16_000);
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(init?.signal?.reason);
+            };
+            init?.signal?.addEventListener("abort", onAbort, { once: true });
+          }),
+      ),
+    );
+    const result = browserOpenTab("http://127.0.0.1:18888", "https://example.com").catch(
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(await result).toEqual({ targetId: "fresh-profile-tab" });
     expect(vi.getTimerCount()).toBe(0);
   });
 
