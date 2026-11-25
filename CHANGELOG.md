@@ -107,6 +107,7 @@ Docs: https://docs.openclaw.ai
 - Leading v2/schedules: preserve task titles and execution identity in history records, including billed failures, so tasks sharing a conversation can be attributed accurately.
 - Leading v2/schedules: resolve the original chat session from isolated turn keys so scheduled replies and usage records, including billed failures, are saved to the correct conversation.
 - Monitoring search: temporarily reject keyword requests in `feed_list` with an explicit unavailable error after removal of the data table's full-text index, while keeping `feed_query` keyword searches and statistics available through parameterized substring matching.
+- Memory: handle builtin and QMD file watcher errors without stopping the gateway, preserving file-change synchronization after Windows `EBUSY` errors.
 
 ## 2026.4.15
 

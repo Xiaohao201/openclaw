@@ -404,6 +404,10 @@ export abstract class MemoryManagerSyncOps {
         pollInterval: 100,
       },
     });
+    // Chokidar emits setup failures from async work; do not let a busy file reject it.
+    this.watcher.on("error", (err) => {
+      log.warn(`memory watcher error (${this.workspaceDir}): ${String(err)}`);
+    });
     const markDirty = () => {
       this.dirty = true;
       this.scheduleWatchSync();
