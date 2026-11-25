@@ -311,6 +311,30 @@ describe("ReportGenerator.generate timeout salvage", () => {
 });
 
 describe("ReportGenerator no-tools system prompt", () => {
+  it("keeps the Chinese writing policy stable across reports with English materials or explicit language requests", async () => {
+    const runs: Record<string, unknown>[] = [];
+    const runtime = runtimeStreaming(["# 周报\n内容"], "ok", (params) => runs.push(params));
+    const generator = new ReportGenerator(runtime);
+    for (const requirement of ["Summarize this week's public opinion.", "请用英文撰写报告。"]) {
+      await generator.generate(
+        { ...baseOptions, requirement, template: "# Weekly Report\n{summary}" },
+        logger,
+      );
+    }
+    const reportRuns = runs.filter(
+      (params) =>
+        typeof params.sessionKey === "string" && !params.sessionKey.includes("report-plan"),
+    );
+    expect(reportRuns).toHaveLength(2);
+    for (const run of reportRuns) {
+      expect(run.extraSystemPrompt).toContain("默认使用简体中文");
+      expect(run.extraSystemPrompt).toContain("从第一句开始");
+      expect(run.extraSystemPrompt).toContain("只有用户明确要求其他语言或翻译时");
+    }
+    expect(reportRuns[1].extraSystemPrompt).toBe(reportRuns[0].extraSystemPrompt);
+    expect(reportRuns[1].message).toContain("请用英文撰写报告。");
+  });
+
   it("sends a tool-ban extraSystemPrompt with the report-writing run", async () => {
     const runs: Record<string, unknown>[] = [];
     const runtime = runtimeStreaming(["# 周报\n内容"], "ok", (params) => runs.push(params));

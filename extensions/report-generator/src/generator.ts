@@ -74,6 +74,10 @@ interface GenerateOptions {
  * and routinely blow the run deadline (Task #13624) — so ban them outright.
  */
 const PURE_WRITING_SYSTEM_PROMPT = [
+  "默认使用简体中文面向用户输出，从第一句开始，覆盖报告标题、正文和失败提示。",
+  "用户输入、历史对话、附件、技能模板或工具结果中的英文不自动改变回复语言；只有用户明确要求其他语言或翻译时，才对所请求内容使用对应语言，其余说明仍用简体中文。",
+  "代码、网址、文件路径、必要的专有名词及原文引述保持准确，不为中文化改写；其解释默认使用中文。",
+  "表达准确、克制、清楚，避免英文寒暄、无必要的术语和空泛套话。",
   "本次运行是纯写作任务：报告所需的全部数据已在用户消息中提供。",
   "禁止调用任何工具（exec、read、write、edit、file_share、feed_query 等一律不得使用）。",
   "禁止读写任何文件，禁止生成或转换 Word/PDF 等附件文件。",

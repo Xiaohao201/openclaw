@@ -1117,7 +1117,7 @@ export async function processChatMessage(
       phaseState.set(stepId, { ended: false, startedAt: Date.now() });
       emitStep({ phase: "start", stepId, index, label, category, status: "running" });
     };
-    const endPhase = (stepId: string, label: string, category: StepCategory, detail?: string) => {
+    const endPhase = (stepId: string, label: string, category: StepCategory) => {
       const entry = phaseState.get(stepId);
       if (!entry || entry.ended) {
         return;
@@ -1131,7 +1131,6 @@ export async function processChatMessage(
         category,
         status: "completed",
         durationMs: Math.max(0, Date.now() - entry.startedAt),
-        ...(detail ? { detail } : {}),
       });
     };
 
@@ -1144,29 +1143,8 @@ export async function processChatMessage(
 
     const endInitStep = () => endPhase(INIT_STEP_ID, INIT_STEP_LABEL, "default");
 
-    // ③ Reasoning peek. When the model streams reasoning, we attach a SHORT,
-    // sanitized one-line summary of it as the think step's `detail`. This exposes
-    // model chain-of-thought to the external customer, so it is gated and kept
-    // minimal: sanitizeInternalRefs strips paths / injected context / session
-    // keys, whitespace is collapsed, and the text is hard-capped. Flip
-    // REASONING_SUMMARY_ENABLED to false to surface only "正在思考分析" with no peek.
-    const REASONING_SUMMARY_ENABLED = true;
-    const REASONING_SUMMARY_MAX = 80;
-    let reasoningText = "";
-    const buildReasoningSummary = (): string | undefined => {
-      if (!REASONING_SUMMARY_ENABLED || !reasoningText) {
-        return undefined;
-      }
-      const safe = sanitizeInternalRefs(reasoningText).replace(/\s+/g, " ").trim();
-      if (!safe) {
-        return undefined;
-      }
-      return safe.length > REASONING_SUMMARY_MAX
-        ? `${safe.slice(0, REASONING_SUMMARY_MAX)}…`
-        : safe;
-    };
-    const endThinkStep = () =>
-      endPhase(THINK_STEP_ID, THINK_STEP_LABEL, "think", buildReasoningSummary());
+    // Customer progress uses fixed Chinese labels, never model reasoning text.
+    const endThinkStep = () => endPhase(THINK_STEP_ID, THINK_STEP_LABEL, "think");
 
     // Immediate feedback: light up the timeline the instant processing starts,
     // through the cold-start + model first-token wait, instead of a blank panel.
@@ -1260,17 +1238,9 @@ export async function processChatMessage(
         return;
       }
       if (evt.stream === "thinking") {
-        // Model reasoning phase. Only emitted when the run streams reasoning
-        // (reasoning-capable model + streamReasoning on); a no-op otherwise.
-        // The timeline shows one "正在思考分析" step; its end carries a sanitized,
-        // capped reasoning peek (see buildReasoningSummary / ③). `data.text` is
-        // the cumulative reasoning so far — keep the latest for the summary.
+        // Use the event only to advance progress; do not publish or persist its text.
         endInitStep();
         startPhase(THINK_STEP_ID, 1, THINK_STEP_LABEL, "think");
-        const text = (evt.data as { text?: unknown } | undefined)?.text;
-        if (typeof text === "string" && text) {
-          reasoningText = text;
-        }
         return;
       }
       if (evt.stream !== "assistant") {

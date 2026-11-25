@@ -18,6 +18,7 @@ import { retryHistoryDbOperation, retryHistoryMetadataWrite } from "./history-db
 import type { HistoryManager } from "./history-manager.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import type { SkillLookup } from "./skill-lookup.js";
+import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
 import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
@@ -869,6 +870,45 @@ describe("processChatMessage", () => {
     expect(new Set(calls.map((call) => call.systemPromptMode)).size).toBe(1);
   });
 
+  it("keeps the Chinese language policy stable across ordinary, skill, and explicit English turns", async () => {
+    const calls: SubagentRunParams[] = [];
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => calls.push(args),
+      sessionMessages: [{ role: "assistant", content: "已完成" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const turns: Array<Partial<ChatMessage>> = [
+      { message: "Please summarize this material: The weekly report is ready." },
+      {
+        message: "请生成正式政务舆情分析报告",
+        builtinSkillName: "gov-public-opinion-analysis-agent",
+      },
+      { message: "请用英文撰写本次回复。" },
+    ];
+    for (const [index, turn] of turns.entries()) {
+      await processChatMessage(
+        { ...createChatMessage(), ...turn, historyId: index + 1 },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+      );
+    }
+
+    expect(calls).toHaveLength(3);
+    expect(calls.map((call) => call.systemPromptMode)).toEqual(["minimal", "full", "minimal"]);
+    for (const call of calls) {
+      // The policy stays in the stable system prefix, before per-turn workspace context.
+      expect(call.extraSystemPrompt?.startsWith(SUHENG_RUNTIME_SYSTEM_PROMPT)).toBe(true);
+      expect(call.extraSystemPrompt).toContain("默认使用简体中文");
+      expect(call.extraSystemPrompt).toContain("从第一句开始");
+      expect(call.extraSystemPrompt).toContain("只有用户明确要求其他语言或翻译时");
+    }
+    expect(calls[2].message).toContain("请用英文撰写本次回复。");
+  });
+
   it("runs ordinary Suheng turns with compact context and runtime-managed tools", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({
@@ -1606,53 +1646,71 @@ describe("processChatMessage", () => {
     expect(stepEvents.some((p) => p.stepId === "t2")).toBe(false);
   });
 
-  it("attaches a sanitized, capped reasoning peek to the think step (③)", async () => {
-    // When the run streams reasoning, the think step's `end` carries a short
-    // summary of it. The summary must be sanitized (no workspace/internal path)
-    // and capped — it exposes model reasoning to the external customer.
-    const runtime = createRuntimeMock({
-      workspaceDir,
-      onRun: () => {},
-      onWait: (listener) => {
-        listener?.({
-          runId: "r1",
-          seq: 1,
-          stream: "thinking",
-          ts: 1,
-          data: { text: "先查 workspace/memory/notes.md 再决定如何回答用户", delta: "…" },
-        });
-        // The first assistant delta ends the think phase, flushing its summary.
-        listener?.({
-          runId: "r1",
-          seq: 2,
-          stream: "assistant",
-          ts: 2,
-          data: { delta: "答复" },
-        });
-      },
-    });
-    const { historyManager } = createHistoryManagerMock();
+  it.each(["assistant", "tool"] as const)(
+    "keeps reasoning private when %s output ends the think step",
+    async (nextStream) => {
+      const privateReasoning =
+        "I need to inspect workspace/memory/notes.md before answering. 内部推理。";
+      const runtime = createRuntimeMock({
+        workspaceDir,
+        onRun: () => {},
+        onWait: (listener) => {
+          listener?.({
+            runId: "r1",
+            seq: 1,
+            stream: "thinking",
+            ts: 1,
+            data: { text: privateReasoning, delta: privateReasoning },
+          });
+          if (nextStream === "tool") {
+            listener?.({
+              runId: "r1",
+              seq: 2,
+              stream: "tool",
+              ts: 2,
+              data: { phase: "start", name: "feed_query", toolCallId: "language-tool" },
+            });
+          }
+          listener?.({
+            runId: "r1",
+            seq: 3,
+            stream: "assistant",
+            ts: 3,
+            data: { delta: "答复" },
+          });
+        },
+      });
+      const { historyManager, updateMetadata, updateResponse } = createHistoryManagerMock();
 
-    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+      await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
 
-    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    const payloads = fetchMock.mock.calls.map((call) => {
-      const init = call[1] as { body?: string };
-      const params = new URLSearchParams(init.body ?? "");
-      return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
-    });
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const payloads = fetchMock.mock.calls.map((call) => {
+        const init = call[1] as { body?: string };
+        const params = new URLSearchParams(init.body ?? "");
+        return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
+      });
 
-    const thinkEnd = payloads.find(
-      (p) => p.type === "step" && p.stepId === "think" && p.phase === "end",
-    );
-    expect(thinkEnd).toBeDefined();
-    const detail = thinkEnd?.detail as string | undefined;
-    expect(typeof detail).toBe("string");
-    // Internal workspace path was stripped from the reasoning peek.
-    expect(detail).not.toContain("workspace/");
-    expect(detail).not.toContain("memory/");
-    expect(detail).toContain("再决定如何回答用户");
-  });
+      const thinkEnd = payloads.find(
+        (p) => p.type === "step" && p.stepId === "think" && p.phase === "end",
+      );
+      expect(thinkEnd).toMatchObject({ label: "正在思考分析", status: "completed" });
+      expect(thinkEnd).not.toHaveProperty("detail");
+      expect(payloads).toContainEqual(expect.objectContaining({ type: "text", content: "答复" }));
+      expect(JSON.stringify(payloads)).not.toContain("I need to inspect");
+      expect(JSON.stringify(updateMetadata.mock.calls)).not.toContain("I need to inspect");
+      expect(JSON.stringify(updateResponse.mock.calls)).not.toContain("I need to inspect");
+      expect(updateMetadata).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ label: "正在思考分析", status: "completed" }),
+          ]),
+        }),
+        expect.anything(),
+      );
+    },
+  );
 
   it("prefers the latest assistant session message as the canonical response", async () => {
     const runtime = createRuntimeMock({
