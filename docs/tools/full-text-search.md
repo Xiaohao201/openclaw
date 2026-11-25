@@ -114,8 +114,9 @@ are normalized before the request; unknown values fail validation.
 `hitFields` supports `asr`, `content`, `nickname`, `ocr`, `poi`, and `title`.
 Omitting it searches all fields; restricting it changes the statistical scope.
 `original` categories are 0=repost, 1=original, 2=comment. `reduceNoise` selects
-0=all, 1=normal (upstream default), 2=noise, or 3=recommended; it is not a
-strength setting. `excludeQueries` excludes keyword groups.
+0=all (default), 1=normal, 2=noise, or 3=recommended; it is not a strength
+setting. When omitted, the adapter explicitly sends `reduce_noise: 0`;
+explicit values are preserved. `excludeQueries` excludes keyword groups.
 
 Choose `order: "score"` for relevance, `time_desc` for latest developments,
 or `respond_desc`/`share_desc` for reach. Do not run every ordering by default.

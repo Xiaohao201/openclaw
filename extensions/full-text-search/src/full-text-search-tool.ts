@@ -85,7 +85,8 @@ const FullTextSearchToolSchema = Type.Object(
     reduceNoise: Type.Optional(
       Type.Integer({
         description:
-          "Content category, not strength: 0=all, 1=normal (upstream default), 2=noise, 3=recommended. Keep the same category across statistics.",
+          "Content category, not strength: 0=all (default), 1=normal, 2=noise, 3=recommended. Omitted values are sent as 0. Keep the same category across statistics.",
+        default: 0,
         minimum: 0,
         maximum: 3,
       }),

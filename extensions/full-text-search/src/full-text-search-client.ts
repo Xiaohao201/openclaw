@@ -97,7 +97,7 @@ function buildRequestBody(params: FullTextSearchParams): Record<string, unknown>
       "original",
       params.original ? [...new Set(params.original)].toSorted((a, b) => a - b) : undefined,
     ],
-    ["reduce_noise", params.reduceNoise],
+    ["reduce_noise", params.reduceNoise ?? 0],
     ["order", params.order?.trim() || undefined],
   ];
   for (const [key, value] of optionalValues) {
