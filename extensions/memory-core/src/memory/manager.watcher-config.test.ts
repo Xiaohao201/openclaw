@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,15 +8,15 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryIndexManager } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
 const { watchMock } = vi.hoisted(() => ({
-  watchMock: vi.fn(() => ({
-    on: vi.fn(),
-    close: vi.fn(async () => undefined),
-  })),
+  watchMock: vi.fn(() =>
+    Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => undefined),
+    }),
+  ),
 }));
 
 vi.mock("chokidar", () => ({
@@ -65,7 +66,16 @@ describe("memory watcher config", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+    // Keep config resolution local instead of discovering real provider plugins.
+    for (const id of ["openai", "gemini"]) {
+      registerAdapter({
+        id,
+        defaultModel: "mock-embed",
+        transport: "remote",
+        supportsMultimodalEmbeddings: () => id === "gemini",
+        create: async () => ({ provider: null }),
+      });
+    }
   });
 
   afterEach(async () => {
@@ -75,6 +85,8 @@ describe("memory watcher config", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     clearRegistry();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
@@ -123,7 +135,44 @@ describe("memory watcher config", () => {
       throw new Error("manager missing");
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    return manager;
   }
+
+  it.each(["add", "change", "unlink"])(
+    "keeps syncing on %s after repeated EBUSY watcher errors",
+    async (event) => {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const activeManager = await expectWatcherManager(createWatcherConfig());
+      const watcher = watchMock.mock.results[0].value;
+      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+      vi.useFakeTimers();
+      const filePath = path.join(workspaceDir, "memory", "2026-11-25.md");
+      const error = Object.assign(
+        new Error(`EBUSY: resource busy or locked, watch '${filePath}'`),
+        {
+          code: "EBUSY",
+          syscall: "watch",
+          path: filePath,
+        },
+      );
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        // Chokidar emits from async setup; an unhandled error event rejects that work.
+        await expect(Promise.resolve().then(() => watcher.emit("error", error))).resolves.toBe(
+          true,
+        );
+      }
+      expect(watcher.close).not.toHaveBeenCalled();
+
+      watcher.emit(event, filePath);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(syncSpy).toHaveBeenCalledExactlyOnceWith({ reason: "watch" });
+      expect(watchMock).toHaveBeenCalledTimes(1);
+
+      await activeManager.close();
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("watches the memory directory and ignores non-markdown churn", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });

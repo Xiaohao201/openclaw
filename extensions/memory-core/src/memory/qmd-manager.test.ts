@@ -439,6 +439,56 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it.each(["add", "change", "unlink"])(
+    "keeps qmd syncing on %s after repeated EBUSY watcher errors",
+    async (event) => {
+      const memorySearch = cfg.agents?.defaults?.memorySearch;
+      if (!memorySearch) {
+        throw new Error("memory search config missing");
+      }
+      memorySearch.sync = {
+        watch: true,
+        watchDebounceMs: 25,
+        onSessionStart: false,
+        onSearch: false,
+      };
+      const { manager } = await createManager({ mode: "full" });
+      const watcher = watchMock.mock.results[0].value;
+      const syncSpy = vi.spyOn(manager, "sync").mockResolvedValue(undefined);
+      vi.useFakeTimers();
+      const filePath = path.join(workspaceDir, "2026-11-25.md");
+      const error = Object.assign(
+        new Error(`EBUSY: resource busy or locked, watch '${filePath}'`),
+        {
+          code: "EBUSY",
+          syscall: "watch",
+          path: filePath,
+        },
+      );
+
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          // Chokidar emits from async setup; an unhandled error event rejects that work.
+          await expect(Promise.resolve().then(() => watcher.emit("error", error))).resolves.toBe(
+            true,
+          );
+        }
+        expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("EBUSY"));
+        expect(watcher.close).not.toHaveBeenCalled();
+
+        watcher.emit(event, filePath);
+        await vi.advanceTimersByTimeAsync(25);
+        expect(syncSpy).toHaveBeenCalledExactlyOnceWith({ reason: "watch" });
+        expect(watchMock).toHaveBeenCalledTimes(1);
+
+        await manager.close();
+        expect(watcher.close).toHaveBeenCalledTimes(1);
+      } finally {
+        syncSpy.mockRestore();
+      }
+    },
+  );
+
   it("runs boot update in background by default", async () => {
     cfg = {
       ...cfg,

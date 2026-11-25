@@ -1407,6 +1407,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         pollInterval: 100,
       },
     });
+    // Keep watch failures local while retaining the watcher for subsequent events.
+    this.watcher.on("error", (err) => {
+      log.warn(`qmd watcher error (${this.workspaceDir}): ${String(err)}`);
+    });
     const markDirty = () => {
       this.dirty = true;
       this.scheduleWatchSync();
