@@ -42,6 +42,8 @@ Docs: https://docs.openclaw.ai
 - WeChat group push: add authenticated group configuration management and WeCom group creation with revision checks and recovery when configuration saving fails.
 - WeChat group push: support cloud administration through a leading-v2.0 task bridge with outbound polling, dedicated RabbitMQ wakeups, durable result delivery, and recovery without repeating uncertain group creation.
 
+- Full-text search: default omitted `reduceNoise` to all content categories (`0`) while preserving explicit normal, noise, and recommended category filters.
+
 ### Fixes
 
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.

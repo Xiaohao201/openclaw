@@ -34,6 +34,30 @@ afterEach(() => {
 });
 
 describe("native full-text request", () => {
+  it.each([
+    { reduceNoise: undefined, expected: 0 },
+    { reduceNoise: 0, expected: 0 },
+    { reduceNoise: 1, expected: 1 },
+    { reduceNoise: 2, expected: 2 },
+    { reduceNoise: 3, expected: 3 },
+  ])(
+    "sends reduce_noise=$expected when reduceNoise=$reduceNoise and reports the same scope",
+    async ({ reduceNoise, expected }) => {
+      endpoint.mockImplementation(async (options, run) => {
+        expect(JSON.parse(options.init.body)).toMatchObject({ reduce_noise: expected });
+        return run({ response: success() });
+      });
+
+      const result = await runFullTextSearch({
+        ...params(`reduce-noise-${reduceNoise ?? "default"}`),
+        reduceNoise,
+      });
+
+      expect(result.queryScope).toMatchObject({ reduce_noise: expected });
+      expect(endpoint).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("passes cancellation to the network guard and never places it only inside fetch init", async () => {
     const controller = new AbortController();
     endpoint.mockImplementation(async (options, run) => {
