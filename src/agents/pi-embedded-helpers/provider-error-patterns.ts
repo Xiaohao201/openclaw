@@ -90,7 +90,7 @@ let cachedProviderRuntimeHooks: ProviderRuntimeHooks | null | undefined;
 const PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE =
   /\b(?:context|window|prompt|token|tokens|input|request|model)\b/i;
 const PROVIDER_CONTEXT_OVERFLOW_ACTION_RE =
-  /\b(?:too\s+(?:large|long|many)|exceed(?:s|ed|ing)?|overflow|limit|maximum|max)\b/i;
+  /\b(?:too\s+(?:large|long|many)|exceed(?:s|ed|ing)?|overflow|limit|maximum|max|range)\b/i;
 
 function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   if (cachedProviderRuntimeHooks !== undefined) {

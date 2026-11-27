@@ -165,6 +165,9 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyQwenNativeStreamingUsageCompat(providerConfig),
+    // DashScope reports input overflow as an allowed range, without "too long" or "exceeded".
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\brange of input length should be\s*\[\s*1\s*,\s*[1-9]\d*\s*\]/i.test(errorMessage),
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
         return undefined;

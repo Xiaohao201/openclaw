@@ -9,6 +9,8 @@ type BuildProviderMissingAuthMessageWithPlugin =
 type FormatProviderAuthProfileApiKeyWithPlugin =
   ProviderRuntimeModule["formatProviderAuthProfileApiKeyWithPlugin"];
 type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeAuth"];
+type MatchesProviderContextOverflowWithPlugin =
+  ProviderRuntimeModule["matchesProviderContextOverflowWithPlugin"];
 type RefreshProviderOAuthCredentialWithPlugin =
   ProviderRuntimeModule["refreshProviderOAuthCredentialWithPlugin"];
 
@@ -54,6 +56,13 @@ export async function prepareProviderRuntimeAuth(
 ): Promise<Awaited<ReturnType<PrepareProviderRuntimeAuth>>> {
   const runtime = await loadProviderRuntime();
   return runtime.prepareProviderRuntimeAuth(...args);
+}
+
+export async function matchesProviderContextOverflowWithPlugin(
+  ...args: Parameters<MatchesProviderContextOverflowWithPlugin>
+): Promise<Awaited<ReturnType<MatchesProviderContextOverflowWithPlugin>>> {
+  const runtime = await loadProviderRuntime();
+  return runtime.matchesProviderContextOverflowWithPlugin(...args);
 }
 
 export async function refreshProviderOAuthCredentialWithPlugin(

@@ -1,25 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   classifyProviderFailoverReasonWithPlugin: vi.fn(() => null),
   matchesProviderContextOverflowWithPlugin: vi.fn(() => false),
 }));
 
-vi.mock("../../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
-    "../../plugins/provider-runtime.js",
-  );
+vi.mock("../../logging/node-require.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/node-require.js")>();
   return {
-    ...actual,
-    classifyProviderFailoverReasonWithPlugin: hoisted.classifyProviderFailoverReasonWithPlugin,
-    matchesProviderContextOverflowWithPlugin: hoisted.matchesProviderContextOverflowWithPlugin,
+    resolveNodeRequireFromMeta: (metaUrl: string) =>
+      metaUrl.includes("/pi-embedded-helpers/provider-error-patterns.")
+        ? () => hoisted
+        : actual.resolveNodeRequireFromMeta(metaUrl),
   };
 });
 
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
   classifyFailoverReason,
   classifyProviderRuntimeFailureKind,
+  formatAssistantErrorText,
   isContextOverflowError,
+  isLikelyContextOverflowError,
 } from "./errors.js";
 import {
   classifyProviderSpecificError,
@@ -27,6 +29,34 @@ import {
 } from "./provider-error-patterns.js";
 
 describe("matchesProviderContextOverflow", () => {
+  beforeEach(() => {
+    hoisted.matchesProviderContextOverflowWithPlugin.mockReset();
+    hoisted.matchesProviderContextOverflowWithPlugin.mockReturnValue(false);
+  });
+
+  it("dispatches input range validation to the provider hook", () => {
+    const errorMessage = "400 Range of input length should be [1, 32768]";
+    hoisted.matchesProviderContextOverflowWithPlugin.mockReturnValue(true);
+
+    expect(isContextOverflowError(errorMessage)).toBe(true);
+    expect(isLikelyContextOverflowError(errorMessage)).toBe(true);
+    expect(hoisted.matchesProviderContextOverflowWithPlugin).toHaveBeenCalledWith({
+      context: { errorMessage },
+    });
+    expect(formatAssistantErrorText(makeAssistantMessageFixture({ errorMessage }))).toContain(
+      "Context overflow",
+    );
+  });
+
+  it("leaves input range classification to the provider", () => {
+    const errorMessage = "400 Range of input length should be [1, 32768]";
+
+    expect(isLikelyContextOverflowError(errorMessage)).toBe(false);
+    expect(hoisted.matchesProviderContextOverflowWithPlugin).toHaveBeenCalledWith({
+      context: { errorMessage },
+    });
+  });
+
   it("skips provider hook dispatch for unrelated errors", () => {
     hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
 
