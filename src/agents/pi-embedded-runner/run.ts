@@ -7,6 +7,7 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { matchesProviderContextOverflowWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -961,20 +962,27 @@ export async function runEmbeddedPiAgent(
           }
 
           const contextOverflowError = !aborted
-            ? (() => {
-                if (promptError) {
-                  const errorText = formatErrorMessage(promptError);
-                  if (isLikelyContextOverflowError(errorText)) {
-                    return { text: errorText, source: "promptError" as const };
-                  }
-                  // Prompt submission failed with a non-overflow error. Do not
-                  // inspect prior assistant errors from history for this attempt.
+            ? await (async () => {
+                // A prompt failure takes precedence over stale assistant errors in history.
+                const errorText = promptError
+                  ? formatErrorMessage(promptError)
+                  : assistantErrorText;
+                if (!errorText) {
                   return null;
                 }
-                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
+                if (
+                  isLikelyContextOverflowError(errorText) ||
+                  // Use the async runtime boundary so provider-owned checks also work in bundles.
+                  (await matchesProviderContextOverflowWithPlugin({
+                    provider: promptError ? provider : activeErrorContext.provider,
+                    config: params.config,
+                    workspaceDir: resolvedWorkspace,
+                    context: { errorMessage: errorText },
+                  }))
+                ) {
                   return {
-                    text: assistantErrorText,
-                    source: "assistantError" as const,
+                    text: errorText,
+                    source: promptError ? ("promptError" as const) : ("assistantError" as const),
                   };
                 }
                 return null;

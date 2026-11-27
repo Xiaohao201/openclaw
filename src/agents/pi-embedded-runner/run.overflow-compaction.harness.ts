@@ -68,6 +68,7 @@ export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+export const mockedMatchesProviderContextOverflow = vi.fn(async (_params: unknown) => false);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
@@ -224,6 +225,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedEnsureRuntimePluginsLoaded.mockReset();
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
+  mockedMatchesProviderContextOverflow.mockReset();
+  mockedMatchesProviderContextOverflow.mockResolvedValue(false);
   mockedRunEmbeddedAttempt.mockReset();
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
@@ -364,6 +367,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
+  }));
+
+  vi.doMock("../../plugins/provider-runtime.runtime.js", () => ({
+    prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
+    matchesProviderContextOverflowWithPlugin: mockedMatchesProviderContextOverflow,
   }));
 
   vi.doMock("../auth-profiles.js", () => ({

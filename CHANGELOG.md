@@ -112,6 +112,8 @@ Docs: https://docs.openclaw.ai
 - Memory: handle builtin and QMD file watcher errors without stopping the gateway, preserving file-change synchronization after Windows `EBUSY` errors.
 - Suheng/language: default chat and report output to Simplified Chinese from the first sentence while honoring explicit language requests, and keep model reasoning text out of customer progress events and saved timelines.
 
+- Qwen/sessions: recognize input-length range errors as context overflow so long conversations use bounded automatic compaction and retry instead of reporting a schema error.
+
 ## 2026.4.15
 
 ### Changes
